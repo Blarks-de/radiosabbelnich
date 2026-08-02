@@ -5,6 +5,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libgomp1
 
 RUN pip install --no-cache-dir numpy silero-vad-lite
 
+# silero-vad-lite's .so verlangt einen ausführbaren Stack, den der Kernel
+# auf diesem Host beim dlopen() verweigert -> ohne Patch fällt die
+# Spracherkennung dauerhaft auf die Heuristik zurück. Details/Reproduktion:
+# siehe fix_silero_execstack.py.
+COPY fix_silero_execstack.py .
+RUN python3 fix_silero_execstack.py && rm fix_silero_execstack.py
+
 ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app

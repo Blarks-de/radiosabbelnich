@@ -81,6 +81,8 @@ WINDOW_SECONDS = 1.0         # Länge eines Analysefensters
 CONSECUTIVE_SPEECH_TO_SWITCH = 5   # so viele Sprache-Fenster in Folge -> umschalten (VAD ist zuverlässiger als die Heuristik, daher kürzer als vorher)
 COOLDOWN_AFTER_SWITCH = 8.0  # Sekunden Ruhe nach einem Switch, bevor wieder geschaltet wird
 MAX_SKIPS_PER_ROUND = len(STREAMS)  # nicht endlos im Kreis rennen, falls überall Sprache läuft
+STREAM_READ_TIMEOUT = 8.0    # max. Wartezeit pro Analysefenster, bevor eine Quelle als tot gilt
+                              # (verhindert, dass ein hängender Sender den Loop für immer blockiert)
 
 # Heuristik-Schwellwerte (ggf. anpassen/tunen)
 ZCR_SPEECH_MIN = 0.11
@@ -214,11 +216,17 @@ class StreamSource:
         os.close(stereo_write_fd)
         self._stereo_read_fd = stereo_read_fd
 
-    def read_window(self, seconds: float):
+    def read_window(self, seconds: float, timeout: float = STREAM_READ_TIMEOUT):
         """Liest ein Analysefenster aus beiden Pipes parallel (via select),
         damit keine Pipe volllaufen und ffmpeg blockieren kann, während wir
         auf die andere warten. Gibt (mono, stereo) als int16-Arrays zurück;
-        stereo ist interleaved (L,R,L,R,...)."""
+        stereo ist interleaved (L,R,L,R,...).
+
+        Gibt spätestens nach `timeout` Sekunden zurück, auch wenn das
+        Fenster noch nicht voll ist (z.B. weil die Quelle nicht antwortet
+        oder eine Station nie eine Verbindung zustande bringt) — sonst
+        blockiert eine tote Quelle den kompletten Hauptloop für immer,
+        inklusive manuellem Umschalten auf einen anderen Sender."""
         n_samples = int(self.sample_rate * seconds)
         mono_fd = self.proc.stdout.fileno()
         stereo_fd = self._stereo_read_fd
@@ -226,8 +234,14 @@ class StreamSource:
         buffers = {mono_fd: b"", stereo_fd: b""}
         remaining = {mono_fd, stereo_fd}
 
+        deadline = time.monotonic() + timeout
         while remaining:
-            ready, _, _ = select.select(list(remaining), [], [])
+            time_left = deadline - time.monotonic()
+            if time_left <= 0:
+                break
+            ready, _, _ = select.select(list(remaining), [], [], time_left)
+            if not ready:
+                break  # Timeout, keine Daten mehr angekommen
             for fd in ready:
                 need = targets[fd] - len(buffers[fd])
                 chunk = os.read(fd, need)
@@ -274,18 +288,33 @@ class LocalOutput:
 class IcecastOutput:
     """Encodiert PCM-Chunks per ffmpeg und pusht sie dauerhaft auf einen
     Icecast-Mountpoint. Bleibt über Sender-Wechsel hinweg bestehen — nur die
-    StreamSource wird gewechselt, der Icecast-Client hört nahtlos weiter."""
+    StreamSource wird gewechselt, der Icecast-Client hört nahtlos weiter.
+
+    Baut die Verbindung selbst neu auf, wenn Icecast sie kappt (z.B. Icecast-
+    Container-Neustart) — ohne das würde ffmpeg beim ersten Schreibfehler
+    dauerhaft tot bleiben und der Broadcast für immer stumm, obwohl der
+    Hauptloop munter weiterläuft und Sender wechselt."""
+
+    RECONNECT_COOLDOWN = 5.0  # Sekunden zwischen Reconnect-Versuchen, kein Popen-Spam bei Dauerausfall
 
     def __init__(self, sample_rate: int, icecast_url: str, bitrate: str = "128k"):
+        self.sample_rate = sample_rate
+        self.icecast_url = icecast_url
+        self.bitrate = bitrate
+        self.proc = None
+        self._last_reconnect_attempt = 0.0
+        self._start_proc()
+
+    def _start_proc(self):
         self.proc = subprocess.Popen(
             [
                 "ffmpeg", "-loglevel", "error",
-                "-f", "s16le", "-ar", str(sample_rate), "-ac", "2",
+                "-f", "s16le", "-ar", str(self.sample_rate), "-ac", "2",
                 "-i", "pipe:0",
-                "-acodec", "libmp3lame", "-b:a", bitrate,
+                "-acodec", "libmp3lame", "-b:a", self.bitrate,
                 "-content_type", "audio/mpeg",
                 "-f", "mp3",
-                icecast_url,
+                self.icecast_url,
             ],
             stdin=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -295,7 +324,20 @@ class IcecastOutput:
         try:
             self.proc.stdin.write(pcm.tobytes())
         except (BrokenPipeError, OSError):
-            print("⚠ Icecast-Verbindung unterbrochen.", file=sys.stderr)
+            now = time.time()
+            if now - self._last_reconnect_attempt < self.RECONNECT_COOLDOWN:
+                return
+            self._last_reconnect_attempt = now
+            print("⚠ Icecast-Verbindung unterbrochen, versuche neu zu verbinden ...", file=sys.stderr)
+            try:
+                self.proc.kill()
+                self.proc.wait(timeout=3)
+            except Exception:
+                pass
+            try:
+                self._start_proc()
+            except Exception as e:
+                print(f"⚠ Icecast-Reconnect fehlgeschlagen: {e}", file=sys.stderr)
 
     def close(self):
         if self.proc:
@@ -391,11 +433,24 @@ def main():
     def do_switch(reason: str):
         """Springt reihum zum nächsten Sender, bis Musik läuft (oder alle
         durch sind). Wird sowohl von der Heuristik als auch bei einem
-        Fingerprint-Treffer aufgerufen."""
+        Fingerprint-Treffer aufgerufen.
+
+        Bricht sofort ab, sobald ein manueller Switch-Request reinkommt —
+        sonst könnte ein Nutzerklick im Web-Interface bis zu
+        MAX_SKIPS_PER_ROUND * (1.5s + STREAM_READ_TIMEOUT) warten müssen,
+        falls das automatische Durchprobieren gerade läuft."""
         nonlocal current, last_switch_time
         print(f"🎙  {reason} auf '{STREAMS[current]['name']}' — schalte um ...")
         skips = 0
         while skips < MAX_SKIPS_PER_ROUND:
+            pending = state.pop_manual_request()
+            if pending is not None:
+                # nicht einfach verwerfen: Request zurücklegen, der
+                # Hauptloop erledigt den eigentlichen Wechsel (inkl.
+                # current/state/Streak-Reset) beim nächsten Durchlauf
+                state.request_switch(pending)
+                print("   ... manueller Switch angefordert, breche Auto-Suche ab.")
+                break
             current = (current + 1) % len(STREAMS)
             source.start(STREAMS[current]["url"])
             state.set_current(current)

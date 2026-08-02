@@ -141,3 +141,100 @@ Schritte.
   mime types file /etc/mime.types` — harmlose Altlasten aus dem
   icegen-Template (Container läuft eh schon als User `icecast2`, der
   Privilege-Drop-Versuch ist ein No-Op).
+
+## 2026-08-02 (Fortsetzung) — "Nachrichten werden nicht erkannt" + "manuelles Zappen dauert ewig"
+
+Nutzer meldet zwei Probleme im laufenden Betrieb. Beide auf konkrete,
+reproduzierte Bugs zurückgeführt (nicht nur Tuning).
+
+### Bug 1: Silero VAD lädt nicht -> Heuristik-Fallback erkennt kaum Sprache
+- Bereits am 2026-08-02 (erster Eintrag oben) als offener Punkt notiert,
+  jetzt tatsächlich untersucht und gefixt.
+- Log zeigte durchgehend `Silero VAD konnte nicht initialisiert werden
+  (... cannot enable executable stack as shared object requires: Invalid
+  argument) — falle auf die Signal-Heuristik zurück`. Seit dem allerersten
+  Rebuild dieser Session lief die Erkennung nur auf der Heuristik
+  (`classify_window()`), deren Votes in den Logs fast durchgehend 0/3
+  oder 1/3 blieben (Schwelle ist 2/3) — d.h. so gut wie nie "speech".
+  Das erklärt direkt, warum Nachrichten/Moderation nicht erkannt wurden.
+- Root-Cause-Suche ging erst in die falsche Richtung: `import
+  silero_vad_lite` allein funktionierte überall problemlos (auch in
+  einem frischen `python:3.12-slim`-Testcontainer) — das ist aber nur
+  der reine Python-Modul-Import, der lädt die `.so` noch nicht. Der
+  eigentliche Fehler passiert erst bei `SileroVAD(16000)` (Konstruktor
+  in `speech_detector.py`), der intern `ctypes.CDLL(...)` aufruft und
+  damit `dlopen()` auf `silero_vad_lite.so` — DAS reproduziert den Fehler
+  zuverlässig, und zwar in **jedem** Container auf diesem Host (auch
+  einem komplett unmodifizierten `python:3.12-slim`), nicht nur in
+  radio-switch. Also ein Host-/Kernel-Verhalten, kein Compose-/User-
+  /Capabilities-Problem unseres Containers.
+- Ursache: `silero_vad_lite.so` ist mit einem `PT_GNU_STACK`-Programm-
+  header gebaut, der `PF_X` (ausführbar) für den Stack verlangt (alter
+  Toolchain-Default). Der Kernel auf Dockfish verweigert das `mprotect`
+  beim Laden. Klassischer Fix wäre `execstack -c datei.so`, aber das
+  Paket `execstack` existiert in den aktuellen Debian-Repos (trixie)
+  nicht mehr.
+- Fix: `fix_silero_execstack.py` (neu, Repo-Root) patcht das `PF_X`-Bit
+  im `PT_GNU_STACK`-Segment direkt in der ELF-Datei per `struct`-Modul
+  (reines Python, keine externe Abhängigkeit). Wird im Dockerfile direkt
+  nach `pip install ... silero-vad-lite` ausgeführt und danach wieder
+  gelöscht (`RUN python3 fix_silero_execstack.py && rm
+  fix_silero_execstack.py`).
+- Verifiziert nach Rebuild: Log zeigt jetzt `🗣 Sprache-Erkennung: Silero
+  VAD` statt Fallback, `--verbose`-Output zeigt `[vad] mean_prob=...
+  speech_ratio=...`-Zeilen statt `[feat]`-Heuristik-Zeilen. End-to-End
+  live beobachtet: VAD erkannte einen Sprache-Lauf auf SWR3
+  (`speech_ratio=1.00 -> SPEECH`), Fingerprint-DB matchte ihn gegen einen
+  bereits 8x gehörten Radio-Bob-Jingle/Werbespot, automatischer Switch
+  auf R.SH lief korrekt durch (`🔁 Bekannter Jingle/Werbespot
+  wiedererkannt` -> `🎙 ... schalte um` -> `▶ Spiele: R.SH`).
+
+### Bug 2: Manuelles Umschalten kann quasi unbegrenzt hängen
+Drei zusammenhängende strukturelle Lücken gefunden, alle in
+`radio_switch.py`:
+
+1. **`StreamSource.read_window()` hatte keinen Timeout.** `select.select()`
+   wurde ohne Timeout aufgerufen -> falls eine frisch gestartete Quelle
+   (z.B. nach manuellem Wechsel) nie Daten liefert (Verbindungsproblem,
+   hängender Redirect, totes Encoder-Feed), blockiert der komplette
+   Hauptloop unbegrenzt — inklusive **jedes weiteren** manuellen
+   Switch-Requests, da deren Abfrage am Loop-Anfang nie wieder erreicht
+   wird. Genau das erklärt "dauert ewig": ein einziger kaputter Sender
+   kann den ganzen Switcher einfrieren, bis der Container manuell
+   neugestartet wird.
+   Fix: neue Konstante `STREAM_READ_TIMEOUT = 8.0` (Sekunden), `select`
+   bekommt jetzt ein Timeout-Budget über eine Deadline, `read_window()`
+   gibt spätestens nach 8s zurück (ggf. mit leeren/unvollständigen
+   Arrays). Ein leeres Ergebnis lässt den bereits vorhandenen
+   Reconnect-Pfad im Hauptloop greifen (`liefert nichts mehr, versuche
+   neu zu verbinden`).
+2. **`do_switch()` (automatisches Rundlauf-Probieren) konnte einen
+   manuellen Request bis zu `MAX_SKIPS_PER_ROUND * (1.5s +
+   STREAM_READ_TIMEOUT)` blockieren** (7 Sender × ~9,5s ≈ 66s im
+   Worst Case vor dem Timeout-Fix, war vorher sogar unbegrenzt). Fix:
+   `do_switch()` prüft jetzt bei jedem Skip zuerst
+   `state.pop_manual_request()` — kommt ein manueller Wunsch rein, legt
+   `do_switch()` ihn per `state.request_switch(pending)` sofort wieder
+   zurück (nicht verwerfen!) und bricht die Auto-Suche ab. Der
+   Hauptloop übernimmt den eigentlichen Wechsel beim nächsten Durchlauf
+   (dort ist die komplette Switch-Logik inkl. Streak-Reset schon
+   vorhanden, keine Duplizierung nötig).
+3. **`IcecastOutput` hatte keine Reconnect-Logik.** Bei einem Broken
+   Pipe (z.B. weil der Icecast-Container neugestartet wird — wie es
+   heute beim Location/Admin-Fix mehrfach live passiert ist, siehe
+   oben) blieb `self.proc` dauerhaft der tote ffmpeg-Prozess. Jeder
+   `write()` scheiterte danach für immer, nur mit einer Log-Zeile pro
+   Sekunde (`⚠ Icecast-Verbindung unterbrochen.`) ohne jeden
+   Wiederherstellungsversuch — der Hauptloop lief zwar weiter und
+   schaltete brav Sender, aber der tatsächliche Broadcast blieb für
+   den Rest der Prozess-Laufzeit stumm. Aus Hörer-Sicht sieht das
+   identisch aus wie "Umschalten tut nichts" bzw. "dauert ewig", nur
+   dass es in Wahrheit nie wieder funktioniert hätte ohne manuellen
+   `docker compose restart radio-switch`.
+   Fix: `IcecastOutput` merkt sich jetzt seine eigenen Verbindungsdaten,
+   `write()` versucht bei `BrokenPipeError`/`OSError` automatisch einen
+   Reconnect (kill + neuer ffmpeg-Prozess), mit 5s Cooldown zwischen
+   Versuchen (kein Popen-Spam bei Dauerausfall).
+- Syntaxgeprüft (`py_compile`), Rebuild + Deploy durchgeführt, manueller
+  Switch getestet (Response < 20ms, Wechsel im Log/Status sofort
+  sichtbar).

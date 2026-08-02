@@ -80,18 +80,45 @@ Hörer im Tailnet. Details siehe SESSION.md, Eintrag 2026-08-02.
   wurde nur live auf Dockfish getestet, nicht in einer kontrollierten
   Testumgebung — falls Fehlklassifikationen auftreten, `--verbose` Logs
   sammeln (zeigt `[vad] mean_prob=... speech_ratio=...` Zeilen)
-- Silero VAD lädt aktuell im Container gar nicht (`cannot enable
-  executable stack as shared object requires`), läuft seit dem letzten
-  Rebuild nur noch auf dem Heuristik-Fallback. Noch nicht untersucht —
-  vermutlich Kernel-Hardening auf dem Docker-Host oder eine geänderte
-  `silero-vad-lite`-Wheel. Sollte als nächstes angeschaut werden, sonst
-  läuft die Spracherkennung dauerhaft auf der schwächeren Heuristik.
 - Web-Interface hat keinerlei Auth — im Tailnet vertretbar, aber falls der
   Port mal breiter exponiert wird, vorher absichern.
 - Icecast loggt beim Start `Couldn't find group "icecast2" in groups
   file` / `Cannot open mime types file /etc/mime.types` — harmlose
   Altlasten aus dem icegen-Image-Template, nicht behoben (kein
   funktionaler Effekt).
+
+## Silero VAD Ladefehler + Switch-Zuverlässigkeit (erledigt)
+Zwei User-gemeldete Probleme, beide auf konkrete Bugs zurückgeführt:
+
+**"Nachrichten werden nicht erkannt"**: Silero VAD lud nie (`cannot enable
+executable stack as shared object requires`) -> lief seit dem allerersten
+Rebuild nur auf dem viel unempfindlicheren Heuristik-Fallback. Ursache:
+`silero_vad_lite.so` verlangt einen ausführbaren Stack (PT_GNU_STACK/PF_X),
+der Kernel auf Dockfish verweigert das beim `dlopen()` — reproduzierbar in
+jedem Container auf diesem Host, nicht compose-spezifisch. Fix: neues
+`fix_silero_execstack.py` patcht das PF_X-Bit direkt in der ELF-Datei
+(reines Python, `execstack`-Paket gibt's in aktuellen Debian-Repos nicht
+mehr), läuft als Build-Step im Dockerfile. Verifiziert: VAD lädt jetzt,
+erkennt Sprache live korrekt (`speech_ratio=1.00 -> SPEECH`), Fingerprint-
+Match + Auto-Switch danach bestätigt funktionierend.
+
+**"Manuelles Zappen dauert ewig"**: drei zusammenhängende Lücken in
+`radio_switch.py` gefunden und gefixt —
+1. `StreamSource.read_window()` hatte keinen Timeout -> eine hängende
+   Zielstation blockierte den kompletten Hauptloop unbegrenzt, inklusive
+   aller weiteren manuellen Switch-Versuche. Jetzt: `STREAM_READ_TIMEOUT`
+   (8s) über eine Deadline in `select()`.
+2. `do_switch()` (automatisches Durchprobieren) ignorierte eingehende
+   manuelle Requests bis zu ~66s lang. Prüft jetzt bei jedem Skip auf
+   einen pending Request und bricht sofort ab (Request wird zurückgelegt,
+   nicht verworfen — Hauptloop übernimmt den Wechsel).
+3. `IcecastOutput` hatte keine Reconnect-Logik — nach einem Broken Pipe
+   (z.B. Icecast-Container-Neustart) blieb der Broadcast für den Rest der
+   Prozess-Laufzeit stumm, auch wenn der Hauptloop weiter brav Sender
+   wechselte. Jetzt: automatischer Reconnect-Versuch bei jedem
+   Schreibfehler (5s Cooldown gegen Popen-Spam).
+
+Details/Debugging-Verlauf: SESSION.md, Eintrag 2026-08-02 (Fortsetzung).
 
 ## Icecast Location/Admin (erledigt)
 `<location>` und `<admin>` fehlten im von `icegen` generierten
