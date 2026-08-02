@@ -779,3 +779,79 @@ lassen, ohne dass RadioZapper ständig wegschaltet).
   (`🔇 Sabbelfilter deaktiviert (automatisches Umschalten pausiert).` /
   `🔇 Sabbelfilter wieder aktiviert (automatisches Umschalten läuft
   weiter).`).
+
+## 2026-08-02 (Fortsetzung) — Vorausschauendes Puffern der nächsten 5 Sender
+
+Wunsch: die nächsten 5 Sender in Rotationsreihenfolge sollen 10 Sekunden
+vorgepuffert werden, damit Wechsel flüssig ablaufen — bisher musste jeder
+Wechsel (auch der "fresh path" nach `quick_forward()`) trotz aller
+bisherigen Latenz-Fixes immer noch neu verbinden.
+
+### Architektur
+- Neue Klasse `PrebufferedSource` (nach `StreamSource`): hält im
+  Hintergrund eine eigene `StreamSource` am Laufen, ein Thread liest in
+  denselben `WINDOW_SECONDS`-Schnipseln wie der Hauptloop und sammelt sie
+  in zwei `collections.deque(maxlen=10)` (Mono+Stereo, je 10 Fenster =
+  10s bei `WINDOW_SECONDS=1.0`). `promote()` stoppt den Thread (Event +
+  `join()`, wartet höchstens auf das gerade laufende `read_window()` —
+  Pipes dürfen nie von zwei Seiten gleichzeitig gelesen werden) und gibt
+  `(mono, stereo, source)` zurück: die gepufferten Sekunden als fertige
+  Arrays plus die weiterlaufende `StreamSource` zur Übernahme durch den
+  Hauptloop. `stop()` verwirft die Quelle komplett.
+- Modulweite Helper `prebuffer_target_ids(current_id, active)` (liefert
+  die nächsten `PREBUFFER_COUNT=5` IDs in derselben Rotationsreihenfolge,
+  die `do_switch()` auch automatisch durchprobieren würde) und
+  `sync_prebuffer(prebuffer, current_id, active, sample_rate)` (startet/
+  stoppt Hintergrund-Puffer, bis das `prebuffer`-dict genau die
+  gewünschten IDs enthält; ersetzt außerdem Puffer, deren Quelle
+  unterwegs gestorben ist, durch einen frischen Versuch).
+- `main()`: `prebuffer = {}`-dict, initial befüllt direkt nach dem
+  ersten Senderstart. Neuer Helper `switch_to_station(station)` — nutzt
+  einen laufenden Puffer falls vorhanden (übernimmt die `StreamSource`,
+  schreibt den kompletten gepufferten Stereo-Batch sofort an den
+  Output), sonst der bisherige frische Connect + `quick_forward()`.
+  Ersetzt die alten `source.start()+quick_forward()`-Aufrufe im
+  manuellen und im Reload-erzwungenen Switch-Zweig.
+- `do_switch()` (automatisches Durchprobieren, auch vom "Gesabbel!"-
+  Knopf genutzt) geht jetzt beim Kandidaten-Check zuerst im
+  `prebuffer`-dict nach: ist der Kandidat gepuffert, wird direkt anhand
+  des LETZTEN gepufferten Fensters klassifiziert (kein `time.sleep(1.5)`
+  + frisches Fenster nötig — die gepufferten 10s liefern sogar mehr
+  Kontext als der bisherige Einzel-Snapshot). Bei "music": sofort
+  übernehmen, kompletten Puffer an den Output schreiben, fertig. Bei
+  "speech": Kandidat verwerfen (`.stop()`), nächster in der Reihe. Nicht
+  gepufferte Kandidaten (z.B. jenseits der ersten 5) laufen weiter über
+  den alten Pfad.
+- `sync_prebuffer()` wird einmal pro Hauptloop-Durchlauf aufgerufen
+  (ganz oben in `while True:`, vor allen anderen Request-Checks) — billig
+  genug (Soll/Ist-Vergleich zweier ID-Mengen) für die ~1s-Taktung, hält
+  den Puffer nach JEDEM Wechsel automatisch auf dem aktuellen Stand,
+  ohne dass jede einzelne Switch-Stelle sich selbst darum kümmern muss.
+- `finally`-Block räumt jetzt auch alle noch offenen Puffer-Quellen auf
+  (`for pb in prebuffer.values(): pb.stop()`), nicht nur die aktuelle.
+
+### Ressourcen-Tradeoff
+Bis zu `PREBUFFER_COUNT=5` zusätzliche ffmpeg-Prozesse laufen jetzt
+parallel zum aktuellen Sender (jeweils Mono+Stereo-Dual-Pipe wie die
+Haupt-`StreamSource`) — live gemessen: 7 ffmpeg-Prozesse insgesamt
+(1 aktuell + 5 gepuffert + 1 Icecast-Encoder), ~5% CPU, ~190MB RAM auf
+Dockfish (62GB RAM verfügbar) — für den vorhandenen Host unkritisch,
+aber explizit erwähnenswert, falls RadioZapper mal auf schwächerer
+Hardware läuft oder die Senderzahl/PREBUFFER_COUNT deutlich wächst.
+
+### Getestet
+- Isoliert: `PrebufferedSource` gegen echten SWR3-Stream, 6s laufen
+  lassen, `promote()` liefert exakt die erwarteten ~5s Mono/Stereo-
+  Samples (Puffer-Größe für den Test testweise auf 5s statt 10s gesetzt).
+- `prebuffer_target_ids()` gegen mehrere Randfälle (2/3/6+ Sender,
+  aktueller Sender nicht in der Liste, nur 1 Sender aktiv) — alle
+  korrekt.
+- Live im Container: Start zeigt `⏱ Puffere die nächsten 5 Sender 10s im
+  Voraus.`, `/proc`-Prozesszählung bestätigt 7 ffmpeg-Prozesse.
+  Manueller Switch auf einen gepufferten Sender (80s80s) zeigt
+  `🎛 Manuell umgeschaltet auf: 80s80s (aus Puffer)` im Log, danach
+  weiterhin exakt 7 ffmpeg-Prozesse (kein Leck) und Stream weiterhin
+  44.1kHz/Stereo via `ffprobe`. "Gesabbel!"-Klick (nutzt `do_switch()`)
+  auf den nächsten gepufferten Kandidaten zeigt
+  `▶ Spiele: 90s90s (aus Puffer, nahtlos)` — der automatische Pfad nutzt
+  den Puffer also ebenfalls korrekt.

@@ -29,7 +29,17 @@ Streaming-Client hören kann.
    die volle Sprache-Erkennungszeit abzuwarten.
 
 Beide Mechanismen sind nicht perfekt — dafür gibt's im Web-Interface
-zwei Korrektur-Knöpfe (siehe unten).
+Korrektur-Knöpfe (siehe unten).
+
+## Vorausschauendes Puffern
+
+Damit ein Wechsel nicht erst neu verbinden muss, hält RadioZapper die
+nächsten 5 Sender in Rotationsreihenfolge im Hintergrund bereits am
+Laufen und puffert von jedem die letzten 10 Sekunden vor. Ein Wechsel
+dorthin (automatisch oder manuell) übernimmt den fertigen Puffer sofort,
+statt neu zu verbinden — spürbar flüssiger, kostet aber zusätzliche
+Bandbreite/CPU (bis zu 5 zusätzliche ffmpeg-Prozesse parallel zum
+aktuellen Sender; auf haushaltsüblicher Hardware unkritisch).
 
 ## Web-Interface
 

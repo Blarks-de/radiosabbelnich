@@ -25,11 +25,13 @@ Nutzung:
     des Web-Interfaces unter /config — siehe stations_store.py)
 """
 
+import collections
 import glob
 import os
 import select
 import subprocess
 import sys
+import threading
 import time
 import wave
 import numpy as np
@@ -53,6 +55,16 @@ CONSECUTIVE_SPEECH_TO_SWITCH = 5   # so viele Sprache-Fenster in Folge -> umscha
 COOLDOWN_AFTER_SWITCH = 8.0  # Sekunden Ruhe nach einem Switch, bevor wieder geschaltet wird
 STREAM_READ_TIMEOUT = 8.0    # max. Wartezeit pro Analysefenster, bevor eine Quelle als tot gilt
                               # (verhindert, dass ein hängender Sender den Loop für immer blockiert)
+
+# Die nächsten PREBUFFER_COUNT Sender in Rotationsreihenfolge (ab dem
+# aktuellen) laufen im Hintergrund bereits mit und halten die letzten
+# PREBUFFER_SECONDS Sekunden vor -> ein Wechsel dorthin muss nicht erst
+# neu verbinden, sondern kann sofort mit bereits vorhandenem Audio
+# weitermachen. Kostet zusätzliche Bandbreite/CPU (bis zu PREBUFFER_COUNT
+# zusätzliche ffmpeg-Prozesse parallel zum aktuellen), ist aber bei
+# haushaltsüblichen Sendermengen unkritisch.
+PREBUFFER_SECONDS = 10.0
+PREBUFFER_COUNT = 5
 
 # Heuristik-Schwellwerte (ggf. anpassen/tunen)
 ZCR_SPEECH_MIN = 0.11
@@ -272,6 +284,73 @@ class StreamSource:
             self._stereo_read_fd = None
 
 
+class PrebufferedSource:
+    """Hält im Hintergrund eine eigene StreamSource am Laufen und sammelt
+    fortlaufend die letzten PREBUFFER_SECONDS Sekunden (Mono+Stereo) in
+    einem Ringpuffer. Wird eine solche Quelle tatsächlich zur aktuellen
+    befördert (promote()), bekommt der Hauptloop sofort einen fertigen
+    Audio-Batch zum Weiterschreiben UND die weiterlaufende StreamSource
+    zur Übernahme — kein Neuverbinden nötig, der Übergang ist dadurch
+    praktisch nahtlos.
+
+    Der Hintergrund-Thread liest in denselben WINDOW_SECONDS-Schnipseln
+    wie der Hauptloop; promote()/stop() stoppen ihn per Event und warten
+    (join), bis das gerade laufende read_window() fertig ist — die Pipes
+    dürfen nie von zwei Seiten gleichzeitig gelesen werden. Im
+    schlimmsten Fall wartet man so ~WINDOW_SECONDS auf die Übergabe,
+    deutlich weniger als eine frische Neuverbindung gekostet hätte."""
+
+    def __init__(self, sample_rate: int, url: str, buffer_seconds: float = PREBUFFER_SECONDS):
+        self.url = url
+        self.source = StreamSource(sample_rate)
+        self._buffer_windows = max(1, int(round(buffer_seconds / WINDOW_SECONDS)))
+        self._mono_windows = collections.deque(maxlen=self._buffer_windows)
+        self._stereo_windows = collections.deque(maxlen=self._buffer_windows)
+        self._lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._thread = None
+        self.dead = False  # True, falls die Quelle unterwegs gestorben ist (EOF/Timeout)
+
+    def start(self):
+        self.source.start(self.url)
+        self.dead = False
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self):
+        while not self._stop_event.is_set():
+            mono, stereo = self.source.read_window(WINDOW_SECONDS)
+            if mono.size == 0 and stereo.size == 0:
+                self.dead = True
+                return
+            with self._lock:
+                self._mono_windows.append(mono)
+                self._stereo_windows.append(stereo)
+
+    def _join(self):
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=STREAM_READ_TIMEOUT + 1)
+            self._thread = None
+
+    def promote(self):
+        """Stoppt den Hintergrund-Thread und gibt (mono, stereo, source)
+        zurück: die gepufferten Sekunden als fertige Arrays plus die
+        weiterlaufende StreamSource zur Übernahme durch den Aufrufer."""
+        self._join()
+        with self._lock:
+            mono = np.concatenate(self._mono_windows) if self._mono_windows else np.array([], dtype=np.int16)
+            stereo = np.concatenate(self._stereo_windows) if self._stereo_windows else np.array([], dtype=np.int16)
+        return mono, stereo, self.source
+
+    def stop(self):
+        """Verwirft die Quelle komplett (z.B. weil sie nicht mehr zu den
+        nächsten PREBUFFER_COUNT Sendern gehört)."""
+        self._join()
+        self.source.stop()
+
+
 class LocalOutput:
     """Gibt PCM-Chunks über die lokale Soundkarte aus (PortAudio/sounddevice)."""
 
@@ -349,6 +428,42 @@ class IcecastOutput:
             except OSError:
                 pass
             self.proc.wait(timeout=5)
+
+
+def prebuffer_target_ids(current_id: str, active: list) -> list:
+    """Liefert die IDs der nächsten PREBUFFER_COUNT Sender in
+    Rotationsreihenfolge ab (aber ohne) dem aktuellen — dieselbe
+    Reihenfolge, in der do_switch() automatisch durchprobieren würde."""
+    ids = [s["id"] for s in active]
+    if current_id not in ids or len(active) <= 1:
+        return []
+    pos = ids.index(current_id)
+    n = len(active)
+    count = min(PREBUFFER_COUNT, n - 1)
+    return [ids[(pos + 1 + i) % n] for i in range(count)]
+
+
+def sync_prebuffer(prebuffer: dict, current_id: str, active: list, sample_rate: int):
+    """Startet/stoppt Hintergrund-Puffer, damit `prebuffer` genau die
+    nächsten PREBUFFER_COUNT Sender (in Rotationsreihenfolge ab dem
+    aktuellen) enthält — nicht mehr, nicht weniger. Ersetzt außerdem
+    Puffer, deren Quelle unterwegs gestorben ist (Netzwerk-Hänger etc.),
+    durch einen frischen Versuch."""
+    wanted_ids = prebuffer_target_ids(current_id, active)
+    wanted_set = set(wanted_ids)
+
+    for sid in list(prebuffer.keys()):
+        if sid not in wanted_set:
+            prebuffer.pop(sid).stop()
+        elif prebuffer[sid].dead:
+            prebuffer.pop(sid).stop()
+
+    stations_by_id = {s["id"]: s for s in active}
+    for sid in wanted_ids:
+        if sid not in prebuffer and sid in stations_by_id:
+            pb = PrebufferedSource(sample_rate, stations_by_id[sid]["url"])
+            pb.start()
+            prebuffer[sid] = pb
 
 
 # ----------------------------------------------------------------------
@@ -434,6 +549,14 @@ def main():
     state.set_current(current["id"])
     print(f"▶ Spiele: {current['name']}")
 
+    # Nächste PREBUFFER_COUNT Sender in Rotationsreihenfolge laufen im
+    # Hintergrund bereits mit (siehe PrebufferedSource/sync_prebuffer weiter
+    # oben) -> Wechsel dorthin fühlen sich praktisch nahtlos an, statt neu
+    # verbinden zu müssen.
+    prebuffer = {}
+    sync_prebuffer(prebuffer, current["id"], active, SAMPLE_RATE)
+    print(f"⏱  Puffere die nächsten {len(prebuffer)} Sender {PREBUFFER_SECONDS:.0f}s im Voraus.")
+
     def quick_forward(seconds: float = 0.3):
         """Nach einem direkten Sender-Wechsel (manuell oder erzwungen durch
         einen Config-Reload) sofort einen kurzen Schnipsel lesen und an den
@@ -448,6 +571,27 @@ def main():
         if stereo.size:
             output.write(stereo)
 
+    def switch_to_station(station: dict) -> str:
+        """Wechselt auf `station` — nutzt einen laufenden Hintergrund-
+        Puffer falls vorhanden (sofortiger Übergang inkl. Burst der
+        letzten PREBUFFER_SECONDS Sekunden gepufferten Audios), sonst
+        frischer Connect + quick_forward(). Aktualisiert `source`, gibt
+        aber KEIN state.set_current()/print() aus — das bleibt Sache der
+        Aufrufer, die je nach Situation unterschiedliche Meldungen
+        ausgeben. Gibt zurück, ob der Puffer genutzt werden konnte."""
+        nonlocal source
+        pb = prebuffer.pop(station["id"], None)
+        if pb is not None:
+            mono, stereo, adopted_source = pb.promote()
+            source.stop()
+            source = adopted_source
+            if stereo.size:
+                output.write(stereo)
+            return "prebuffered" if mono.size else "prebuffered-empty"
+        source.start(station["url"])
+        quick_forward()
+        return "fresh"
+
     speech_streak = 0
     last_switch_time = 0.0
     speech_buffer = []       # sammelt PCM-Chunks des aktuellen Sprache-Laufs
@@ -461,8 +605,14 @@ def main():
         Bricht sofort ab, sobald ein manueller Switch-Request reinkommt —
         sonst könnte ein Nutzerklick im Web-Interface bis zu
         len(aktive Sender) * (1.5s + STREAM_READ_TIMEOUT) warten müssen,
-        falls das automatische Durchprobieren gerade läuft."""
-        nonlocal current, last_switch_time
+        falls das automatische Durchprobieren gerade läuft.
+
+        Gepufferte Kandidaten (siehe PrebufferedSource) werden direkt
+        anhand ihres bereits vorhandenen Puffers beurteilt (kein
+        1.5s-Warten + frisches Fenster nötig) — bei "music" sofort mit
+        vollem Puffer-Burst übernommen, bei "speech" verworfen und der
+        nächste Kandidat probiert."""
+        nonlocal current, last_switch_time, source
         print(f"🎙  {reason} auf '{current['name']}' — schalte um ...")
         active = state.active_stations
         if not active:
@@ -481,12 +631,33 @@ def main():
                 print("   ... manueller Switch angefordert, breche Auto-Suche ab.")
                 return
             pos = (pos + 1) % len(active)
-            current = active[pos]
+            candidate = active[pos]
+            skips += 1
+
+            pb = prebuffer.pop(candidate["id"], None)
+            if pb is not None:
+                buf_mono, buf_stereo, candidate_source = pb.promote()
+                tail = buf_mono[-int(SAMPLE_RATE * WINDOW_SECONDS):] if buf_mono.size else buf_mono
+                verdict = classify(tail) if tail.size else "music"
+                if verdict == "music":
+                    current = candidate
+                    source.stop()
+                    source = candidate_source
+                    state.set_current(current["id"])
+                    if buf_stereo.size:
+                        output.write(buf_stereo)
+                    print(f"▶ Spiele: {current['name']} (aus Puffer, nahtlos)")
+                    last_switch_time = time.time()
+                    break
+                candidate_source.stop()
+                print(f"   ... auch Sprache (gepuffert), probiere nächsten Sender.")
+                continue
+
+            current = candidate
             source.start(current["url"])
             state.set_current(current["id"])
             print(f"▶ Spiele: {current['name']}")
             last_switch_time = time.time()
-            skips += 1
             time.sleep(1.5)
             probe_mono, probe_stereo = source.read_window(WINDOW_SECONDS)
             if probe_mono.size:
@@ -498,6 +669,11 @@ def main():
 
     try:
         while True:
+            # Puffer für die nächsten PREBUFFER_COUNT Sender ab der aktuellen
+            # Position aktuell halten -- billig genug, um einmal pro
+            # Schleifendurchlauf zu prüfen (kein Rebuild, falls schon passend).
+            sync_prebuffer(prebuffer, current["id"], state.active_stations, SAMPLE_RATE)
+
             if state.pop_reload_request():
                 # Sender wurden über die Config-Seite geändert (hinzugefügt/
                 # gelöscht/(de)aktiviert/editiert) -> Rotationsliste neu laden
@@ -509,11 +685,11 @@ def main():
                           "Wiedergabe pausiert bis wieder einer aktiv ist.", file=sys.stderr)
                 elif current["id"] not in active_ids:
                     current = active[0]
-                    source.start(current["url"])
+                    used_buffer = switch_to_station(current)
                     state.set_current(current["id"])
                     print(f"⚙ Senderliste geändert, aktueller Sender nicht mehr aktiv "
-                          f"— schalte auf: {current['name']}")
-                    quick_forward()
+                          f"— schalte auf: {current['name']}"
+                          f"{' (aus Puffer)' if used_buffer.startswith('prebuffered') else ''}")
                     last_switch_time = time.time()
                     speech_streak = 0
                     speech_buffer = []
@@ -530,10 +706,10 @@ def main():
                           f"{manual_id}", file=sys.stderr)
                     continue
                 current = station
-                source.start(current["url"])
+                used_buffer = switch_to_station(current)
                 state.set_current(current["id"])
-                print(f"🎛  Manuell umgeschaltet auf: {current['name']}")
-                quick_forward()
+                print(f"🎛  Manuell umgeschaltet auf: {current['name']}"
+                      f"{' (aus Puffer)' if used_buffer.startswith('prebuffered') else ''}")
                 last_switch_time = time.time()
                 speech_streak = 0
                 speech_buffer = []
@@ -633,6 +809,8 @@ def main():
         print("\nBeende.")
     finally:
         source.stop()
+        for pb in prebuffer.values():
+            pb.stop()
         output.close()
         if fp_db:
             fp_db.close()
