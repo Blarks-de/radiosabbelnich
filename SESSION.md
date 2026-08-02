@@ -460,3 +460,102 @@ Song/Interpret der aktuellen Sendung anzeigen.
 - Verifiziert live: Wechsel auf 1LIVE zeigt korrekt
   `now_playing: "Liam Payne & Rita Ora - For You"`, aktualisiert sich
   nach Sender-Wechsel.
+
+## 2026-08-02 (Fortsetzung) — Now-Playing-Fallback über Senderseiten
+
+Frage: kann man Titel/Interpret alternativ von der Sender-Homepage
+ziehen, für die Sender, deren ICY-StreamTitle nur Branding statt echter
+Songdaten zeigt (Radio Bob, R.SH, Rock Antenne Hamburg, Hamburg Zwei;
+SWR3 zeigt den Moderationsnamen)?
+
+### Recherche
+- Homepages der 5 Kandidaten per `curl -A "Mozilla/5.0"` geladen und nach
+  Now-Playing-Widget-Hinweisen durchsucht (CSS-Klassen wie
+  `player__track__marquee__text`, `c-player__currentartist` gefunden —
+  bestätigt, dass es Widgets gibt, aber alle clientseitig per JS befüllt,
+  nicht im initial ausgelieferten HTML).
+- radiobob.de und rsh.de laden beide von `upload.<domain>/production/
+  static/<hash>/*.js` und referenzieren `auth-cdn.loverad.io` — beide auf
+  derselben "loverad.io"-Plattform (Regiocast-Familie). JS-Bundles
+  heruntergeladen und nach API-Base-URLs gegrept
+  (`grep -ohE '"https?://...' *.js`).
+- **radiobob**: JS referenziert `iris-bob.loverad.io/flow.json?station=
+  <stationId>&offset=1&count=1` — aber `stationId` wird zur Laufzeit aus
+  einer großen, webpack-minifizierten Konstanten-Tabelle aufgelöst
+  (Variablen wie `_`, `aa`, `ab` im Code), aus dem statischen HTML/JS
+  nicht ohne echte JS-Ausführung rekonstruierbar. Geraten (`bob`, aus dem
+  ICY-Header `X-Audalaxy-Channelkey: bob`) — Ergebnis `{"result":
+  {"found": "0"}}`, falscher Parameter. Aufgegeben (bräuchte einen
+  Headless-Browser, um den echten Netzwerk-Request zu beobachten — nicht
+  in dieser Umgebung verfügbar).
+- **R.SH**: `rsh.de`-HTML enthält (im Gegensatz zu radiobob) das
+  Konfigurationsobjekt server-seitig eingebettet mit der vollen URI:
+  `uri:"https://stream-service.loverad.io/v4/rsh"`.
+  Direkt abgerufen: liefert sauberes JSON, Struktur
+  `{"1": {"song_title": "...", "artist_name": "...", "url_low": "//
+  streams.rsh.de/rsh-live/mp3-128/homepage/", ...}}` — der Schlüssel "1"
+  ist der Hauptkanal, `url_low`/`url_high` bestätigen, dass das exakt
+  unser Stream ist. **Funktioniert und liefert echte Song/Interpret-
+  Daten** (verifiziert: "Miley Cyrus - Flowers", später "Kygo, Khalid &
+  Gryffin - Save My Love").
+- Gleiches Muster (`stream-service.loverad.io/v4/<slug>`) für Radio Bob,
+  Hamburg Zwei geraten (`bob`, `hamburg2`, `hh2`, `hamburgzwei`, `h2`) —
+  alle `[]` (nicht gefunden). Hamburg Zwei referenziert `loverad.io`
+  überhaupt nicht in seinem HTML (nutzt stattdessen `rmsi-player.de`,
+  eine andere Plattform) — vermutlich kein Regiocast/loverad-Sender.
+- SWR3 (ARD/öffentlich-rechtlich) hat eine Playlisten-Seite
+  (`/playlisten/index.html`), aber auch dort keine im HTML sichtbare
+  API-URL gefunden — vermutlich eigenes, nicht-triviales Backend.
+- **Entscheidung**: kein genereller Website-Scraper gebaut (zu fragil —
+  jede Sender-Homepage hat ihre eigene, sich ändernde clientseitige
+  Render-Logik, würde dauerhaften Wartungsaufwand pro Sender bedeuten).
+  Stattdessen: nur der eine konkret verifizierte, stabile Fallback (R.SH)
+  eingebaut, mit klarer Struktur, um bei Bedarf weitere Sender zu
+  ergänzen, sobald jemand deren Muster gefunden hat.
+
+### Implementierung (webui.py)
+- `_LOVERAD_STREAM_SERVICE_SLUGS = {"r-sh": "rsh"}` — Mapping Sender-ID
+  (aus stations.json) -> Slug für die loverad.io-API.
+- `_fetch_loverad_now_playing(slug)` ruft `stream-service.loverad.io/
+  v4/<slug>` ab, liest Kanal `"1"`, baut `"<Interpret> - <Titel>"`.
+- `_fetch_now_playing(station)` (Signatur geändert: nimmt jetzt das
+  komplette Sender-dict statt nur die URL, gecacht per Sender-`id` statt
+  URL) schaut zuerst im Mapping nach — falls vorhanden, loverad-Fallback,
+  sonst ICY wie bisher.
+- Isoliert getestet: R.SH liefert echten Song/Interpret über den
+  Fallback, Radio Bob fällt korrekt auf ICY-Branding zurück (kein
+  Mapping-Eintrag).
+
+## 2026-08-02 (Fortsetzung) — Umbenennung radio_switch.py → radiozapper.py
+
+Nutzerwunsch: das Hauptscript und alle Referenzen darauf durchgängig auf
+den Projektnamen "RadioZapper" umbenennen.
+
+- `radio_switch.py` -> `radiozapper.py` (per `git mv`, Docstring/Nutzungs-
+  hinweis/argparse-Beschreibung im Dateiinhalt mit umbenannt)
+- `Dockerfile`: `COPY`/`ENTRYPOINT` auf `radiozapper.py`, Kommentar-Beispiel
+  `icecast-radioswitch` -> `icecast-radiozapper`
+- `docker-compose.yml`: Service-Key `radio-switch:` -> `radiozapper:`,
+  `container_name: radio-switch` -> `radiozapper`, Icecast-Container
+  `icecast-radioswitch` -> `icecast-radiozapper` (inkl. aller internen
+  `ICECAST_URL`/`ICECAST_ADMIN_URL`-Referenzen darauf)
+- `webui.py`/`stations_store.py`: Docstring-Verweise auf `radio_switch.py`
+  aktualisiert
+- `HANDOVER.md`: alle Verweise durchgehend aktualisiert (lebendes
+  Dokument, im Gegensatz zu diesem Session-Log bewusst nicht historisch
+  gehalten)
+- `v1/radio_switch.py` **bewusst nicht umbenannt** — das ist die
+  archivierte allererste Version des Scripts, soll den historischen Stand
+  repräsentieren, nicht den aktuellen Namen
+- Alte Einträge weiter oben in dieser Datei referenzieren weiterhin
+  `radio_switch.py`/`radio-switch` (Container) — bewusst so belassen,
+  das ist ein chronologisches Protokoll und beschreibt akkurat, wie die
+  Dinge zum jeweiligen Zeitpunkt hießen
+- `__pycache__/` mit dem alten kompilierten Modulnamen gelöscht (war eh
+  gitignored, nur lokale Aufräumarbeit)
+- Rebuild + Redeploy: da sich die Container-Namen ändern, übernimmt
+  `docker compose up -d --build` das nicht automatisch für die
+  ALT-benannten Container (die werden zu "Orphans", laufen unter altem
+  Namen weiter) — alte Container explizit gestoppt/entfernt, dann neu
+  hochgefahren. Details zum genauen Vorgehen: siehe Deploy-Log unten,
+  falls noch nicht bestätigt ergänzt.

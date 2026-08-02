@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-radio_switch.py — Internetradio abspielen, bei Moderation (Sprache) auf
+radiozapper.py — Internetradio abspielen, bei Moderation (Sprache) auf
 den nächsten Sender in der Liste umschalten.
 
 Erkennung: einfache Signal-Heuristik pro Analysefenster (~1 Sekunde):
@@ -20,7 +20,7 @@ Abhängigkeiten:
     pip install numpy sounddevice --break-system-packages
 
 Nutzung:
-    python3 radio_switch.py
+    python3 radiozapper.py
     (Sender-Liste in stations.json pflegen, oder über die Config-Seite
     des Web-Interfaces unter /config — siehe stations_store.py)
 """
@@ -324,7 +324,7 @@ def main():
     global VERBOSE
 
     import argparse
-    parser = argparse.ArgumentParser(description="Radio-Switcher: schaltet bei Moderation um.")
+    parser = argparse.ArgumentParser(description="RadioZapper: schaltet bei Moderation um.")
     parser.add_argument("--verbose", action="store_true",
                          help="Feature-Werte (zcr/flat/evar/bass) und Fingerprint-Infos ausgeben")
     parser.add_argument("--icecast-url", default=None,

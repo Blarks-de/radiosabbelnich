@@ -15,7 +15,7 @@ RUN python3 fix_silero_execstack.py && rm fix_silero_execstack.py
 ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
-COPY radio_switch.py .
+COPY radiozapper.py .
 COPY fingerprint.py .
 COPY speech_detector.py .
 COPY webui.py .
@@ -23,7 +23,7 @@ COPY stations_store.py .
 COPY stations.json .
 
 # ICECAST_URL wird beim Start via docker-compose environment gesetzt,
-# z.B. icecast://source:PASSWORT@icecast-radioswitch:8000/mix.mp3
+# z.B. icecast://source:PASSWORT@icecast-radiozapper:8000/mix.mp3
 # (Container-Name statt Hostname reicht, wenn beide im selben Compose-Netz sind)
 # ICECAST_ADMIN_URL/-USER/-PASSWORD/-MOUNT versorgen das eingebettete
 # Web-Interface (webui.py) mit Hörer-Daten aus Icecasts Admin-API.
@@ -32,4 +32,4 @@ COPY stations.json .
 # Icecast-Port abweichen. Der Webserver selbst lauscht containerintern fest
 # auf 5000 (siehe docker-compose.yml für die host-seitige Portwahl über
 # WEBUI_PORT).
-ENTRYPOINT ["sh", "-c", "python3 -u radio_switch.py --icecast-url \"$ICECAST_URL\" --webui-port 5000 --icecast-admin-url \"$ICECAST_ADMIN_URL\" --icecast-admin-user \"$ICECAST_ADMIN_USER\" --icecast-admin-password \"$ICECAST_ADMIN_PASSWORD\" --icecast-mount \"${ICECAST_MOUNT:-/radiozapper.mp3}\" --icecast-public-port \"${ICECAST_PUBLIC_PORT:-8000}\" --verbose"]
+ENTRYPOINT ["sh", "-c", "python3 -u radiozapper.py --icecast-url \"$ICECAST_URL\" --webui-port 5000 --icecast-admin-url \"$ICECAST_ADMIN_URL\" --icecast-admin-user \"$ICECAST_ADMIN_USER\" --icecast-admin-password \"$ICECAST_ADMIN_PASSWORD\" --icecast-mount \"${ICECAST_MOUNT:-/radiozapper.mp3}\" --icecast-public-port \"${ICECAST_PUBLIC_PORT:-8000}\" --verbose"]

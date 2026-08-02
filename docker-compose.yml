@@ -1,4 +1,4 @@
-# Icecast + Radio-Switch Stack für Dockfish.
+# Icecast + RadioZapper Stack für Dockfish.
 #
 # Setup:
 #   1. .env.example nach .env kopieren, Passwörter eintragen
@@ -10,7 +10,7 @@
 services:
   icecast:
     image: perl19/icecast2
-    container_name: icecast-radioswitch
+    container_name: icecast-radiozapper
     restart: unless-stopped
     ports:
       - "${ICECAST_PORT:-8000}:8000"
@@ -53,17 +53,17 @@ services:
             <admin>$$IC_ADMIN_EMAIL</admin>" icecast.xml
         exec icecast2 -c icecast.xml
 
-  radio-switch:
+  radiozapper:
     build: .
-    container_name: radio-switch
+    container_name: radiozapper
     restart: unless-stopped
     depends_on:
       - icecast
     environment:
       # zusammengesetzt aus den .env-Werten, kein Klartext-Passwort hier im File
-      - ICECAST_URL=icecast://source:${ICECAST_SOURCE_PASSWORD}@icecast-radioswitch:8000/radiozapper.mp3
+      - ICECAST_URL=icecast://source:${ICECAST_SOURCE_PASSWORD}@icecast-radiozapper:8000/radiozapper.mp3
       # für die Hörer-Abfrage im Web-Interface (webui.py -> Icecast Admin-API)
-      - ICECAST_ADMIN_URL=http://icecast-radioswitch:8000
+      - ICECAST_ADMIN_URL=http://icecast-radiozapper:8000
       - ICECAST_ADMIN_USER=${ICECAST_ADMIN_USER}
       - ICECAST_ADMIN_PASSWORD=${ICECAST_ADMIN_PASSWORD}
       - ICECAST_MOUNT=/radiozapper.mp3

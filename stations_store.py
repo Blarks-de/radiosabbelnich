@@ -2,10 +2,10 @@
 """
 stations_store.py — Laden/Speichern/Verwalten der Senderliste (stations.json).
 
-Gemeinsam genutzt von radio_switch.py (Playback-Rotation) und webui.py
+Gemeinsam genutzt von radiozapper.py (Playback-Rotation) und webui.py
 (Config-Seite) — beide arbeiten auf derselben Datei/demselben Schema, damit
 Änderungen über die Config-Seite ohne Sonderweg im laufenden Player
-ankommen (radio_switch.py pollt state.pop_reload_request() und liest bei
+ankommen (radiozapper.py pollt state.pop_reload_request() und liest bei
 Bedarf per load_all()/load_active() neu ein).
 
 Schema pro Sender: {"id": str, "name": str, "url": str, "category": str,

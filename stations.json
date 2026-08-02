@@ -47,5 +47,40 @@
     "enabled": true,
     "category": "Regional",
     "id": "ffn"
+  },
+  {
+    "id": "ndr2",
+    "name": "NDR2",
+    "url": "https://icecast.ndr.de/ndr/ndr2/hamburg/mp3/128/stream.mp3",
+    "category": "Lokal",
+    "enabled": true
+  },
+  {
+    "id": "ndr-90-3-hamburg",
+    "name": "NDR 90,3 Hamburg",
+    "url": "https://icecast.ndr.de/ndr/ndr903/hamburg/mp3/128/stream.mp3",
+    "category": "Lokal",
+    "enabled": true
+  },
+  {
+    "id": "ndr1-welle-nord-schleswig-holstein",
+    "name": "NDR1 Welle Nord Schleswig-Holstein",
+    "url": "https://icecast.ndr.de/ndr/ndr1wellenord/norderstedt/mp3/128/stream.mp3",
+    "category": "Lokal",
+    "enabled": true
+  },
+  {
+    "id": "80s80s",
+    "name": "80s80s",
+    "url": "https://streams.80s80s.de/web/mp3-128/streams.80s80s.de/",
+    "category": "National",
+    "enabled": true
+  },
+  {
+    "id": "90s90s",
+    "name": "90s90s",
+    "url": "https://streams.90s90s.de/web/mp3-128/mediaplayer",
+    "category": "National",
+    "enabled": true
   }
 ]

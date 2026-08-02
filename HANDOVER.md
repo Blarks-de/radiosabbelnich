@@ -1,17 +1,17 @@
 # RadioZapper — Übergabe an Claude Code
 
 ## Was das Projekt macht
-Python-Script (`radio_switch.py`) spielt Internetradio-Streams ab, erkennt
+Python-Script (`radiozapper.py`) spielt Internetradio-Streams ab, erkennt
 Moderation/Werbung/Jingles und schaltet automatisch auf den nächsten Sender
 in `stations.json`. Läuft als Docker-Compose-Stack auf Dockfish (Debian,
-Docker-Host), streamt via Icecast (`icecast-radioswitch`-Container) neu raus,
+Docker-Host), streamt via Icecast (`icecast-radiozapper`-Container) neu raus,
 sodass man's per VLC im ganzen Tailnet hören kann.
 
 ## Architektur
-- `radio_switch.py` — Hauptscript, Orchestrierung
+- `radiozapper.py` — Hauptscript, Orchestrierung
 - `speech_detector.py` — Sprache-Erkennung via Silero VAD (silero-vad-lite,
   16kHz intern, resampled automatisch von SAMPLE_RATE), Fallback auf
-  Signal-Heuristik (`classify_window()` in radio_switch.py: ZCR/Flatness/
+  Signal-Heuristik (`classify_window()` in radiozapper.py: ZCR/Flatness/
   Bass-Veto) falls VAD-Lib mal nicht lädt
 - `fingerprint.py` — Shazam-artiges Audio-Fingerprinting (Constellation-Map
   Hashing) in SQLite, erkennt wiederkehrende Jingles/Werbespots und schaltet
@@ -25,14 +25,14 @@ sodass man's per VLC im ganzen Tailnet hören kann.
   Einträge 2026-08-02.
 - `stations_store.py` — alleinige Quelle der Wahrheit für `stations.json`
   (Schema: `{id, name, url, category, enabled}`), CRUD-Funktionen mit
-  Datei-Lock, gemeinsam genutzt von `radio_switch.py` (Playback-Rotation
+  Datei-Lock, gemeinsam genutzt von `radiozapper.py` (Playback-Rotation
   über `load_active()`) und `webui.py` (Config-Seite über `load_all()` +
   add/update/set_enabled/delete). Migriert alte `stations.json`-Dateien
   ohne diese Felder transparent beim ersten Laden.
 - `stations.json` — Senderliste, liegt im Docker-Volume-Mount (einzelne
   Datei gebindmountet — deshalb schreibt `stations_store.py` direkt in
   die Datei statt atomar per temp+rename, siehe SESSION.md)
-- Icecast + Radio-Switch laufen als zwei Services in `docker-compose.yml`,
+- Icecast + RadioZapper laufen als zwei Services in `docker-compose.yml`,
   Credentials über `.env` (nicht `.env.example` committen als echte Werte!)
 
 ## Laufende Session-Dokumentation
@@ -65,7 +65,7 @@ korrekt getrennte Mono-/Stereo-Fenster.
 
 ## Web-Interface (erledigt)
 Neues Modul `webui.py`, läuft als `ThreadingHTTPServer` im selben Prozess
-wie `radio_switch.py` (Hintergrund-Thread, geteilter Lock-geschützter
+wie `radiozapper.py` (Hintergrund-Thread, geteilter Lock-geschützter
 Zustand `SwitcherState` — kein separater Service, kein IPC nötig). Auf
 Port 5000 (host-seitig via `WEBUI_PORT`):
 - `GET /` — HTML/JS-Seite, pollt alle 5s
@@ -93,7 +93,7 @@ Reihenfolge, auch leere Kategorien werden angezeigt), pro Sender ein
 Haken zum Aktivieren/Deaktivieren, Bearbeiten/Löschen-Buttons, Formular
 für neue Sender unten. Alphabetisch sortiert innerhalb jeder Kategorie.
 
-Größter struktureller Umbau bisher: `radio_switch.py` referenziert Sender
+Größter struktureller Umbau bisher: `radiozapper.py` referenziert Sender
 jetzt über eine stabile `id` statt über eine Listen-Position — nötig,
 damit Hinzufügen/Löschen/(De-)Aktivieren über die Config-Seite die
 laufende Wiedergabe nicht durcheinanderbringt. Änderungen wirken sich
@@ -133,8 +133,18 @@ am jeweiligen Sender-Betreiber) — 1LIVE und ffn tun es, andere zeigen nur
 Branding. Wird unter dem aktuellen Sendernamen im Web-Interface
 angezeigt.
 
-Details: SESSION.md, Eintrag 2026-08-02 (Fortsetzung, "Umschalt-Latenz +
-Now-Playing-Anzeige").
+Zusätzlich: für R.SH gibt's einen bestätigten Fallback über die
+Sender-eigene Website-API (`stream-service.loverad.io/v4/rsh`, liefert
+`artist_name`/`song_title` als sauberes JSON) statt ICY-Branding-Text —
+in `webui.py` über `_LOVERAD_STREAM_SERVICE_SLUGS` (Sender-ID -> Slug)
+konfiguriert. Für Radio Bob, Rock Antenne Hamburg, Hamburg Zwei und SWR3
+recherchiert, aber keine stabile öffentliche API gefunden (alle vier
+rendern "Jetzt läuft" clientseitig per JS, die jeweilige Praktikanten-API
+würde pro Sender einzeln reverse-engineert werden müssen — kein
+genereller Website-Scraper, siehe SESSION.md für Details).
+
+Details: SESSION.md, Einträge 2026-08-02 (Fortsetzung, "Umschalt-Latenz +
+Now-Playing-Anzeige" und "Now-Playing-Fallback über Senderseiten").
 
 ## Offene Punkte / bekannte Einschränkungen
 - ffn-Stream-URL noch nicht live verifiziert
@@ -167,7 +177,7 @@ erkennt Sprache live korrekt (`speech_ratio=1.00 -> SPEECH`), Fingerprint-
 Match + Auto-Switch danach bestätigt funktionierend.
 
 **"Manuelles Zappen dauert ewig"**: drei zusammenhängende Lücken in
-`radio_switch.py` gefunden und gefixt —
+`radiozapper.py` gefunden und gefixt —
 1. `StreamSource.read_window()` hatte keinen Timeout -> eine hängende
    Zielstation blockierte den kompletten Hauptloop unbegrenzt, inklusive
    aller weiteren manuellen Switch-Versuche. Jetzt: `STREAM_READ_TIMEOUT`
@@ -197,12 +207,12 @@ ohne `rm -f icecast.xml` vor jedem Lauf hätte jeder Container-Neustart zu
 ungültigem XML und Absturzschleife geführt. Details: SESSION.md,
 Eintrag 2026-08-02.
 **Wichtig für künftige Icecast-Änderungen:** Neuerstellen des
-`icecast`-Containers kappt die Source-Verbindung von `radio-switch`
-(kein Auto-Reconnect) — danach immer auch `radio-switch` neustarten.
+`icecast`-Containers kappt die Source-Verbindung von `radiozapper`
+(kein Auto-Reconnect) — danach immer auch `radiozapper` neustarten.
 
 ## Deploy-Befehl
 ```bash
 cd /opt/docker/RadioZapper
-docker compose up -d --build radio-switch
-docker compose logs -f radio-switch
+docker compose up -d --build radiozapper
+docker compose logs -f radiozapper
 ```

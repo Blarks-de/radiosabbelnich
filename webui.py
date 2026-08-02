@@ -3,7 +3,7 @@
 webui.py — Eingebettetes Webinterface für RadioZapper.
 
 Läuft als ThreadingHTTPServer in einem Hintergrund-Thread des
-Hauptprozesses (radio_switch.py). Zeigt den aktuell laufenden Sender und
+Hauptprozesses (radiozapper.py). Zeigt den aktuell laufenden Sender und
 verbundene Hörer (IP/User-Agent/Verbindungsdauer, abgefragt über Icecasts
 Admin-API) und erlaubt manuelles Umschalten über eine Sender-Liste aus
 stations.json.
@@ -192,17 +192,58 @@ def _fetch_icy_title(url: str, timeout: float = 3) -> str | None:
     return title or None
 
 
-def _fetch_now_playing(url: str, timeout: float = 3):
-    if not url:
+# Für die meisten Sender ist ICY-StreamTitle (siehe oben) die einzige
+# realistische Quelle. Für einzelne Sender, deren eigene Website eine
+# stabile, öffentlich erreichbare JSON-API für "Jetzt läuft" hat, lohnt
+# sich ein gezielter Fallback statt ICY-Branding-Text anzuzeigen — kein
+# genereller Website-Scraper (die meisten Sender-Homepages rendern das
+# clientseitig per JS, die jeweilige API pro Sender zu reverse-engineeren
+# wäre pro Sender eigener, fragiler Wartungsaufwand). Bisher recherchiert
+# und bestätigt: R.SH läuft über die "loverad.io"-Plattform (Regiocast),
+# stream-service.loverad.io/v4/<slug> liefert artist_name/song_title als
+# sauberes JSON. Weitere Sender können hier ergänzt werden, sobald jemand
+# deren API-Muster gefunden hat.
+_LOVERAD_STREAM_SERVICE_SLUGS = {
+    "r-sh": "rsh",
+}
+
+
+def _fetch_loverad_now_playing(slug: str, timeout: float = 3) -> str | None:
+    url = f"https://stream-service.loverad.io/v4/{slug}"
+    req = urllib.request.Request(url, headers={"User-Agent": "RadioZapper/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read())
+    except (urllib.error.URLError, OSError, ValueError):
         return None
+    channel = data.get("1") if isinstance(data, dict) else None
+    if not channel:
+        return None
+    artist = (channel.get("artist_name") or "").strip()
+    title = (channel.get("song_title") or "").strip()
+    if artist and title:
+        return f"{artist} - {title}"
+    return title or artist or None
+
+
+def _fetch_now_playing(station: dict, timeout: float = 3):
+    if not station:
+        return None
+    cache_key = station["id"]
     now = time.time()
     with _now_playing_lock:
-        cached = _now_playing_cache.get(url)
+        cached = _now_playing_cache.get(cache_key)
         if cached and now - cached[0] < _NOW_PLAYING_TTL:
             return cached[1]
-    title = _fetch_icy_title(url, timeout=timeout)
+
+    slug = _LOVERAD_STREAM_SERVICE_SLUGS.get(station["id"])
+    if slug:
+        title = _fetch_loverad_now_playing(slug, timeout=timeout)
+    else:
+        title = _fetch_icy_title(station["url"], timeout=timeout)
+
     with _now_playing_lock:
-        _now_playing_cache[url] = (now, title)
+        _now_playing_cache[cache_key] = (now, title)
     return title
 
 
@@ -213,7 +254,7 @@ def _build_status(state: SwitcherState, icecast_cfg: dict) -> dict:
         icecast_cfg.get("admin_url"), icecast_cfg.get("user"),
         icecast_cfg.get("password"), icecast_cfg.get("mount"),
     )
-    now_playing = _fetch_now_playing(current["url"]) if current else None
+    now_playing = _fetch_now_playing(current) if current else None
     return {
         "current_id": current["id"] if current else None,
         "current_name": current["name"] if current else None,
