@@ -549,6 +549,21 @@ def main():
                 do_switch("Nutzer meldete Gesabbel")
                 continue
 
+            if state.pop_filter_toggle_request():
+                # "Sabbelfilter (de)aktivieren"-Knopf: automatische
+                # Erkennung komplett pausieren/wieder anschalten. Streak-
+                # Buchhaltung zurücksetzen, sonst könnte ein alter,
+                # längst irrelevanter Sprache-Streak beim Wieder-
+                # Aktivieren sofort einen Switch auslösen.
+                new_enabled = not state.filter_enabled
+                state.set_filter_enabled(new_enabled)
+                speech_streak = 0
+                speech_buffer = []
+                fp_checked_this_run = False
+                print(f"🔇 Sabbelfilter {'wieder aktiviert' if new_enabled else 'deaktiviert'} "
+                      f"(automatisches Umschalten {'läuft weiter' if new_enabled else 'pausiert'}).")
+                continue
+
             pcm, pcm_stereo = source.read_window(WINDOW_SECONDS)
             if pcm.size == 0:
                 print(f"⚠ Stream '{current['name']}' liefert nichts mehr, "
@@ -559,6 +574,12 @@ def main():
 
             if pcm_stereo.size:
                 output.write(pcm_stereo)
+
+            if not state.filter_enabled:
+                # Sabbelfilter aus: einfach weiterspielen, keine
+                # automatische Erkennung/Umschaltung
+                continue
+
             label = classify(pcm)
             now = time.time()
 

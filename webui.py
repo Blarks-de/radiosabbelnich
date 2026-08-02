@@ -55,6 +55,8 @@ class SwitcherState:
         self._reload_requested = False
         self._skip_requested = False
         self._last_fingerprint_clip = None  # {"clip_id": int, "label": str}
+        self._filter_enabled = True
+        self._filter_toggle_requested = False
         self.reload()
 
     def reload(self):
@@ -155,6 +157,36 @@ class SwitcherState:
             clip = self._last_fingerprint_clip
             self._last_fingerprint_clip = None
             return clip
+
+    @property
+    def filter_enabled(self) -> bool:
+        """Ob die automatische Sprache-Erkennung (VAD/Heuristik/
+        Fingerprint) gerade aktiv ist. Bei False spielt der Hauptloop
+        einfach weiter, ohne auf Sprache zu reagieren — manuelles
+        Umschalten, "Gesabbel!" und "Zapping-Fehler" funktionieren
+        trotzdem weiter, das sind explizite Nutzer-Aktionen."""
+        with self._lock:
+            return self._filter_enabled
+
+    def set_filter_enabled(self, enabled: bool):
+        with self._lock:
+            self._filter_enabled = enabled
+
+    def request_filter_toggle(self):
+        """"Sabbelfilter deaktivieren/aktivieren"-Knopf. Läuft über
+        denselben Request-Pattern wie Reload/Skip statt filter_enabled
+        direkt aus dem Webserver-Thread umzudrehen — der Hauptloop muss
+        beim tatsächlichen Umschalten auch seine Streak-Buchhaltung
+        zurücksetzen (sonst könnte nach Wieder-Aktivieren ein uralter,
+        längst irrelevanter Sprache-Streak sofort einen Switch auslösen)."""
+        with self._lock:
+            self._filter_toggle_requested = True
+
+    def pop_filter_toggle_request(self) -> bool:
+        with self._lock:
+            flag = self._filter_toggle_requested
+            self._filter_toggle_requested = False
+            return flag
 
 
 def _fetch_listeners(admin_url, user, password, mount, timeout=3):
@@ -306,6 +338,7 @@ def _build_status(state: SwitcherState, icecast_cfg: dict) -> dict:
         "listeners": listeners,
         "stream_port": icecast_cfg.get("public_port"),
         "stream_mount": icecast_cfg.get("mount"),
+        "filter_enabled": state.filter_enabled,
     }
 
 
@@ -360,6 +393,12 @@ _PAGE_HTML = """<!doctype html>
     border: 1px solid #999; background: none; color: inherit; cursor: pointer;
   }
   .action-buttons button:active { opacity: .7; }
+  .filter-toggle-row { text-align: center; margin-top: .5rem; }
+  .filter-toggle-row button {
+    padding: .4rem 1rem; font-size: .85rem; border-radius: .4rem;
+    border: 1px solid #999; background: none; color: inherit; cursor: pointer;
+  }
+  .filter-toggle-row button.disabled-state { border-color: #c33; color: #c33; }
   #action-msg { font-size: .85rem; margin-top: .4rem; min-height: 1.2em; color: #888; }
 </style>
 </head>
@@ -373,6 +412,9 @@ _PAGE_HTML = """<!doctype html>
 <div class="action-buttons">
   <button id="btn-zapping-error" title="Letzten fälschlich erkannten Werbe-Clip aus der Datenbank löschen">🛑 Zapping-Fehler</button>
   <button id="btn-gesabbel" title="Sofort weiterschalten, weil hier gerade geredet wird">🗣️ Gesabbel!</button>
+</div>
+<div class="filter-toggle-row">
+  <button id="btn-filter-toggle" title="Automatische Sprache-Erkennung komplett pausieren/wieder anschalten">Sabbelfilter deaktivieren</button>
 </div>
 <div id="action-msg"></div>
 
@@ -408,6 +450,15 @@ async function refresh() {
   document.getElementById('current').textContent =
     data.current_name ? ('▶ Läuft gerade: ' + data.current_name) : 'Kein Sender aktiv';
   document.getElementById('now-playing').textContent = data.now_playing ? '🎵 ' + data.now_playing : '';
+
+  const filterBtn = document.getElementById('btn-filter-toggle');
+  if (data.filter_enabled === false) {
+    filterBtn.textContent = 'Sabbelfilter aktivieren';
+    filterBtn.classList.add('disabled-state');
+  } else {
+    filterBtn.textContent = 'Sabbelfilter deaktivieren';
+    filterBtn.classList.remove('disabled-state');
+  }
 
   // Player-Quelle nur einmal setzen, nicht bei jedem Poll -> sonst würde
   // die Wiedergabe alle 5s neu starten/stottern
@@ -485,6 +536,16 @@ document.getElementById('btn-gesabbel').addEventListener('click', async () => {
     await fetch('/api/skip', {method: 'POST'});
     setActionMsg('🗣️ Wird umgeschaltet …');
     setTimeout(refresh, 1500);
+  } catch (e) {
+    setActionMsg('Fehler: ' + e.message);
+  }
+});
+
+document.getElementById('btn-filter-toggle').addEventListener('click', async () => {
+  try {
+    await fetch('/api/filter/toggle', {method: 'POST'});
+    setActionMsg('Sabbelfilter wird umgeschaltet …');
+    setTimeout(refresh, 1200);
   } catch (e) {
     setActionMsg('Fehler: ' + e.message);
   }
@@ -835,6 +896,8 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                 self._handle_switch()
             elif self.path == "/api/skip":
                 self._handle_skip()
+            elif self.path == "/api/filter/toggle":
+                self._handle_filter_toggle()
             elif self.path == "/api/fingerprint/undo":
                 self._handle_fingerprint_undo()
             elif self.path == "/api/config/stations":
@@ -849,6 +912,15 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
             # wenn VAD/Heuristik (noch) nicht angeschlagen haben -> sofort
             # weiterschalten, ohne auf die automatische Erkennung zu warten.
             state.request_skip()
+            self._send_json({"ok": True})
+
+        def _handle_filter_toggle(self):
+            # "Sabbelfilter (de)aktivieren"-Knopf: automatische Erkennung
+            # komplett pausieren/wieder anschalten. Der Hauptloop wendet
+            # den Request an (inkl. Zurücksetzen der Streak-Buchhaltung),
+            # der tatsächliche neue Zustand kommt beim nächsten
+            # /api/status-Poll an.
+            state.request_filter_toggle()
             self._send_json({"ok": True})
 
         def _handle_fingerprint_undo(self):

@@ -46,6 +46,10 @@ Erreichbar unter `http://<host>:5000/`:
   umgeschaltet (z.B. ein kurzer Sender-übergreifender Sting über einem
   Musikbett)? Wirft den zugrundeliegenden Clip aus der Datenbank, damit
   er nicht weiter fälschlich erkannt wird.
+- **Sabbelfilter deaktivieren/aktivieren** — schaltet die komplette
+  automatische Erkennung für eine Weile aus (z.B. für ein Hörspiel/
+  Feature auf einem sonst Musik-Sender), ohne dass RadioZapper
+  dazwischenfunkt. Aktueller Zustand direkt am Button erkennbar.
 - **Hörer-Übersicht** — wer gerade zuhört (IP/Client/Verbindungsdauer)
 - **⚙ Sender verwalten** (`/config`) — Sender hinzufügen, bearbeiten,
   löschen, per Haken (de)aktivieren, gruppiert nach Kategorie

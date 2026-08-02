@@ -735,3 +735,47 @@ neues Logo/Hero-Bild als Branding, und README.md statt HANDOVER.md.
   Werkzeug, um damit im Alltag umzugehen, löst aber nicht die
   Grundursache. Für später: falls das Muster sich häuft, lohnt sich ein
   Umbau der Peak-Auswahl auf Frequenzbänder.
+
+## 2026-08-02 (Fortsetzung) — "Sabbelfilter deaktivieren"-Knopf
+
+Dritter Korrektur-Knopf, unter "Zapping-Fehler"/"Gesabbel!": komplettes
+Ein-/Ausschalten der automatischen Sprache-Erkennung (VAD/Heuristik/
+Fingerprint), für Situationen wo man die Automatik eine Weile ignorieren
+will (z.B. ein Hörspiel/Feature auf einem sonst Musik-Sender laufen
+lassen, ohne dass RadioZapper ständig wegschaltet).
+
+### Umsetzung
+- `webui.SwitcherState`: `_filter_enabled` (Default `True`) +
+  `filter_enabled`-Property (Read) / `set_filter_enabled()` (Write) —
+  plus ein separates Request-Flag-Pärchen `request_filter_toggle()`/
+  `pop_filter_toggle_request()` — analog zu Reload/Skip. Bewusst NICHT
+  direkt aus dem Webserver-Thread umgedreht: der Hauptloop muss beim
+  tatsächlichen Umschalten auch `speech_streak`/`speech_buffer`/
+  `fp_checked_this_run` zurücksetzen (sonst könnte ein alter, vor dem
+  Deaktivieren aufgelaufener Sprache-Streak beim Wieder-Aktivieren
+  sofort einen Switch auslösen, obwohl die Ursache längst vorbei ist).
+- `radiozapper.py`: neue Prüfung im Hauptloop (gleiche Ebene wie Reload/
+  Manual/Skip, vor dem blockierenden `read_window()`) — pollt das
+  Toggle-Request-Flag, dreht `filter_enabled` um, setzt die Streak-
+  Variablen zurück, loggt `🔇 Sabbelfilter (de)aktiviert`. Die eigentliche
+  Filterwirkung sitzt weiter unten: direkt nach `output.write(pcm_stereo)`
+  (Audio läuft also immer weiter) und vor `classify(pcm)` — bei
+  deaktiviertem Filter wird die komplette Erkennung (VAD-Klassifikation,
+  Fingerprint-Check, Streak-Zählung) übersprungen, `continue` zur
+  nächsten Iteration. Manueller Switch, "Gesabbel!" und "Zapping-Fehler"
+  bleiben davon unberührt (laufen als eigene Zweige VOR dieser Prüfung).
+- `webui.py`: neuer Endpunkt `POST /api/filter/toggle`, `filter_enabled`
+  zusätzlich in `/api/status` exponiert.
+- Frontend: dritter Button unter der bestehenden Zwei-Button-Reihe,
+  zentriert (`.filter-toggle-row`, eigene Zeile statt `flex:1` in der
+  `.action-buttons`-Reihe). Label wechselt dynamisch je nach Zustand
+  ("Sabbelfilter deaktivieren" / "Sabbelfilter aktivieren"), zusätzlich
+  roter Rand/Text (`.disabled-state`) wenn der Filter gerade aus ist —
+  klar sichtbar auch ohne den Button-Text genau zu lesen.
+- Live getestet: Toggle aus -> `[vad]`-Zeilen verschwinden komplett aus
+  dem Log, Stream bleibt aber gesund (weiterhin 44.1kHz/Stereo via
+  `ffprobe` bestätigt) und spielt normal weiter. Toggle wieder an ->
+  `[vad]`-Zeilen kommen sofort zurück. Beide Richtungen im Log bestätigt
+  (`🔇 Sabbelfilter deaktiviert (automatisches Umschalten pausiert).` /
+  `🔇 Sabbelfilter wieder aktiviert (automatisches Umschalten läuft
+  weiter).`).
