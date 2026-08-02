@@ -559,3 +559,74 @@ den Projektnamen "RadioZapper" umbenennen.
   Namen weiter) — alte Container explizit gestoppt/entfernt, dann neu
   hochgefahren. Details zum genauen Vorgehen: siehe Deploy-Log unten,
   falls noch nicht bestätigt ergänzt.
+
+## 2026-08-02 (Fortsetzung) — Fehlalarm beim Fingerprint-Switching
+
+Nutzer meldet: "gerade hat er weggezappt, obwohl Musik lief und keine
+Sprache — eben wieder" (zweimal innerhalb kurzer Zeit).
+
+### Diagnose
+- `docker compose logs -t radiozapper | grep "🎙|🎛|▶|🔁|SPEECH"` zeigt:
+  beide Switches kamen NICHT vom regulären VAD-Speech-Streak-Pfad
+  (`CONSECUTIVE_SPEECH_TO_SWITCH`), sondern über einen Fingerprint-
+  Treffer (`🔁 Bekannter Jingle/Werbespot wiedererkannt`).
+- `fingerprints.db` direkt inspiziert (`sqlite3`/Python): zum Zeitpunkt
+  der Meldung gab es in der GESAMTEN DB nur **einen einzigen** gelernten
+  Clip (`id=1`, Label "Radio Bob", erstmals gelernt 2026-08-02 14:55:07)
+  — der aber bereits **59x** wiedererkannt wurde, zuletzt kurz
+  hintereinander auf 90s90s, ffn und Hamburg Zwei (`times_seen` 56→59
+  innerhalb weniger Minuten, log-bestätigt).
+- Log zeigt außerdem `[fingerprint] ... N konsistente Hash-Matches` mit
+  N zwischen 30 und 275 (Schwelle `MIN_HASH_MATCHES=12`) — das sind keine
+  Zufallstreffer (die Shazam-artige Delta-Konsistenzprüfung filtert
+  Rauschen zuverlässig raus), sondern eine echte, strukturell identische
+  Audio-Wiederholung. VAD hatte vor jedem Switch tatsächlich hohe
+  `speech_ratio`-Werte (bis 0.94) — die Erkennung selbst hat also
+  technisch korrekt Sprache gefunden.
+- Einordnung: sehr wahrscheinlich ein kurzer (~3s, das ist die gesamte
+  Länge des per `FINGERPRINT_TRIGGER_SECONDS` gepufferten Clips), über
+  ein gemeinsames Ad-/Sweeper-Netzwerk mehrerer Sender eingespielter
+  Sting/Liner über einem Musikbett — technisch echte Sprache, aber genau
+  die Art kurzer, in Musik eingebetteter Einspieler, die sich für einen
+  Hörer nicht wie "jetzt kommt Werbung" anfühlt und für die ein kompletter
+  Senderwechsel überzogen wirkt. Nicht abschließend verifizierbar ohne
+  das Audio selbst zu hören — die Fingerprint-DB speichert nur Hashes,
+  keine Audiodaten, das ursprüngliche Clip-Audio war nicht mehr
+  rekonstruierbar.
+
+### Mit dem Nutzer abgestimmtes Vorgehen (AskUserQuestion)
+Optionen waren: (a) Clip löschen + Mitschnitt-Feature für künftige
+Treffer einbauen, (b) nur Mitschnitt einbauen und abwarten, (c) global
+striktere Fingerprint-Schwellwerte. Nutzer wählte (a).
+
+### Umsetzung
+- `radiozapper.py`: neue Funktion `save_fingerprint_debug_clip()` —
+  schreibt jeden Fingerprint-Kandidaten (Treffer UND neu gelernte Clips,
+  nicht nur Treffer) als WAV nach `fingerprint_clips/`
+  (Dateiname enthält Clip-ID/Sender-ID/Timestamp), damit sich künftige
+  Treffer tatsächlich anhören lassen statt nur an den Hash-Match-Zahlen
+  zu raten. Räumt automatisch alte Mitschnitte weg
+  (`FINGERPRINT_CLIPS_KEEP = 100`), damit unbeaufsichtigter Dauerbetrieb
+  nicht unbegrenzt Speicher frisst.
+- `docker-compose.yml`: neues Volume
+  `./fingerprint_clips:/app/fingerprint_clips`, damit die Mitschnitte
+  Container-Neustarts überleben und vom Host aus anhörbar sind.
+  `.gitignore` um `fingerprint_clips/` ergänzt (Audiodaten, nicht Code).
+- Fingerprint-DB bereinigt: Container gestoppt, Clip `id=1` (Label
+  "Radio Bob", 59x gesehen) inkl. aller zugehörigen Hashes aus
+  `fingerprints.db` gelöscht (`DELETE FROM hashes/clips WHERE ...`).
+  DB ist jetzt leer, lernt bei nächster Gelegenheit neu — falls es sich
+  wirklich um einen echten, störenden Werbespot handelt, wird der nach
+  zwei erneuten Vorkommen wieder erkannt UND diesmal als WAV mitgehört
+  werden können.
+- WAV-Schreibmechanismus isoliert getestet (`save_fingerprint_debug_clip`
+  direkt mit synthetischem PCM aufgerufen, resultierende Datei per
+  `wave`-Modul verifiziert: korrekt Mono/44100Hz/1s). Realer Trigger im
+  Live-Betrieb noch nicht abgewartet (bräuchte eine neue Sprache-Situation
+  nach dem Reset) — Mechanismus aber unabhängig davon bestätigt korrekt.
+- **Für später, falls das Muster wiederkehrt:** die WAVs unter
+  `fingerprint_clips/*.wav` anhören (z.B. `newclip_*` = neu gelernt,
+  `match_clip<id>_*` = Treffer) und dann entscheiden, ob es sich wirklich
+  um störende Werbung handelt oder ob die Fingerprint-Schwellwerte
+  (`MIN_HASH_MATCHES`, `FINGERPRINT_TRIGGER_SECONDS`) generell
+  nachjustiert werden sollten.

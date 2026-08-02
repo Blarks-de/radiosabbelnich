@@ -25,11 +25,13 @@ Nutzung:
     des Web-Interfaces unter /config — siehe stations_store.py)
 """
 
+import glob
 import os
 import select
 import subprocess
 import sys
 import time
+import wave
 import numpy as np
 
 import fingerprint
@@ -72,6 +74,14 @@ VERBOSE = False  # wird ggf. per --verbose Kommandozeilenparameter überschriebe
 # kleiner als CONSECUTIVE_SPEECH_TO_SWITCH sein, sonst hat's keinen Vorteil.
 FINGERPRINT_TRIGGER_SECONDS = 3
 FINGERPRINT_DB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fingerprints.db")
+
+# Jeder Fingerprint-Check (Treffer oder neu gelernter Clip) wird zusätzlich
+# als WAV mitgeschnitten -> falls ein Treffer einen unerwünschten Switch
+# auslöst, kann man sich den Clip hinterher tatsächlich anhören statt zu
+# raten, ob es wirklich Werbung/Jingle war oder ein Fehlalarm (z.B. ein
+# kurzer senderübergreifender Sting, der über ein Musikbett läuft).
+FINGERPRINT_CLIPS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fingerprint_clips")
+FINGERPRINT_CLIPS_KEEP = 100  # älteste Mitschnitte löschen, wenn mehr als das rumliegen
 
 # ----------------------------------------------------------------------
 # FEATURE-BERECHNUNG
@@ -143,6 +153,31 @@ def classify_window(pcm_int16: np.ndarray, sr: int) -> str:
               f"{'SPEECH' if is_speech else 'music'}", file=sys.stderr)
 
     return "speech" if is_speech else "music"
+
+
+def save_fingerprint_debug_clip(pcm_int16: np.ndarray, sr: int, filename: str):
+    """Schreibt einen Fingerprint-Kandidaten-Clip (Mono, s16le) als WAV nach
+    FINGERPRINT_CLIPS_DIR, damit man ihn sich im Nachhinein anhören kann.
+    Räumt dabei die ältesten Mitschnitte weg, falls mehr als
+    FINGERPRINT_CLIPS_KEEP rumliegen (unbeaufsichtigter Dauerbetrieb soll
+    nicht unbegrenzt Disk-Speicher fressen)."""
+    try:
+        os.makedirs(FINGERPRINT_CLIPS_DIR, exist_ok=True)
+        path = os.path.join(FINGERPRINT_CLIPS_DIR, filename)
+        with wave.open(path, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(sr)
+            wf.writeframes(pcm_int16.tobytes())
+
+        existing = sorted(
+            glob.glob(os.path.join(FINGERPRINT_CLIPS_DIR, "*.wav")),
+            key=os.path.getmtime,
+        )
+        for old_path in existing[:-FINGERPRINT_CLIPS_KEEP]:
+            os.remove(old_path)
+    except OSError as e:
+        print(f"⚠ Fingerprint-Debug-Clip konnte nicht geschrieben werden: {e}", file=sys.stderr)
 
 
 # ----------------------------------------------------------------------
@@ -535,7 +570,12 @@ def main():
                     match = fp_db.match_or_learn(
                         combined, SAMPLE_RATE, current["name"], verbose=VERBOSE
                     )
+                    ts = time.strftime("%Y%m%d-%H%M%S")
                     if match:
+                        save_fingerprint_debug_clip(
+                            combined, SAMPLE_RATE,
+                            f"match_clip{match['clip_id']}_{current['id']}_{ts}.wav",
+                        )
                         print(f"🔁 Bekannter Jingle/Werbespot wiedererkannt "
                               f"(schon {match['times_seen']}x gehört)")
                         speech_streak = 0
@@ -543,6 +583,10 @@ def main():
                         fp_checked_this_run = False
                         do_switch("Bekannte Werbung/Jingle erkannt")
                         continue
+                    else:
+                        save_fingerprint_debug_clip(
+                            combined, SAMPLE_RATE, f"newclip_{current['id']}_{ts}.wav",
+                        )
             else:
                 speech_streak = 0
                 speech_buffer = []

@@ -15,7 +15,13 @@ sodass man's per VLC im ganzen Tailnet hören kann.
   Bass-Veto) falls VAD-Lib mal nicht lädt
 - `fingerprint.py` — Shazam-artiges Audio-Fingerprinting (Constellation-Map
   Hashing) in SQLite, erkennt wiederkehrende Jingles/Werbespots und schaltet
-  sofort, ohne auf die volle Sprache-Konsens-Zeit zu warten
+  sofort, ohne auf die volle Sprache-Konsens-Zeit zu warten. Jeder Check
+  (Treffer oder neu gelernter Clip) wird zusätzlich als WAV nach
+  `fingerprint_clips/` mitgeschnitten (`save_fingerprint_debug_clip()` in
+  radiozapper.py) — falls ein Treffer einen unerwünschten Switch auslöst,
+  lässt sich der Clip nachträglich anhören statt an Hash-Match-Zahlen zu
+  raten. Siehe SESSION.md, Eintrag 2026-08-02 ("Fehlalarm beim
+  Fingerprint-Switching").
 - `webui.py` — eingebettetes Web-Interface (ThreadingHTTPServer im
   Hintergrund-Thread desselben Prozesses): zeigt aktuellen Sender + Hörer
   (IP/User-Agent/Verbindungsdauer via Icecast-Admin-API), erlaubt manuellen
@@ -148,8 +154,11 @@ Now-Playing-Anzeige" und "Now-Playing-Fallback über Senderseiten").
 
 ## Offene Punkte / bekannte Einschränkungen
 - ffn-Stream-URL noch nicht live verifiziert
-- Fingerprint-DB (`fingerprints.db`) ist noch jung, braucht ein paar Tage
-  Laufzeit um wiederkehrende Jingles/Ads zuverlässig gelernt zu haben
+- Fingerprint-DB (`fingerprints.db`) wurde am 2026-08-02 komplett
+  geleert (ein Clip hatte 59 Fehlalarme über mehrere Sender verursacht,
+  siehe SESSION.md) — lernt gerade wieder neu, braucht wieder ein paar
+  Tage Laufzeit. Bei erneuten Fehlalarmen: `fingerprint_clips/*.wav`
+  anhören, bevor man weitere Clips löscht oder Schwellwerte anpasst.
 - Silero VAD Diskriminierung (Sprache vs. Musik vs. Werbung-mit-Musikbett)
   wurde nur live auf Dockfish getestet, nicht in einer kontrollierten
   Testumgebung — falls Fehlklassifikationen auftreten, `--verbose` Logs

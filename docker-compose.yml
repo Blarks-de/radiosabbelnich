@@ -75,3 +75,4 @@ services:
     volumes:
       - ./stations.json:/app/stations.json
       - ./fingerprints.db:/app/fingerprints.db
+      - ./fingerprint_clips:/app/fingerprint_clips
