@@ -96,6 +96,8 @@ def _build_status(state: SwitcherState, icecast_cfg: dict) -> dict:
         "current_name": current_name,
         "stations": [{"index": i, "name": s["name"]} for i, s in enumerate(stations)],
         "listeners": listeners,
+        "stream_port": icecast_cfg.get("public_port"),
+        "stream_mount": icecast_cfg.get("mount"),
     }
 
 
@@ -118,6 +120,7 @@ _PAGE_HTML = """<!doctype html>
     background: #eee;
   }
   @media (prefers-color-scheme: dark) { #current { background: #2a2a2a; } }
+  #player { width: 100%; margin-top: 1rem; }
   ul#stations { list-style: none; padding: 0; display: grid; gap: .5rem; }
   ul#stations li button {
     width: 100%; text-align: left; padding: .6rem .8rem; font-size: 1rem;
@@ -134,6 +137,7 @@ _PAGE_HTML = """<!doctype html>
 <body>
 <h1>📻 RadioZapper</h1>
 <div id="current">Lade …</div>
+<audio id="player" controls preload="none"></audio>
 
 <h2>Sender</h2>
 <ul id="stations"></ul>
@@ -151,6 +155,7 @@ function esc(s) {
 }
 
 let switching = false;
+let playerSrcSet = false;
 
 async function refresh() {
   let data;
@@ -164,6 +169,14 @@ async function refresh() {
 
   document.getElementById('current').textContent =
     data.current_name ? ('▶ Läuft gerade: ' + data.current_name) : 'Kein Sender aktiv';
+
+  // Player-Quelle nur einmal setzen, nicht bei jedem Poll -> sonst würde
+  // die Wiedergabe alle 5s neu starten/stottern
+  if (!playerSrcSet && data.stream_port && data.stream_mount) {
+    const player = document.getElementById('player');
+    player.src = location.protocol + '//' + location.hostname + ':' + data.stream_port + data.stream_mount;
+    playerSrcSet = true;
+  }
 
   const list = document.getElementById('stations');
   list.innerHTML = '';

@@ -238,3 +238,35 @@ Drei zusammenhängende strukturelle Lücken gefunden, alle in
 - Syntaxgeprüft (`py_compile`), Rebuild + Deploy durchgeführt, manueller
   Switch getestet (Response < 20ms, Wechsel im Log/Status sofort
   sichtbar).
+
+## 2026-08-02 (Fortsetzung) — Player ins Web-Interface einbetten
+
+Nutzer wollte den Stream (`:8000/radiozapper.mp3`) und das Web-Interface
+(`:5000/`) auf einer Seite vereint haben ("umtopfen"). Interpretiert als:
+Web-Interface bekommt einen eingebetteten `<audio>`-Player, damit man auf
+einer einzigen Seite hört UND umschaltet — der rohe Icecast-Port 8000
+bleibt daneben bestehen (wird u.a. von VLC-Hörern im Tailnet direkt
+genutzt, siehe HANDOVER.md, "Was das Projekt macht").
+
+- `webui.py`: `<audio id="player" controls preload="none">` unter der
+  "aktueller Sender"-Anzeige. `_build_status()` liefert jetzt zusätzlich
+  `stream_port`/`stream_mount`. JS setzt `player.src` **einmalig** beim
+  ersten `refresh()` (`playerSrcSet`-Flag) — bewusst NICHT bei jedem
+  5s-Poll neu, sonst würde die Wiedergabe alle 5 Sekunden neu
+  anlaufen/stottern.
+- Stream-URL wird clientseitig aus `location.hostname` (Browser weiß,
+  über welchen Hostnamen er die Seite gerade aufgerufen hat — Tailscale-
+  Name, LAN-IP, `localhost`, was auch immer) + serverseitig gelieferten
+  `stream_port`/`stream_mount` zusammengebaut. Kein Hardcoding eines
+  bestimmten Hostnamens nötig, funktioniert unabhängig davon, wie man
+  die Seite erreicht.
+- Neue Konfig-Kette für den Port: `ICECAST_PUBLIC_PORT` (docker-
+  compose.yml, `radio-switch`-Service, aus `${ICECAST_PORT:-8000}` in
+  `.env`) -> `--icecast-public-port`-CLI-Arg (Dockerfile-Entrypoint,
+  radio_switch.py) -> `icecast_cfg["public_port"]` -> `/api/status`.
+  Getrennt vom containerinternen `ICECAST_ADMIN_URL` (der zeigt auf
+  `icecast-radioswitch:8000`, ist für Container-zu-Container-Zugriff
+  auf die Admin-API, nicht für den Browser erreichbar).
+- Verifiziert: `/api/status` liefert `stream_port: "8000"`,
+  `stream_mount: "/radiozapper.mp3"`; `<audio>`-Tag im ausgelieferten
+  HTML bestätigt.

@@ -377,6 +377,9 @@ def main():
     parser.add_argument("--icecast-admin-password", default=None)
     parser.add_argument("--icecast-mount", default=None,
                          help="Icecast-Mountpoint für die Hörer-Abfrage, z.B. /radiozapper.mp3")
+    parser.add_argument("--icecast-public-port", default=None,
+                         help="Port, unter dem der Browser den Icecast-Stream selbst erreicht "
+                              "(für den eingebetteten Player im Web-Interface), z.B. 8000")
     args = parser.parse_args()
     VERBOSE = args.verbose
 
@@ -415,6 +418,7 @@ def main():
             "user": args.icecast_admin_user,
             "password": args.icecast_admin_password,
             "mount": args.icecast_mount,
+            "public_port": args.icecast_public_port,
         }
         httpd = webui.start_server(args.webui_port, state, icecast_cfg)
         print(f"🌐 Web-Interface läuft auf Port {args.webui_port}")

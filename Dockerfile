@@ -25,7 +25,10 @@ COPY stations.json .
 # z.B. icecast://source:PASSWORT@icecast-radioswitch:8000/mix.mp3
 # (Container-Name statt Hostname reicht, wenn beide im selben Compose-Netz sind)
 # ICECAST_ADMIN_URL/-USER/-PASSWORD/-MOUNT versorgen das eingebettete
-# Web-Interface (webui.py) mit Hörer-Daten aus Icecasts Admin-API. Der
-# Webserver lauscht containerintern fest auf 5000 (siehe docker-compose.yml
-# für die host-seitige Portwahl über WEBUI_PORT).
-ENTRYPOINT ["sh", "-c", "python3 -u radio_switch.py --icecast-url \"$ICECAST_URL\" --webui-port 5000 --icecast-admin-url \"$ICECAST_ADMIN_URL\" --icecast-admin-user \"$ICECAST_ADMIN_USER\" --icecast-admin-password \"$ICECAST_ADMIN_PASSWORD\" --icecast-mount \"${ICECAST_MOUNT:-/radiozapper.mp3}\" --verbose"]
+# Web-Interface (webui.py) mit Hörer-Daten aus Icecasts Admin-API.
+# ICECAST_PUBLIC_PORT ist der Port, unter dem der Browser den Stream selbst
+# erreicht (fürs eingebettete <audio>-Element) — kann vom containerinternen
+# Icecast-Port abweichen. Der Webserver selbst lauscht containerintern fest
+# auf 5000 (siehe docker-compose.yml für die host-seitige Portwahl über
+# WEBUI_PORT).
+ENTRYPOINT ["sh", "-c", "python3 -u radio_switch.py --icecast-url \"$ICECAST_URL\" --webui-port 5000 --icecast-admin-url \"$ICECAST_ADMIN_URL\" --icecast-admin-user \"$ICECAST_ADMIN_USER\" --icecast-admin-password \"$ICECAST_ADMIN_PASSWORD\" --icecast-mount \"${ICECAST_MOUNT:-/radiozapper.mp3}\" --icecast-public-port \"${ICECAST_PUBLIC_PORT:-8000}\" --verbose"]

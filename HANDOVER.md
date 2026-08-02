@@ -72,6 +72,12 @@ Hörer-Daten kommen von Icecasts Admin-API
 ICECAST_ADMIN_*-Credentials). End-to-End getestet inkl. echtem verbundenen
 Hörer im Tailnet. Details siehe SESSION.md, Eintrag 2026-08-02.
 
+Seite hat außerdem einen eingebetteten `<audio>`-Player (Quelle wird
+clientseitig aus `location.hostname` + servergelieferten `stream_port`/
+`stream_mount` gebaut, einmalig gesetzt, nicht bei jedem Poll) — man kann
+also auf `:5000/` gleichzeitig hören und umschalten. Der rohe Icecast-Port
+8000 bleibt parallel bestehen (VLC im Tailnet etc.).
+
 ## Offene Punkte / bekannte Einschränkungen
 - ffn-Stream-URL noch nicht live verifiziert
 - Fingerprint-DB (`fingerprints.db`) ist noch jung, braucht ein paar Tage

@@ -67,6 +67,9 @@ services:
       - ICECAST_ADMIN_USER=${ICECAST_ADMIN_USER}
       - ICECAST_ADMIN_PASSWORD=${ICECAST_ADMIN_PASSWORD}
       - ICECAST_MOUNT=/radiozapper.mp3
+      # damit das Web-Interface einen Player einbetten kann, der vom
+      # Browser aus direkt auf den öffentlichen Icecast-Port zeigt
+      - ICECAST_PUBLIC_PORT=${ICECAST_PORT:-8000}
     ports:
       - "${WEBUI_PORT:-5000}:5000"
     volumes:
