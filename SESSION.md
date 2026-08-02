@@ -387,3 +387,76 @@ neue API sinnvoll sortiert:
   schalte auf: 1LIVE`
 - Danach Stream-Gesundheit erneut per `ffprobe` bestätigt (44.1kHz,
   Stereo, weiterhin sauber).
+
+## 2026-08-02 (Fortsetzung) — Umschalt-Latenz + Now-Playing-Anzeige
+
+Nutzer meldet: manueller Wechsel wird sofort geloggt, aber der Sender
+wechselt hörbar erst mehrere Sekunden später. Zusätzlich gewünscht:
+Song/Interpret der aktuellen Sendung anzeigen.
+
+### Umschalt-Latenz
+- Erste Hypothese (ffmpeg braucht lange zum Verbinden/Probing der neuen
+  Quelle) per Benchmark widerlegt: Time-to-first-byte lag für alle 7
+  Sender bei 0.2–1.6s, `-fflags nobuffer -analyzeduration 0 -probesize
+  32k` brachte nur marginale Verbesserung (0.02–0.16s) — nicht die
+  Ursache.
+- Tatsächliche Ursache per Live-Test mit timestamped Logs gefunden: nach
+  `source.start()` beim manuellen Switch geht der Hauptloop direkt in die
+  nächste Iteration, die per `read_window(WINDOW_SECONDS=1.0)` ein
+  **volles 1-Sekunden-Fenster** von der neuen Quelle abwartet, bevor
+  `output.write()` überhaupt das erste Mal aufgerufen wird. Da ein Live-
+  Stream nicht schneller als Echtzeit dekodiert werden kann, dauert das
+  Füllen eines vollen Fensters für eine frisch verbundene Quelle je nach
+  Server-Antwortzeit 1–3.4s (live gemessen: SWR3 3.4s, Radio Bob 0.6s —
+  Varianz durch Netzwerk/Server-Jitter des jeweiligen Senders, nicht
+  durch unseren Code).
+- Fix: neue Funktion `quick_forward(seconds=0.3)` in `radio_switch.py`
+  (Closure in `main()`, Zugriff auf `source`/`output`) — liest direkt
+  nach einem direkten Sender-Wechsel (manuell oder durch Config-Reload
+  erzwungen) einen kurzen 0.3s-Schnipsel und schreibt ihn sofort an
+  `output`, statt auf das nächste volle Analysefenster zu warten. Nur in
+  die beiden *direkten* Wechsel-Pfade eingebaut (manueller Switch,
+  Reload-erzwungener Switch) — `do_switch()`s automatisches Rundlauf-
+  Probieren bleibt unangetastet (hat mit dem 1.5s-Sleep vor der Probe
+  ohnehin eine andere, absichtliche Charakteristik: Zeit geben, damit
+  sich der Stream vor der Musik/Sprache-Prüfung stabilisiert).
+- Verifiziert per Live-Test (timestamped Logs, mehrere Sender
+  nacheinander durchgeschaltet): Lücke zwischen `🎛 Manuell
+  umgeschaltet auf: ...`-Logzeile und erster tatsächlich verarbeiteter
+  Audio-Sekunde der neuen Quelle jetzt durchgehend ~0.4–0.5s (vorher bis
+  zu 3.4s).
+- Eingeordnet, nicht behoben (weil serverseitig nicht beeinflussbar):
+  zusätzlich zur jetzt minimierten Server-Latenz kommt noch Icecast-
+  Queue/Burst- und vor allem der Player-Puffer beim Hörer (Browser/VLC
+  puffern selbst typischerweise mehrere Sekunden voraus) — das bleibt
+  eine inhärente Eigenschaft von Icecast-Streaming und lässt sich vom
+  Server aus nicht wegoptimieren, ohne die Hörer-Verbindung aktiv zu
+  kappen (was selbst störender wäre).
+
+### Now-Playing-Anzeige (Song/Interpret)
+- Viele Icecast/Shoutcast-Quellen betten periodisch ICY-Metadaten direkt
+  in den Audio-Stream ein (`StreamTitle='Interpret - Titel';`), Intervall
+  über den `icy-metaint`-Response-Header angegeben. Getestet gegen alle
+  7 konfigurierten Sender: 1LIVE und ffn liefern echte Interpret-Titel-
+  Daten, andere (Radio Bob, R.SH, Rock Antenne, Hamburg Zwei) zeigen nur
+  Sender-Branding, SWR3 zeigt den Moderationsnamen — das entscheidet
+  jeweils der Sender-Betreiber serverseitig, nicht von uns beeinflussbar.
+- Implementiert in `webui.py`: `_fetch_icy_title(url)` öffnet eine kurze
+  eigene HTTP-Verbindung zum Stream mit Header `Icy-MetaData: 1`
+  (unabhängig von der laufenden ffmpeg-Wiedergabe-Pipeline), liest Bytes
+  bis zum ersten Metadaten-Block (`icy-metaint` Bytes Audio verwerfen,
+  dann 1 Längen-Byte × 16 + Metadaten-Text lesen), extrahiert
+  `StreamTitle` per Regex, schließt die Verbindung sofort wieder.
+  `_fetch_now_playing()` cached das Ergebnis 15s pro URL
+  (`_now_playing_cache`, Lock-geschützt) — verhindert, dass mehrere
+  offene Browser-Tabs (jeder pollt `/api/status` alle 5s) den
+  Radiosender-Server unnötig oft extra anfragen.
+- Frontend: neues `#now-playing`-Div unter der "aktueller Sender"-Zeile,
+  zeigt `🎵 <StreamTitle>` wenn vorhanden, bleibt leer/versteckt sonst
+  (`#now-playing:empty { display: none; }`). Über `textContent`
+  gesetzt (nicht `innerHTML`) — der Titel kommt vom Sender-Server, also
+  potenziell nicht vertrauenswürdiger externer Text, `textContent`
+  escaped automatisch.
+- Verifiziert live: Wechsel auf 1LIVE zeigt korrekt
+  `now_playing: "Liam Payne & Rita Ora - For You"`, aktualisiert sich
+  nach Sender-Wechsel.

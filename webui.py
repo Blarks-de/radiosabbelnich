@@ -15,7 +15,9 @@ im selben Prozess, also reicht das.
 
 import base64
 import json
+import re
 import threading
+import time
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -142,6 +144,68 @@ def _fetch_listeners(admin_url, user, password, mount, timeout=3):
     return listeners
 
 
+# Cache für "Jetzt läuft"-Metadaten: eine eigene ICY-Verbindung pro
+# Sender-URL kostet eine kurze zusätzliche Verbindung zum jeweiligen
+# Radiosender-Server (unabhängig von der laufenden ffmpeg-Wiedergabe) —
+# bei mehreren offenen Browser-Tabs, die alle /api/status pollen, soll
+# das nicht bei jedem einzelnen Poll erneut passieren.
+_NOW_PLAYING_TTL = 15.0
+_now_playing_cache = {}  # url -> (timestamp, titel_oder_None)
+_now_playing_lock = threading.Lock()
+
+
+def _read_exact(resp, n: int) -> bytes:
+    buf = b""
+    while len(buf) < n:
+        chunk = resp.read(n - len(buf))
+        if not chunk:
+            break
+        buf += chunk
+    return buf
+
+
+def _fetch_icy_title(url: str, timeout: float = 3) -> str | None:
+    """Öffnet kurz eine eigene Verbindung zum Stream mit `Icy-MetaData: 1`
+    und liest das erste eingebettete Metadaten-Paket (StreamTitle=...) aus.
+    Nicht jeder Sender füllt das mit echten Song/Interpret-Daten (manche
+    zeigen nur den Sendernamen oder gar nichts) — das ist serverseitig
+    entschieden, nicht etwas, das wir beeinflussen können."""
+    req = urllib.request.Request(url, headers={"Icy-MetaData": "1", "User-Agent": "RadioZapper/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            metaint = resp.headers.get("icy-metaint")
+            if not metaint:
+                return None
+            metaint = int(metaint)
+            _read_exact(resp, metaint)  # Audio-Bytes bis zum Metadaten-Block verwerfen
+            length_byte = _read_exact(resp, 1)
+            if not length_byte:
+                return None
+            meta_len = length_byte[0] * 16
+            if meta_len == 0:
+                return None
+            meta = _read_exact(resp, meta_len).decode("utf-8", errors="replace")
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+    match = re.search(r"StreamTitle='([^']*)'", meta)
+    title = match.group(1).strip() if match else None
+    return title or None
+
+
+def _fetch_now_playing(url: str, timeout: float = 3):
+    if not url:
+        return None
+    now = time.time()
+    with _now_playing_lock:
+        cached = _now_playing_cache.get(url)
+        if cached and now - cached[0] < _NOW_PLAYING_TTL:
+            return cached[1]
+    title = _fetch_icy_title(url, timeout=timeout)
+    with _now_playing_lock:
+        _now_playing_cache[url] = (now, title)
+    return title
+
+
 def _build_status(state: SwitcherState, icecast_cfg: dict) -> dict:
     current = state.current_station()
     active = state.active_stations
@@ -149,9 +213,11 @@ def _build_status(state: SwitcherState, icecast_cfg: dict) -> dict:
         icecast_cfg.get("admin_url"), icecast_cfg.get("user"),
         icecast_cfg.get("password"), icecast_cfg.get("mount"),
     )
+    now_playing = _fetch_now_playing(current["url"]) if current else None
     return {
         "current_id": current["id"] if current else None,
         "current_name": current["name"] if current else None,
+        "now_playing": now_playing,
         "stations": [{"id": s["id"], "name": s["name"]} for s in active],
         "listeners": listeners,
         "stream_port": icecast_cfg.get("public_port"),
@@ -174,10 +240,18 @@ _PAGE_HTML = """<!doctype html>
   h1 { font-size: 1.4rem; margin-bottom: 1rem; }
   h2 { font-size: 1.05rem; margin-top: 2rem; }
   #current {
-    font-size: 1.1rem; padding: .75rem 1rem; border-radius: .5rem;
+    font-size: 1.1rem; padding: .75rem 1rem; border-radius: .5rem .5rem 0 0;
     background: #eee;
   }
-  @media (prefers-color-scheme: dark) { #current { background: #2a2a2a; } }
+  #now-playing {
+    font-size: .9rem; padding: 0 1rem .6rem 1rem; border-radius: 0 0 .5rem .5rem;
+    background: #eee; color: #555; min-height: 1.1em;
+  }
+  #now-playing:empty { display: none; }
+  @media (prefers-color-scheme: dark) {
+    #current, #now-playing { background: #2a2a2a; }
+    #now-playing { color: #aaa; }
+  }
   #player { width: 100%; margin-top: 1rem; }
   ul#stations { list-style: none; padding: 0; display: grid; gap: .5rem; }
   ul#stations li button {
@@ -196,6 +270,7 @@ _PAGE_HTML = """<!doctype html>
 <body>
 <h1>📻 RadioZapper</h1>
 <div id="current">Lade …</div>
+<div id="now-playing"></div>
 <audio id="player" controls preload="none"></audio>
 
 <h2>Sender</h2>
@@ -229,6 +304,7 @@ async function refresh() {
 
   document.getElementById('current').textContent =
     data.current_name ? ('▶ Läuft gerade: ' + data.current_name) : 'Kein Sender aktiv';
+  document.getElementById('now-playing').textContent = data.now_playing ? '🎵 ' + data.now_playing : '';
 
   // Player-Quelle nur einmal setzen, nicht bei jedem Poll -> sonst würde
   // die Wiedergabe alle 5s neu starten/stottern

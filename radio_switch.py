@@ -399,6 +399,20 @@ def main():
     state.set_current(current["id"])
     print(f"▶ Spiele: {current['name']}")
 
+    def quick_forward(seconds: float = 0.3):
+        """Nach einem direkten Sender-Wechsel (manuell oder erzwungen durch
+        einen Config-Reload) sofort einen kurzen Schnipsel lesen und an den
+        Output weiterreichen, statt bis zum nächsten vollen
+        WINDOW_SECONDS-Analysefenster zu warten. Ohne das vergehen nach
+        einem Wechsel spürbar mehrere Sekunden, bis überhaupt neue Audio
+        bei Icecast/Hörern ankommt — nicht weil die Verbindung zur neuen
+        Quelle lange dauert (die steht meist in <1s), sondern weil
+        read_window() sonst erst ein volles 1-Sekunden-Fenster sammelt,
+        bevor output.write() überhaupt aufgerufen wird."""
+        _, stereo = source.read_window(seconds)
+        if stereo.size:
+            output.write(stereo)
+
     speech_streak = 0
     last_switch_time = 0.0
     speech_buffer = []       # sammelt PCM-Chunks des aktuellen Sprache-Laufs
@@ -464,6 +478,7 @@ def main():
                     state.set_current(current["id"])
                     print(f"⚙ Senderliste geändert, aktueller Sender nicht mehr aktiv "
                           f"— schalte auf: {current['name']}")
+                    quick_forward()
                     last_switch_time = time.time()
                     speech_streak = 0
                     speech_buffer = []
@@ -483,6 +498,7 @@ def main():
                 source.start(current["url"])
                 state.set_current(current["id"])
                 print(f"🎛  Manuell umgeschaltet auf: {current['name']}")
+                quick_forward()
                 last_switch_time = time.time()
                 speech_streak = 0
                 speech_buffer = []

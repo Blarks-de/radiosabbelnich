@@ -114,6 +114,28 @@ Details/Debugging-Verlauf (inkl. zweier gefundener Bugs beim ersten
 Deploy — Bind-Mount-Problem bei atomarem Schreiben, veralteter Cache auf
 der Config-Seite): SESSION.md, Eintrag 2026-08-02 (Fortsetzung).
 
+## Umschalt-Latenz + Now-Playing (erledigt)
+**Umschalt-Latenz:** Nach einem direkten Sender-Wechsel (manuell oder
+Config-Reload-erzwungen) wartete der Hauptloop auf ein volles
+1-Sekunden-Analysefenster, bevor überhaupt etwas an Icecast ging —
+dauerte je nach Sender-Server-Antwortzeit 1–3.4s (live gemessen). Fix:
+`quick_forward()` liest direkt nach `source.start()` einen kurzen
+0.3s-Schnipsel und schreibt ihn sofort weiter. Server-seitige Latenz
+jetzt ~0.4–0.5s (verifiziert). Zusätzliche Verzögerung durch Icecast-
+Queue und v.a. den Player-Puffer beim Hörer bleibt bestehen — inhärent,
+nicht serverseitig behebbar.
+
+**Now-Playing:** `webui.py` fragt bei jedem `/api/status`-Poll (15s
+gecacht) per eigener kurzer HTTP-Verbindung die ICY-Metadaten des
+aktuellen Senders ab (`Icy-MetaData: 1`-Header, `StreamTitle=...`
+extrahiert). Nicht jeder Sender liefert echte Song/Interpret-Daten (liegt
+am jeweiligen Sender-Betreiber) — 1LIVE und ffn tun es, andere zeigen nur
+Branding. Wird unter dem aktuellen Sendernamen im Web-Interface
+angezeigt.
+
+Details: SESSION.md, Eintrag 2026-08-02 (Fortsetzung, "Umschalt-Latenz +
+Now-Playing-Anzeige").
+
 ## Offene Punkte / bekannte Einschränkungen
 - ffn-Stream-URL noch nicht live verifiziert
 - Fingerprint-DB (`fingerprints.db`) ist noch jung, braucht ein paar Tage
