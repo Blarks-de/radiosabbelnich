@@ -84,3 +84,60 @@ Schritte.
   dauer eines tatsächlich verbundenen Clients korrekt an.
 - Web-Interface erreichbar unter `http://<host>:5000/` (Port über
   `WEBUI_PORT` in `.env` konfigurierbar, Default 5000).
+
+### Icecast-Warnungen fixen: Location + Admin-Kontakt
+- Log zeigte:
+  `WARN CONFIG/_parse_root <location> not configured, using default value "Earth"`
+  und dasselbe für `<admin>` (`icemaster@localhost`). Gewünscht:
+  Location "Hamburg", Admin-Kontakt `blarks@gmail.com`.
+- Erste Analyse ging in die Irre: `docker exec icecast-radioswitch cat
+  /etc/icecast2/icecast.xml` zeigte `<location>Earth</location>` und
+  `<admin>icemaster@localhost</admin>` als literale Werte — das ist aber
+  die vom Debian-Paket mitgelieferte Default-Config unter `/etc/icecast2/`,
+  **nicht** die tatsächlich benutzte Datei. Das Base-Image
+  (`perl19/icecast2`) generiert bei jedem Start per `/app/start.sh` eine
+  eigene `/app/icecast.xml` über ein Tool `icegen` (Go-Binary,
+  `./icegen new --admin ... --host ... --port ...`) und startet
+  `icecast2 -c icecast.xml` mit relativem Pfad aus `/app`.
+- `icegen new --help` zeigt: keine Flags für `<location>`/`<admin>`
+  (Server-Info-Felder). Der `--admin`-Flag von icegen setzt nur den
+  Admin-**Login-Benutzernamen**, nicht die Kontakt-E-Mail. Das
+  generierte `/app/icecast.xml` enthält `<location>`/`<admin>` also
+  **gar nicht** als Tags — deshalb greift Icecasts interner Default.
+- Fix: `docker-compose.yml` überschreibt für den `icecast`-Service jetzt
+  `entrypoint`/`command` komplett (statt sich auf `start.sh` zu
+  verlassen): ruft `icegen new` mit denselben Flags wie `start.sh` auf,
+  fügt danach per `sed -i "/<icecast>/a\\...` `<location>`/`<admin>`
+  direkt nach dem öffnenden `<icecast>`-Tag ein (kein `s///`-Replace
+  möglich, da nichts zum Ersetzen da war — erster Versuch mit
+  `s#<location>.*</location>#...#` lief ins Leere, Warnungen blieben),
+  und startet dann `exec icecast2 -c icecast.xml`. Werte kommen aus
+  neuen Env-Vars `IC_LOCATION`/`IC_ADMIN_EMAIL`, gespeist aus
+  `ICECAST_LOCATION`/`ICECAST_ADMIN_EMAIL` in `.env` (Hamburg /
+  blarks@gmail.com) und `env.example` (Platzhalter).
+- Stolperfalle dabei gefunden und gefixt: `icegen new` überschreibt eine
+  bereits vorhandene `icecast.xml` **nicht**, sondern hängt eine zweite
+  Kopie an (146 → 292 Zeilen bei zweitem Lauf gegen dieselbe Datei) —
+  ergibt ungültiges XML mit zwei Root-Elementen
+  (`parser error: Extra content at the end of the document`). Bei jedem
+  Container-Neustart (z.B. durch `restart: unless-stopped` nach einem
+  Crash) hätte das eine Absturzschleife ausgelöst, die sich mit jedem
+  Neustart verschlimmert. Fix: `rm -f icecast.xml` direkt vor
+  `./icegen new` im command-Script — nicht kosmetisch, sondern Pflicht
+  für Restart-Robustheit.
+- Nebenwirkung beim Testen: Neuerstellen des `icecast`-Containers hat die
+  bestehende Source-Verbindung von `radio-switch` gekappt (kein
+  Auto-Reconnect für den Icecast-Push in `IcecastOutput`) — Stream stand
+  kurz still, bis `radio-switch` neugestartet wurde. Für künftige
+  Icecast-Änderungen einplanen: danach immer auch `radio-switch`
+  neustarten.
+- Verifiziert: `/admin/stats` zeigt `<location>Hamburg</location>` und
+  `<admin>blarks@gmail.com</admin>`, Container läuft stabil (kein
+  Crash-Loop mehr), Stream danach wieder erreichbar (44.1kHz/Stereo via
+  `ffprobe` bestätigt).
+- Bleibt unangetastet (nicht Teil der Anfrage, nur notiert): Icecast
+  loggt beim Start weiterhin `Couldn't find group "icecast2" in groups
+  file` / `Can't change user id unless you are root` sowie `Cannot open
+  mime types file /etc/mime.types` — harmlose Altlasten aus dem
+  icegen-Template (Container läuft eh schon als User `icecast2`, der
+  Privilege-Drop-Versuch ist ein No-Op).

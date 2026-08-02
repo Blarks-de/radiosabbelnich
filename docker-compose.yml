@@ -22,6 +22,36 @@ services:
       - IC_PORT=8000
       - IC_LIMITS_CLIENTS=50
       - IC_LIMITS_SOURCES=5
+      - IC_LOCATION=${ICECAST_LOCATION}
+      - IC_ADMIN_EMAIL=${ICECAST_ADMIN_EMAIL}
+    # Das Basis-Image generiert icecast.xml über ein "icegen"-Tool, das
+    # <location>/<admin> (Server-Info-Felder, nicht die Admin-Login-Daten)
+    # gar nicht kennt -> die Tags fehlen im generierten XML komplett, Icecast
+    # fällt intern auf "Earth"/"icemaster@localhost" zurück (siehe Warnungen
+    # im Log). Deshalb Entrypoint überschrieben: icegen wie im Original-
+    # start.sh aufrufen, danach die beiden Felder per sed direkt nach
+    # <icecast> einfügen (kein s///-Replace möglich, da nichts zum Ersetzen
+    # da ist). "rm -f" vor icegen ist Pflicht, nicht kosmetisch: icegen
+    # überschreibt eine vorhandene icecast.xml nicht, sondern hängt eine
+    # zweite Kopie an -> bei jedem Neustart des Containers sonst ungültiges
+    # XML (zwei Root-Elemente) und Absturzschleife.
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -e
+        rm -f icecast.xml
+        ./icegen new \
+          --admin "$$IC_AUTH_ADMIN" \
+          --adminpass "$$IC_AUTH_ADMIN_PASS" \
+          --host "$$IC_HOSTNAME" \
+          --numclients "$$IC_LIMITS_CLIENTS" \
+          --numsources "$$IC_LIMITS_SOURCES" \
+          --port "$$IC_PORT" \
+          --srcpass "$$IC_SOURCE_PASS"
+        sed -i "/<icecast>/a\\
+            <location>$$IC_LOCATION</location>\\
+            <admin>$$IC_ADMIN_EMAIL</admin>" icecast.xml
+        exec icecast2 -c icecast.xml
 
   radio-switch:
     build: .

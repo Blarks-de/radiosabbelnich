@@ -88,6 +88,26 @@ Hörer im Tailnet. Details siehe SESSION.md, Eintrag 2026-08-02.
   läuft die Spracherkennung dauerhaft auf der schwächeren Heuristik.
 - Web-Interface hat keinerlei Auth — im Tailnet vertretbar, aber falls der
   Port mal breiter exponiert wird, vorher absichern.
+- Icecast loggt beim Start `Couldn't find group "icecast2" in groups
+  file` / `Cannot open mime types file /etc/mime.types` — harmlose
+  Altlasten aus dem icegen-Image-Template, nicht behoben (kein
+  funktionaler Effekt).
+
+## Icecast Location/Admin (erledigt)
+`<location>` und `<admin>` fehlten im von `icegen` generierten
+`/app/icecast.xml` komplett (nicht editierbar über icegen-Flags) ->
+Icecast lief auf den Defaults "Earth"/"icemaster@localhost". Fix:
+`docker-compose.yml` überschreibt Entrypoint/Command des `icecast`-Service,
+patcht `icecast.xml` nach dem Generieren per `sed` (Werte aus
+`ICECAST_LOCATION`/`ICECAST_ADMIN_EMAIL` in `.env`, aktuell Hamburg /
+blarks@gmail.com). Dabei einen Bug im Image gefunden: `icegen new`
+überschreibt eine vorhandene `icecast.xml` nicht, sondern hängt an ->
+ohne `rm -f icecast.xml` vor jedem Lauf hätte jeder Container-Neustart zu
+ungültigem XML und Absturzschleife geführt. Details: SESSION.md,
+Eintrag 2026-08-02.
+**Wichtig für künftige Icecast-Änderungen:** Neuerstellen des
+`icecast`-Containers kappt die Source-Verbindung von `radio-switch`
+(kein Auto-Reconnect) — danach immer auch `radio-switch` neustarten.
 
 ## Deploy-Befehl
 ```bash
