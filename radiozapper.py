@@ -430,26 +430,27 @@ class IcecastOutput:
             self.proc.wait(timeout=5)
 
 
-def prebuffer_target_ids(current_id: str, active: list) -> list:
-    """Liefert die IDs der nächsten PREBUFFER_COUNT Sender in
-    Rotationsreihenfolge ab (aber ohne) dem aktuellen — dieselbe
-    Reihenfolge, in der do_switch() automatisch durchprobieren würde."""
+def prebuffer_target_ids(current_id: str, active: list, count: int = PREBUFFER_COUNT) -> list:
+    """Liefert die IDs der nächsten `count` Sender in Rotationsreihenfolge
+    ab (aber ohne) dem aktuellen — dieselbe Reihenfolge, in der
+    do_switch() automatisch durchprobieren würde."""
     ids = [s["id"] for s in active]
-    if current_id not in ids or len(active) <= 1:
+    if current_id not in ids or len(active) <= 1 or count <= 0:
         return []
     pos = ids.index(current_id)
     n = len(active)
-    count = min(PREBUFFER_COUNT, n - 1)
+    count = min(count, n - 1)
     return [ids[(pos + 1 + i) % n] for i in range(count)]
 
 
-def sync_prebuffer(prebuffer: dict, current_id: str, active: list, sample_rate: int):
+def sync_prebuffer(prebuffer: dict, current_id: str, active: list, sample_rate: int,
+                    buffer_seconds: float = PREBUFFER_SECONDS, count: int = PREBUFFER_COUNT):
     """Startet/stoppt Hintergrund-Puffer, damit `prebuffer` genau die
-    nächsten PREBUFFER_COUNT Sender (in Rotationsreihenfolge ab dem
-    aktuellen) enthält — nicht mehr, nicht weniger. Ersetzt außerdem
-    Puffer, deren Quelle unterwegs gestorben ist (Netzwerk-Hänger etc.),
-    durch einen frischen Versuch."""
-    wanted_ids = prebuffer_target_ids(current_id, active)
+    nächsten `count` Sender (in Rotationsreihenfolge ab dem aktuellen)
+    enthält — nicht mehr, nicht weniger. Ersetzt außerdem Puffer, deren
+    Quelle unterwegs gestorben ist (Netzwerk-Hänger etc.), durch einen
+    frischen Versuch."""
+    wanted_ids = prebuffer_target_ids(current_id, active, count)
     wanted_set = set(wanted_ids)
 
     for sid in list(prebuffer.keys()):
@@ -461,7 +462,7 @@ def sync_prebuffer(prebuffer: dict, current_id: str, active: list, sample_rate: 
     stations_by_id = {s["id"]: s for s in active}
     for sid in wanted_ids:
         if sid not in prebuffer and sid in stations_by_id:
-            pb = PrebufferedSource(sample_rate, stations_by_id[sid]["url"])
+            pb = PrebufferedSource(sample_rate, stations_by_id[sid]["url"], buffer_seconds)
             pb.start()
             prebuffer[sid] = pb
 
@@ -549,13 +550,16 @@ def main():
     state.set_current(current["id"])
     print(f"▶ Spiele: {current['name']}")
 
-    # Nächste PREBUFFER_COUNT Sender in Rotationsreihenfolge laufen im
-    # Hintergrund bereits mit (siehe PrebufferedSource/sync_prebuffer weiter
-    # oben) -> Wechsel dorthin fühlen sich praktisch nahtlos an, statt neu
-    # verbinden zu müssen.
+    # Nächste Sender in Rotationsreihenfolge laufen im Hintergrund bereits
+    # mit (siehe PrebufferedSource/sync_prebuffer weiter oben) -> Wechsel
+    # dorthin fühlen sich praktisch nahtlos an, statt neu verbinden zu
+    # müssen. Sekunden/Anzahl sind über die Config-Seite einstellbar
+    # (settings.json via settings_store.py) und live in state gecacht.
     prebuffer = {}
-    sync_prebuffer(prebuffer, current["id"], active, SAMPLE_RATE)
-    print(f"⏱  Puffere die nächsten {len(prebuffer)} Sender {PREBUFFER_SECONDS:.0f}s im Voraus.")
+    sync_prebuffer(prebuffer, current["id"], active, SAMPLE_RATE,
+                   state.prebuffer_seconds, state.prebuffer_count)
+    print(f"⏱  Puffere die nächsten {len(prebuffer)} Sender "
+          f"{state.prebuffer_seconds:.0f}s im Voraus.")
 
     def quick_forward(seconds: float = 0.3):
         """Nach einem direkten Sender-Wechsel (manuell oder erzwungen durch
@@ -669,15 +673,29 @@ def main():
 
     try:
         while True:
-            # Puffer für die nächsten PREBUFFER_COUNT Sender ab der aktuellen
-            # Position aktuell halten -- billig genug, um einmal pro
-            # Schleifendurchlauf zu prüfen (kein Rebuild, falls schon passend).
-            sync_prebuffer(prebuffer, current["id"], state.active_stations, SAMPLE_RATE)
+            # Puffer für die nächsten Sender ab der aktuellen Position
+            # aktuell halten -- billig genug, um einmal pro Schleifen-
+            # durchlauf zu prüfen (kein Rebuild, falls schon passend).
+            sync_prebuffer(prebuffer, current["id"], state.active_stations, SAMPLE_RATE,
+                            state.prebuffer_seconds, state.prebuffer_count)
 
             if state.pop_reload_request():
-                # Sender wurden über die Config-Seite geändert (hinzugefügt/
-                # gelöscht/(de)aktiviert/editiert) -> Rotationsliste neu laden
+                # Sender oder Puffer-Einstellungen wurden über die
+                # Config-Seite geändert -> beides neu laden
+                prev_prebuffer_settings = (state.prebuffer_seconds, state.prebuffer_count)
                 state.reload()
+                if (state.prebuffer_seconds, state.prebuffer_count) != prev_prebuffer_settings:
+                    # PrebufferedSource-Instanzen haben ihre Puffergröße
+                    # fest einkompiliert (deque(maxlen=...) bei der
+                    # Konstruktion) -> bestehende Puffer taugen nicht mehr,
+                    # alle verwerfen und beim nächsten sync_prebuffer()
+                    # (nächster Schleifendurchlauf) mit den neuen Werten
+                    # frisch aufbauen lassen.
+                    for pb in prebuffer.values():
+                        pb.stop()
+                    prebuffer.clear()
+                    print(f"⏱  Puffer-Einstellungen geändert: "
+                          f"{state.prebuffer_count} Sender × {state.prebuffer_seconds:.0f}s.")
                 active = state.active_stations
                 active_ids = {s["id"] for s in active}
                 if not active:
@@ -782,7 +800,7 @@ def main():
                             combined, SAMPLE_RATE,
                             f"match_clip{match['clip_id']}_{current['id']}_{ts}.wav",
                         )
-                        state.set_last_fingerprint_clip(match["clip_id"], match["label"])
+                        state.set_last_fingerprint_clip(match["clip_id"], match["label"], current["id"])
                         print(f"🔁 Bekannter Jingle/Werbespot wiedererkannt "
                               f"(schon {match['times_seen']}x gehört)")
                         speech_streak = 0

@@ -855,3 +855,82 @@ Hardware läuft oder die Senderzahl/PREBUFFER_COUNT deutlich wächst.
   auf den nächsten gepufferten Kandidaten zeigt
   `▶ Spiele: 90s90s (aus Puffer, nahtlos)` — der automatische Pfad nutzt
   den Puffer also ebenfalls korrekt.
+
+## 2026-08-02 (Fortsetzung) — Puffer-Einstellungen, Zapping-Fehler-Fix, README-Warnung
+
+Drei Dinge in einem Rutsch.
+
+### Puffer-Parameter über /config einstellbar
+- Neues Modul `settings_store.py` (analog zu `stations_store.py`):
+  persistiert `{"prebuffer_seconds": float, "prebuffer_count": int}` in
+  `settings.json`, eigener Lock, direktes Schreiben (kein temp+rename —
+  gleiche Bind-Mount-Einschränkung wie bei `stations.json`), Validierung
+  gegen grobe Leitplanken (`LIMITS`: 0–60s, 0–20 Sender).
+- `webui.SwitcherState`: `_prebuffer_seconds`/`_prebuffer_count` als
+  weitere Felder, die `reload()` (derselbe Mechanismus wie für
+  Sender-Änderungen) mit befüllt — Properties `prebuffer_seconds`/
+  `prebuffer_count` zum Auslesen.
+- Neue Endpunkte `GET/POST /api/config/settings`. POST validiert über
+  `settings_store.update()` und ruft `state.request_reload()` — nutzt
+  denselben Reload-Mechanismus wie Sender-Änderungen, kein separater
+  Pfad nötig.
+- `radiozapper.py`: `prebuffer_target_ids()`/`sync_prebuffer()` nehmen
+  jetzt `count`/`buffer_seconds` als Parameter (vorher globale
+  Konstanten) — Aufrufer übergeben `state.prebuffer_seconds`/
+  `state.prebuffer_count`. Beim Reload wird geprüft, ob sich die
+  Puffer-Einstellungen tatsächlich geändert haben (Vergleich vor/nach
+  `state.reload()`); falls ja, werden ALLE bestehenden Puffer verworfen
+  (`PrebufferedSource`-Instanzen haben ihre Puffergröße als
+  `deque(maxlen=...)` fest einkompiliert bei der Konstruktion — ändert
+  sich die gewünschte Sekundenzahl, taugen bestehende Puffer nicht mehr)
+  und beim nächsten Schleifendurchlauf mit den neuen Werten frisch
+  aufgebaut.
+- Config-Seite: neue Sektion "⏱ Puffer-Einstellungen" mit zwei
+  Zahlenfeldern + Speichern-Button, unterhalb von "Neuer Sender".
+- Live getestet: Settings auf 3×6s geändert -> Log bestätigt
+  `⏱ Puffer-Einstellungen geändert: 3 Sender × 6s.`, `/proc`-
+  Prozesszählung fällt korrekt von 7 auf 5 ffmpeg-Prozesse
+  (1 aktuell + 3 gepuffert + 1 Icecast). Zurück auf 5×10s gesetzt ->
+  wieder 7 Prozesse. `settings.json` auf dem Host korrekt aktualisiert.
+
+### "Zapping-Fehler" schaltet jetzt auch zum vorherigen Sender zurück
+Nutzer meldete: der Knopf löscht zwar den Clip, springt aber nicht zum
+Sender zurück, der vor dem fälschlichen Switch lief — und "löscht immer
+nur den Clip 1LIVE". Zweiteres bei Live-Prüfung der DB relativiert: zum
+Meldezeitpunkt war es tatsächlich durchgehend derselbe Clip (jeweils
+aktuelle ID, aber ja korrekt der EINE Clip, der gerade der Wiederholungs-
+täter war) — deckt sich mit dem bereits dokumentierten systemischen
+Fingerprint-Problem (Peaks ohne Frequenzband-Trennung, siehe Eintrag
+weiter oben "Fehlalarm beim Fingerprint-Switching"), keine zusätzliche
+Bug gefunden. Der fehlende Rücksprung war aber eine echte Lücke:
+
+- `state.set_last_fingerprint_clip()` bekommt jetzt zusätzlich
+  `previous_station_id` (der Sender, der lief, BEVOR der Fingerprint-
+  Treffer `do_switch()` auslöste — in `radiozapper.py` einfach
+  `current["id"]`, ausgelesen bevor `do_switch()` den Wert überschreibt).
+- `_handle_fingerprint_undo()` in `webui.py`: löscht den Clip wie bisher,
+  ruft zusätzlich `state.request_switch(prev_id)` auf (derselbe
+  Mechanismus wie ein normaler manueller Switch — kein neuer Code im
+  Hauptloop nötig, `switch_to_station()` inkl. Prebuffer-Erkennung greift
+  automatisch). Antwort enthält jetzt `switched_back_to` (Sendername oder
+  `null`, falls der vorherige Sender inzwischen deaktiviert wurde).
+- Frontend zeigt jetzt "✓ Clip gelöscht: X — zurück zu Y" und ruft
+  `refresh()` auf, damit der Sender-Wechsel sofort sichtbar wird.
+- Live getestet: Undo-Klick liefert
+  `{"ok": true, "label": "ffn", "switched_back_to": "ffn"}`, Log
+  bestätigt `🎛 Manuell umgeschaltet auf: ffn`. Clip danach nachweislich
+  aus der DB verschwunden (`SELECT * FROM clips` liefert `[]`).
+  Wiederholter Klick ohne neuen Treffer dazwischen liefert sauber 404
+  ("Kein kürzlicher Fingerprint-Treffer zum Zurücknehmen"), kein Fehler.
+
+### README: Warnung vor öffentlichem Betrieb
+Neuer, prominent platzierter Abschnitt direkt nach der Einleitung (vor
+"Wie die Erkennung funktioniert"): RadioZapper ist ausdrücklich nicht für
+öffentlichen Betrieb gedacht, muss immer hinter VPN/Tailscale laufen.
+Zwei Gründe explizit benannt (Nutzer-Formulierung sinngemäß übernommen,
+in Fließtext gegossen): unkontrollierter Bandbreiten-/Ressourcenverbrauch
+bei offener Erreichbarkeit, und urheberrechtliches Risiko durch
+öffentliche Weiterverbreitung fremder lizenzierter Radioprogramme (Zitat
+sinngemäß: "genug Kanzleien, für die das ein Geschäftsmodell ist").
+Bisherige schwächere Erwähnung unter "Bekannte Einschränkungen" gekürzt,
+verweist jetzt auf die neue Sektion statt zu duplizieren.

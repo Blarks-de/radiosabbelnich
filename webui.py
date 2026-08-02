@@ -25,6 +25,7 @@ import xml.etree.ElementTree as ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import fingerprint
+import settings_store
 import stations_store
 
 # Einmalig beim Modul-Import gelesen (statt bei jedem Request von der
@@ -54,9 +55,11 @@ class SwitcherState:
         self._manual_request = None
         self._reload_requested = False
         self._skip_requested = False
-        self._last_fingerprint_clip = None  # {"clip_id": int, "label": str}
+        self._last_fingerprint_clip = None  # {"clip_id", "label", "previous_station_id"}
         self._filter_enabled = True
         self._filter_toggle_requested = False
+        self._prebuffer_seconds = settings_store.DEFAULTS["prebuffer_seconds"]
+        self._prebuffer_count = settings_store.DEFAULTS["prebuffer_count"]
         self.reload()
 
     def reload(self):
@@ -65,11 +68,24 @@ class SwitcherState:
             (s for s in all_stations if s.get("enabled", True)),
             key=lambda s: s["name"].lower(),
         )
+        settings = settings_store.load()
         with self._lock:
             self._all_stations = all_stations
             self._active_stations = active
             if self._current_id is None and active:
                 self._current_id = active[0]["id"]
+            self._prebuffer_seconds = settings["prebuffer_seconds"]
+            self._prebuffer_count = settings["prebuffer_count"]
+
+    @property
+    def prebuffer_seconds(self) -> float:
+        with self._lock:
+            return self._prebuffer_seconds
+
+    @property
+    def prebuffer_count(self) -> int:
+        with self._lock:
+            return self._prebuffer_count
 
     @property
     def active_stations(self) -> list:
@@ -141,12 +157,15 @@ class SwitcherState:
             self._skip_requested = False
             return flag
 
-    def set_last_fingerprint_clip(self, clip_id: int, label: str):
+    def set_last_fingerprint_clip(self, clip_id: int, label: str, previous_station_id: str):
         """Vom Hauptloop nach jedem Fingerprint-Treffer aufgerufen, damit
         der "Zapping-Fehler"-Knopf weiß, welchen Clip er ggf. aus der DB
-        werfen soll."""
+        werfen soll — und zu welchem Sender er zurückschalten soll
+        (der, der lief, BEVOR der Treffer den Switch ausgelöst hat)."""
         with self._lock:
-            self._last_fingerprint_clip = {"clip_id": clip_id, "label": label}
+            self._last_fingerprint_clip = {
+                "clip_id": clip_id, "label": label, "previous_station_id": previous_station_id,
+            }
 
     def pop_last_fingerprint_clip(self):
         """Liefert den zuletzt per Fingerprint erkannten Clip (oder None)
@@ -525,7 +544,14 @@ document.getElementById('btn-zapping-error').addEventListener('click', async () 
   try {
     const res = await fetch('/api/fingerprint/undo', {method: 'POST'});
     const data = await res.json();
-    setActionMsg(data.ok ? ('✓ Clip gelöscht: ' + (data.label || '')) : ('– ' + data.error));
+    if (data.ok) {
+      let msg = '✓ Clip gelöscht' + (data.label ? (': ' + data.label) : '');
+      if (data.switched_back_to) msg += ' — zurück zu ' + data.switched_back_to;
+      setActionMsg(msg);
+      setTimeout(refresh, 1000);
+    } else {
+      setActionMsg('– ' + data.error);
+    }
   } catch (e) {
     setActionMsg('Fehler: ' + e.message);
   }
@@ -605,6 +631,16 @@ _CONFIG_PAGE_HTML = """<!doctype html>
     padding: .5rem; font-size: 1rem; width: 100%; box-sizing: border-box;
   }
   form#add-form button { padding: .6rem; font-size: 1rem; cursor: pointer; }
+  form#settings-form {
+    margin-top: 1.5rem; padding: 1rem; border: 1px solid #8884; border-radius: .5rem;
+    display: grid; gap: .6rem;
+  }
+  form#settings-form label { display: grid; gap: .25rem; font-size: .9rem; }
+  form#settings-form input {
+    padding: .5rem; font-size: 1rem; width: 100%; box-sizing: border-box;
+  }
+  form#settings-form button { padding: .6rem; font-size: 1rem; cursor: pointer; }
+  form#settings-form .hint { font-size: .8rem; color: #888; margin: 0; }
   #msg { margin-top: 1rem; font-size: .9rem; min-height: 1.2em; }
   #msg.error { color: #d33; }
   #msg.ok { color: #2a7a4a; }
@@ -623,6 +659,20 @@ _CONFIG_PAGE_HTML = """<!doctype html>
   <select id="add-category"></select>
   <label><input type="checkbox" id="add-enabled" checked> aktiviert</label>
   <button type="submit">Hinzufügen</button>
+</form>
+
+<h2>⏱ Puffer-Einstellungen</h2>
+<form id="settings-form">
+  <p class="hint">Die nächsten Sender in Rotationsreihenfolge laufen im
+    Hintergrund mit und halten Audio vor, damit Wechsel flüssig ablaufen.
+    Mehr Sekunden/Sender = flüssiger, aber mehr Bandbreite/CPU.</p>
+  <label>Sekunden pro gepuffertem Sender
+    <input type="number" id="settings-seconds" min="0" max="60" step="0.5" required>
+  </label>
+  <label>Anzahl vorausgepufferter Sender
+    <input type="number" id="settings-count" min="0" max="20" step="1" required>
+  </label>
+  <button type="submit">Speichern</button>
 </form>
 
 <div id="msg"></div>
@@ -829,7 +879,34 @@ document.getElementById('add-form').addEventListener('submit', async (ev) => {
   }
 });
 
+async function loadSettings() {
+  try {
+    const settings = await api('/api/config/settings');
+    document.getElementById('settings-seconds').value = settings.prebuffer_seconds;
+    document.getElementById('settings-count').value = settings.prebuffer_count;
+  } catch (e) {
+    showMsg('Konnte Puffer-Einstellungen nicht laden: ' + e.message, true);
+  }
+}
+
+document.getElementById('settings-form').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const prebuffer_seconds = parseFloat(document.getElementById('settings-seconds').value);
+  const prebuffer_count = parseInt(document.getElementById('settings-count').value, 10);
+  try {
+    await api('/api/config/settings', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({prebuffer_seconds, prebuffer_count}),
+    });
+    showMsg('Puffer-Einstellungen gespeichert.', false);
+  } catch (e) {
+    showMsg('Fehler: ' + e.message, true);
+  }
+});
+
 loadStations();
+loadSettings();
 </script>
 </body>
 </html>
@@ -888,6 +965,8 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                     "stations": stations_store.load_all(),
                     "categories": stations_store.CATEGORIES,
                 })
+            elif self.path == "/api/config/settings":
+                self._send_json(settings_store.load())
             else:
                 self.send_error(404)
 
@@ -904,8 +983,22 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                 self._handle_add_station()
             elif self.path.startswith("/api/config/stations/"):
                 self._handle_station_action()
+            elif self.path == "/api/config/settings":
+                self._handle_update_settings()
             else:
                 self.send_error(404)
+
+        def _handle_update_settings(self):
+            payload = self._read_json_body()
+            try:
+                settings = settings_store.update(
+                    prebuffer_seconds=payload.get("prebuffer_seconds"),
+                    prebuffer_count=payload.get("prebuffer_count"),
+                )
+                state.request_reload()
+                self._send_json({"ok": True, "settings": settings})
+            except ValueError as e:
+                self._send_json({"ok": False, "error": str(e)}, status=400)
 
         def _handle_skip(self):
             # "Gesabbel!"-Knopf: Nutzer hat selbst Sprache erkannt, auch
@@ -927,7 +1020,8 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
             # "Zapping-Fehler"-Knopf: der letzte automatische Wechsel kam
             # von einem Fingerprint-Treffer, der sich im Nachhinein als
             # falsch/unerwünscht rausstellt -> den zugrundeliegenden Clip
-            # aus der DB werfen, damit er nicht weiter fälschlich matcht.
+            # aus der DB werfen (damit er nicht weiter fälschlich matcht)
+            # UND zurück zu dem Sender schalten, der vor dem Treffer lief.
             clip = state.pop_last_fingerprint_clip()
             if clip is None:
                 self._send_json({
@@ -935,14 +1029,25 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                     "error": "Kein kürzlicher Fingerprint-Treffer zum Zurücknehmen.",
                 }, status=404)
                 return
+
             label = fingerprint.delete_clip(fingerprint_db_path, clip["clip_id"])
-            if label is None:
+
+            switched_back_to = None
+            prev_id = clip.get("previous_station_id")
+            if prev_id:
+                station = next((s for s in state.active_stations if s["id"] == prev_id), None)
+                if station is not None:
+                    state.request_switch(prev_id)
+                    switched_back_to = station["name"]
+
+            if label is None and switched_back_to is None:
                 self._send_json({
                     "ok": False,
-                    "error": "Clip war schon nicht mehr in der Datenbank.",
+                    "error": "Clip war schon nicht mehr in der Datenbank, und der "
+                             "vorherige Sender ist nicht mehr aktiv.",
                 }, status=404)
                 return
-            self._send_json({"ok": True, "label": label})
+            self._send_json({"ok": True, "label": label, "switched_back_to": switched_back_to})
 
         def _handle_switch(self):
             payload = self._read_json_body()

@@ -20,6 +20,7 @@ COPY fingerprint.py .
 COPY speech_detector.py .
 COPY webui.py .
 COPY stations_store.py .
+COPY settings_store.py .
 COPY stations.json .
 COPY radiozapper.webp .
 
