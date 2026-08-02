@@ -1,0 +1,44 @@
+# Icecast + Radio-Switch Stack für Dockfish.
+#
+# Setup:
+#   1. .env.example nach .env kopieren, Passwörter eintragen
+#   2. stations.json nach Belieben anpassen
+#   3. docker compose up -d --build
+#
+# .env NICHT ins Git-Repo pushen (siehe .gitignore)!
+
+services:
+  icecast:
+    image: perl19/icecast2
+    container_name: icecast-radioswitch
+    restart: unless-stopped
+    ports:
+      - "${ICECAST_PORT:-8000}:8000"
+    environment:
+      - IC_AUTH_ADMIN=${ICECAST_ADMIN_USER}
+      - IC_AUTH_ADMIN_PASS=${ICECAST_ADMIN_PASSWORD}
+      - IC_SOURCE_PASS=${ICECAST_SOURCE_PASSWORD}
+      - IC_HOSTNAME=${ICECAST_HOSTNAME}
+      - IC_PORT=8000
+      - IC_LIMITS_CLIENTS=50
+      - IC_LIMITS_SOURCES=5
+
+  radio-switch:
+    build: .
+    container_name: radio-switch
+    restart: unless-stopped
+    depends_on:
+      - icecast
+    environment:
+      # zusammengesetzt aus den .env-Werten, kein Klartext-Passwort hier im File
+      - ICECAST_URL=icecast://source:${ICECAST_SOURCE_PASSWORD}@icecast-radioswitch:8000/radiozapper.mp3
+      # für die Hörer-Abfrage im Web-Interface (webui.py -> Icecast Admin-API)
+      - ICECAST_ADMIN_URL=http://icecast-radioswitch:8000
+      - ICECAST_ADMIN_USER=${ICECAST_ADMIN_USER}
+      - ICECAST_ADMIN_PASSWORD=${ICECAST_ADMIN_PASSWORD}
+      - ICECAST_MOUNT=/radiozapper.mp3
+    ports:
+      - "${WEBUI_PORT:-5000}:5000"
+    volumes:
+      - ./stations.json:/app/stations.json
+      - ./fingerprints.db:/app/fingerprints.db

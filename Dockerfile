@@ -1,0 +1,24 @@
+FROM python:3.12-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir numpy silero-vad-lite
+
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app
+COPY radio_switch.py .
+COPY fingerprint.py .
+COPY speech_detector.py .
+COPY webui.py .
+COPY stations.json .
+
+# ICECAST_URL wird beim Start via docker-compose environment gesetzt,
+# z.B. icecast://source:PASSWORT@icecast-radioswitch:8000/mix.mp3
+# (Container-Name statt Hostname reicht, wenn beide im selben Compose-Netz sind)
+# ICECAST_ADMIN_URL/-USER/-PASSWORD/-MOUNT versorgen das eingebettete
+# Web-Interface (webui.py) mit Hörer-Daten aus Icecasts Admin-API. Der
+# Webserver lauscht containerintern fest auf 5000 (siehe docker-compose.yml
+# für die host-seitige Portwahl über WEBUI_PORT).
+ENTRYPOINT ["sh", "-c", "python3 -u radio_switch.py --icecast-url \"$ICECAST_URL\" --webui-port 5000 --icecast-admin-url \"$ICECAST_ADMIN_URL\" --icecast-admin-user \"$ICECAST_ADMIN_USER\" --icecast-admin-password \"$ICECAST_ADMIN_PASSWORD\" --icecast-mount \"${ICECAST_MOUNT:-/radiozapper.mp3}\" --verbose"]
