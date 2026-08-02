@@ -1,9 +1,51 @@
 [
-  {"name": "Radio Bob", "url": "https://streams.radiobob.de/bob-live/mp3-192/mediaplayer"},
-  {"name": "1LIVE", "url": "https://wdr-1live-live.icecastssl.wdr.de/wdr/1live/live/mp3/128/stream.mp3"},
-  {"name": "SWR3", "url": "https://liveradio.swr.de/sw282p3/swr3/play.mp3"},
-  {"name": "R.SH", "url": "http://streams.rsh.de/rsh-live/mp3-192/mediaplayer"},
-  {"name": "Rock Antenne Hamburg", "url": "https://stream.rockantenne.hamburg/rockantenne-hamburg/stream/mp3"},
-  {"name": "Hamburg Zwei", "url": "https://stream.hamburg-zwei.de/live/mp3-192/linkhamburgzweide/"},
-  {"name": "ffn", "url": "https://stream.ffn.de/ffn/mp3-192"}
+  {
+    "name": "Radio Bob",
+    "url": "https://streams.radiobob.de/bob-live/mp3-192/mediaplayer",
+    "enabled": true,
+    "category": "National",
+    "id": "radio-bob"
+  },
+  {
+    "name": "1LIVE",
+    "url": "https://wdr-1live-live.icecastssl.wdr.de/wdr/1live/live/mp3/128/stream.mp3",
+    "enabled": true,
+    "category": "National",
+    "id": "1live"
+  },
+  {
+    "name": "SWR3",
+    "url": "https://liveradio.swr.de/sw282p3/swr3/play.mp3",
+    "enabled": true,
+    "category": "Regional",
+    "id": "swr3"
+  },
+  {
+    "name": "R.SH",
+    "url": "http://streams.rsh.de/rsh-live/mp3-192/mediaplayer",
+    "enabled": true,
+    "category": "Regional",
+    "id": "r-sh"
+  },
+  {
+    "name": "Rock Antenne Hamburg",
+    "url": "https://stream.rockantenne.hamburg/rockantenne-hamburg/stream/mp3",
+    "enabled": true,
+    "category": "Lokal",
+    "id": "rock-antenne-hamburg"
+  },
+  {
+    "name": "Hamburg Zwei",
+    "url": "https://stream.hamburg-zwei.de/live/mp3-192/linkhamburgzweide/",
+    "enabled": true,
+    "category": "Lokal",
+    "id": "hamburg-zwei"
+  },
+  {
+    "name": "ffn",
+    "url": "https://stream.ffn.de/ffn/mp3-192",
+    "enabled": true,
+    "category": "Regional",
+    "id": "ffn"
+  }
 ]

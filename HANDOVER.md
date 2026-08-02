@@ -18,12 +18,20 @@ sodass man's per VLC im ganzen Tailnet hören kann.
   sofort, ohne auf die volle Sprache-Konsens-Zeit zu warten
 - `webui.py` — eingebettetes Web-Interface (ThreadingHTTPServer im
   Hintergrund-Thread desselben Prozesses): zeigt aktuellen Sender + Hörer
-  (IP/User-Agent/Verbindungsdauer via Icecast-Admin-API) und erlaubt
-  manuellen Sender-Wechsel aus der stations.json-Liste heraus. Erreichbar
-  auf Port 5000 (host-seitig via `WEBUI_PORT` in `.env` konfigurierbar).
-  Details/Design-Entscheidungen: siehe SESSION.md, Eintrag 2026-08-02.
-- `stations.json` — Senderliste, wird zur Laufzeit geladen (kein Code-Anfassen
-  nötig), liegt im Docker-Volume-Mount
+  (IP/User-Agent/Verbindungsdauer via Icecast-Admin-API), erlaubt manuellen
+  Sender-Wechsel, und unter `/config` die volle Sender-Verwaltung (siehe
+  unten). Erreichbar auf Port 5000 (host-seitig via `WEBUI_PORT` in `.env`
+  konfigurierbar). Details/Design-Entscheidungen: siehe SESSION.md,
+  Einträge 2026-08-02.
+- `stations_store.py` — alleinige Quelle der Wahrheit für `stations.json`
+  (Schema: `{id, name, url, category, enabled}`), CRUD-Funktionen mit
+  Datei-Lock, gemeinsam genutzt von `radio_switch.py` (Playback-Rotation
+  über `load_active()`) und `webui.py` (Config-Seite über `load_all()` +
+  add/update/set_enabled/delete). Migriert alte `stations.json`-Dateien
+  ohne diese Felder transparent beim ersten Laden.
+- `stations.json` — Senderliste, liegt im Docker-Volume-Mount (einzelne
+  Datei gebindmountet — deshalb schreibt `stations_store.py` direkt in
+  die Datei statt atomar per temp+rename, siehe SESSION.md)
 - Icecast + Radio-Switch laufen als zwei Services in `docker-compose.yml`,
   Credentials über `.env` (nicht `.env.example` committen als echte Werte!)
 
@@ -63,7 +71,7 @@ Port 5000 (host-seitig via `WEBUI_PORT`):
 - `GET /` — HTML/JS-Seite, pollt alle 5s
 - `GET /api/status` — aktueller Sender, alle Sender aus stations.json,
   Hörer-Liste (IP/User-Agent/Verbindungsdauer)
-- `POST /api/switch {"index": N}` — manueller Sender-Wechsel; Hauptloop
+- `POST /api/switch {"id": "..."}` — manueller Sender-Wechsel; Hauptloop
   greift den Request beim nächsten Analysefenster ab und springt sofort
   (ohne erst auf "Musik läuft" zu warten wie beim Auto-Switch)
 
@@ -77,6 +85,34 @@ clientseitig aus `location.hostname` + servergelieferten `stream_port`/
 `stream_mount` gebaut, einmalig gesetzt, nicht bei jedem Poll) — man kann
 also auf `:5000/` gleichzeitig hören und umschalten. Der rohe Icecast-Port
 8000 bleibt parallel bestehen (VLC im Tailnet etc.).
+
+## Config-Seite: Sender verwalten (erledigt)
+`/config` — volle CRUD-Verwaltung der Senderliste, gruppiert nach
+Lokal/Regional/National/International/Global/Interstellar (fixe
+Reihenfolge, auch leere Kategorien werden angezeigt), pro Sender ein
+Haken zum Aktivieren/Deaktivieren, Bearbeiten/Löschen-Buttons, Formular
+für neue Sender unten. Alphabetisch sortiert innerhalb jeder Kategorie.
+
+Größter struktureller Umbau bisher: `radio_switch.py` referenziert Sender
+jetzt über eine stabile `id` statt über eine Listen-Position — nötig,
+damit Hinzufügen/Löschen/(De-)Aktivieren über die Config-Seite die
+laufende Wiedergabe nicht durcheinanderbringt. Änderungen wirken sich
+**live** aus (kein Neustart nötig): die Config-Seite setzt nach jeder
+Änderung ein Reload-Flag, der Hauptloop pollt es einmal pro
+Analysefenster und lädt bei Bedarf neu. Wird der *gerade laufende*
+Sender deaktiviert/gelöscht, schaltet der Player automatisch auf den
+ersten verbleibenden aktiven Sender — getestet und bestätigt (Log:
+`⚙ Senderliste geändert, aktueller Sender nicht mehr aktiv — schalte
+auf: ...`). Sind gar keine Sender mehr aktiv, pausiert die Rotation
+(kein Crash), bis wieder einer aktiviert wird.
+
+Bestehende 7 Sender wurden nachträglich kategorisiert: Lokal (Rock
+Antenne Hamburg, Hamburg Zwei), Regional (SWR3, R.SH, ffn), National
+(Radio Bob, 1LIVE). International/Global/Interstellar sind noch leer.
+
+Details/Debugging-Verlauf (inkl. zweier gefundener Bugs beim ersten
+Deploy — Bind-Mount-Problem bei atomarem Schreiben, veralteter Cache auf
+der Config-Seite): SESSION.md, Eintrag 2026-08-02 (Fortsetzung).
 
 ## Offene Punkte / bekannte Einschränkungen
 - ffn-Stream-URL noch nicht live verifiziert

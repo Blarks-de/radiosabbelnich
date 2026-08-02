@@ -21,10 +21,10 @@ Abhängigkeiten:
 
 Nutzung:
     python3 radio_switch.py
-    (Sender-Liste unten in STREAMS anpassen)
+    (Sender-Liste in stations.json pflegen, oder über die Config-Seite
+    des Web-Interfaces unter /config — siehe stations_store.py)
 """
 
-import json
 import os
 import select
 import subprocess
@@ -39,48 +39,16 @@ from speech_detector import SpeechDetector
 # ----------------------------------------------------------------------
 # KONFIGURATION
 # ----------------------------------------------------------------------
-
-# Sender werden aus dieser Datei geladen (liegt im selben Verzeichnis wie
-# das Script). Einfach mit Texteditor pflegen, kein Code-Anfassen nötig.
-STATIONS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stations.json")
-
-DEFAULT_STATIONS = [
-    {"name": "Radio Bob",       "url": "https://streams.radiobob.de/bob-live/mp3-192/mediaplayer"},
-    {"name": "1LIVE",           "url": "https://wdr-1live-live.icecastssl.wdr.de/wdr/1live/live/mp3/128/stream.mp3"},
-    {"name": "SWR3",            "url": "https://liveradio.swr.de/sw282p3/swr3/play.mp3"},
-]
-
-
-def load_stations() -> list:
-    """Lädt die Senderliste aus stations.json. Legt eine Beispieldatei an,
-    falls noch keine existiert."""
-    if not os.path.exists(STATIONS_FILE):
-        with open(STATIONS_FILE, "w", encoding="utf-8") as f:
-            json.dump(DEFAULT_STATIONS, f, ensure_ascii=False, indent=2)
-        print(f"ℹ Keine {STATIONS_FILE} gefunden, Beispiel-Datei angelegt. "
-              f"Bitte nach Belieben anpassen und Script neu starten.", file=sys.stderr)
-        return DEFAULT_STATIONS
-
-    with open(STATIONS_FILE, "r", encoding="utf-8") as f:
-        stations = json.load(f)
-
-    if not isinstance(stations, list) or not stations:
-        raise ValueError(f"{STATIONS_FILE} muss eine nicht-leere Liste von "
-                          f"{{'name': ..., 'url': ...}}-Objekten enthalten.")
-    for s in stations:
-        if "name" not in s or "url" not in s:
-            raise ValueError(f"Eintrag ohne 'name'/'url' in {STATIONS_FILE}: {s}")
-
-    return stations
-
-
-STREAMS = load_stations()
+# Sender-Verwaltung (Laden/Speichern/CRUD) lebt in stations_store.py,
+# gemeinsam genutzt mit webui.py (Config-Seite unter /config). Die
+# Rotationslogik hier unten referenziert Sender über ihre stabile "id",
+# nicht über eine Listen-Position -> Hinzufügen/Löschen/Deaktivieren über
+# die Config-Seite kann die laufende Wiedergabe nicht durcheinanderbringen.
 
 SAMPLE_RATE = 44100          # Hz, für Analyse & Wiedergabe
 WINDOW_SECONDS = 1.0         # Länge eines Analysefensters
 CONSECUTIVE_SPEECH_TO_SWITCH = 5   # so viele Sprache-Fenster in Folge -> umschalten (VAD ist zuverlässiger als die Heuristik, daher kürzer als vorher)
 COOLDOWN_AFTER_SWITCH = 8.0  # Sekunden Ruhe nach einem Switch, bevor wieder geschaltet wird
-MAX_SKIPS_PER_ROUND = len(STREAMS)  # nicht endlos im Kreis rennen, falls überall Sprache läuft
 STREAM_READ_TIMEOUT = 8.0    # max. Wartezeit pro Analysefenster, bevor eine Quelle als tot gilt
                               # (verhindert, dass ein hängender Sender den Loop für immer blockiert)
 
@@ -383,10 +351,6 @@ def main():
     args = parser.parse_args()
     VERBOSE = args.verbose
 
-    if not STREAMS:
-        print("Bitte STREAMS-Liste im Script befüllen.", file=sys.stderr)
-        sys.exit(1)
-
     if args.icecast_url:
         output = IcecastOutput(SAMPLE_RATE, args.icecast_url, args.bitrate)
         print(f"📡 Restream läuft auf: {args.icecast_url.split('@')[-1]}")
@@ -410,7 +374,13 @@ def main():
             return classify_window(pcm, SAMPLE_RATE)  # Heuristik-Fallback
         return label
 
-    state = webui.SwitcherState(STREAMS)
+    state = webui.SwitcherState()
+    active = state.active_stations
+    if not active:
+        print("Keine aktivierten Sender in stations.json — bitte über die "
+              "Config-Seite (/config) mindestens einen aktivieren.", file=sys.stderr)
+        sys.exit(1)
+
     httpd = None
     if args.webui_port:
         icecast_cfg = {
@@ -423,11 +393,11 @@ def main():
         httpd = webui.start_server(args.webui_port, state, icecast_cfg)
         print(f"🌐 Web-Interface läuft auf Port {args.webui_port}")
 
-    current = 0
     source = StreamSource(SAMPLE_RATE)
-    source.start(STREAMS[current]["url"])
-    state.set_current(current)
-    print(f"▶ Spiele: {STREAMS[current]['name']}")
+    current = active[0]  # aktuell gespielter Sender (dict: id/name/url/category/enabled)
+    source.start(current["url"])
+    state.set_current(current["id"])
+    print(f"▶ Spiele: {current['name']}")
 
     speech_streak = 0
     last_switch_time = 0.0
@@ -435,18 +405,24 @@ def main():
     fp_checked_this_run = False
 
     def do_switch(reason: str):
-        """Springt reihum zum nächsten Sender, bis Musik läuft (oder alle
-        durch sind). Wird sowohl von der Heuristik als auch bei einem
-        Fingerprint-Treffer aufgerufen.
+        """Springt reihum zum nächsten (aktivierten) Sender, bis Musik läuft
+        (oder alle durch sind). Wird sowohl von der Heuristik als auch bei
+        einem Fingerprint-Treffer aufgerufen.
 
         Bricht sofort ab, sobald ein manueller Switch-Request reinkommt —
         sonst könnte ein Nutzerklick im Web-Interface bis zu
-        MAX_SKIPS_PER_ROUND * (1.5s + STREAM_READ_TIMEOUT) warten müssen,
+        len(aktive Sender) * (1.5s + STREAM_READ_TIMEOUT) warten müssen,
         falls das automatische Durchprobieren gerade läuft."""
         nonlocal current, last_switch_time
-        print(f"🎙  {reason} auf '{STREAMS[current]['name']}' — schalte um ...")
+        print(f"🎙  {reason} auf '{current['name']}' — schalte um ...")
+        active = state.active_stations
+        if not active:
+            print("   ... keine aktivierten Sender konfiguriert, bleibe hier.")
+            return
+        ids = [s["id"] for s in active]
+        pos = ids.index(current["id"]) if current["id"] in ids else -1
         skips = 0
-        while skips < MAX_SKIPS_PER_ROUND:
+        while skips < len(active):
             pending = state.pop_manual_request()
             if pending is not None:
                 # nicht einfach verwerfen: Request zurücklegen, der
@@ -454,11 +430,12 @@ def main():
                 # current/state/Streak-Reset) beim nächsten Durchlauf
                 state.request_switch(pending)
                 print("   ... manueller Switch angefordert, breche Auto-Suche ab.")
-                break
-            current = (current + 1) % len(STREAMS)
-            source.start(STREAMS[current]["url"])
-            state.set_current(current)
-            print(f"▶ Spiele: {STREAMS[current]['name']}")
+                return
+            pos = (pos + 1) % len(active)
+            current = active[pos]
+            source.start(current["url"])
+            state.set_current(current["id"])
+            print(f"▶ Spiele: {current['name']}")
             last_switch_time = time.time()
             skips += 1
             time.sleep(1.5)
@@ -472,12 +449,40 @@ def main():
 
     try:
         while True:
-            manual_idx = state.pop_manual_request()
-            if manual_idx is not None and manual_idx != current:
-                current = manual_idx
-                source.start(STREAMS[current]["url"])
-                state.set_current(current)
-                print(f"🎛  Manuell umgeschaltet auf: {STREAMS[current]['name']}")
+            if state.pop_reload_request():
+                # Sender wurden über die Config-Seite geändert (hinzugefügt/
+                # gelöscht/(de)aktiviert/editiert) -> Rotationsliste neu laden
+                state.reload()
+                active = state.active_stations
+                active_ids = {s["id"] for s in active}
+                if not active:
+                    print("⚠ Keine aktivierten Sender mehr konfiguriert — "
+                          "Wiedergabe pausiert bis wieder einer aktiv ist.", file=sys.stderr)
+                elif current["id"] not in active_ids:
+                    current = active[0]
+                    source.start(current["url"])
+                    state.set_current(current["id"])
+                    print(f"⚙ Senderliste geändert, aktueller Sender nicht mehr aktiv "
+                          f"— schalte auf: {current['name']}")
+                    last_switch_time = time.time()
+                    speech_streak = 0
+                    speech_buffer = []
+                    fp_checked_this_run = False
+                else:
+                    print("⚙ Senderliste neu geladen.")
+                continue
+
+            manual_id = state.pop_manual_request()
+            if manual_id is not None and manual_id != current["id"]:
+                station = next((s for s in state.active_stations if s["id"] == manual_id), None)
+                if station is None:
+                    print(f"⚠ Manueller Switch auf unbekannten/inaktiven Sender ignoriert: "
+                          f"{manual_id}", file=sys.stderr)
+                    continue
+                current = station
+                source.start(current["url"])
+                state.set_current(current["id"])
+                print(f"🎛  Manuell umgeschaltet auf: {current['name']}")
                 last_switch_time = time.time()
                 speech_streak = 0
                 speech_buffer = []
@@ -486,9 +491,9 @@ def main():
 
             pcm, pcm_stereo = source.read_window(WINDOW_SECONDS)
             if pcm.size == 0:
-                print(f"⚠ Stream '{STREAMS[current]['name']}' liefert nichts mehr, "
+                print(f"⚠ Stream '{current['name']}' liefert nichts mehr, "
                       f"versuche neu zu verbinden ...", file=sys.stderr)
-                source.start(STREAMS[current]["url"])
+                source.start(current["url"])
                 time.sleep(1)
                 continue
 
@@ -512,7 +517,7 @@ def main():
                     fp_checked_this_run = True
                     combined = np.concatenate(speech_buffer)
                     match = fp_db.match_or_learn(
-                        combined, SAMPLE_RATE, STREAMS[current]["name"], verbose=VERBOSE
+                        combined, SAMPLE_RATE, current["name"], verbose=VERBOSE
                     )
                     if match:
                         print(f"🔁 Bekannter Jingle/Werbespot wiedererkannt "

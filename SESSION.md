@@ -270,3 +270,120 @@ genutzt, siehe HANDOVER.md, "Was das Projekt macht").
 - Verifiziert: `/api/status` liefert `stream_port: "8000"`,
   `stream_mount: "/radiozapper.mp3"`; `<audio>`-Tag im ausgelieferten
   HTML bestätigt.
+
+## 2026-08-02 (Fortsetzung) — Config-Seite für Sender-Verwaltung
+
+Neue Anforderung: Sender auswählen/aktivieren/deaktivieren/hinzufügen/
+löschen/editieren, gegliedert in Lokal/Regional/National/International/
+Global/Interstellar, alphabetisch sortiert, Aktivierung per Haken.
+
+### Architekturentscheidung
+Größter Umbau bisher: `radio_switch.py` referenzierte Sender bisher über
+eine feste Listen-Position (`current` = int-Index in einem einmal beim
+Start geladenen `STREAMS`). Damit Sender live (ohne Neustart) hinzugefügt/
+gelöscht/deaktiviert werden können, ohne die laufende Wiedergabe
+durcheinanderzubringen, war ein Wechsel auf ID-basierte Referenzierung
+nötig — Details:
+
+- **Neues Modul `stations_store.py`**: alleinige Quelle der Wahrheit für
+  `stations.json`. Schema jetzt `{id, name, url, category, enabled}`
+  statt nur `{name, url}`. Migration alter Dateien passiert transparent
+  beim ersten Laden (`_ensure_ids_and_defaults`): fehlende `id` wird aus
+  dem Namen geslugged (`_slugify` + Kollisionsauflösung
+  `radio-bob`, `radio-bob-2`, ...), fehlende `category` bekommt
+  `DEFAULT_CATEGORY = "National"`, fehlendes `enabled` wird `true`.
+  CRUD-Funktionen (`add`/`update`/`set_enabled`/`delete`) mit
+  Datei-Lock (`threading.Lock`) gegen Races zwischen mehreren
+  Config-Seiten-Requests. `delete()` verweigert das Löschen des letzten
+  verbleibenden Senders (sonst kein Rotationsziel mehr möglich).
+  Gemeinsam genutzt von `radio_switch.py` (Playback) und `webui.py`
+  (Config-Seite) — beide importieren dasselbe Modul, kein Duplikat.
+- **`webui.SwitcherState`** umgebaut: hält jetzt `_current_id` (statt
+  Index) sowie einen In-Memory-Cache `_all_stations`/`_active_stations`
+  (aktive = `enabled=true`, alphabetisch nach Name — das ist die
+  Rotationsreihenfolge). Neuer `_reload_requested`-Flag +
+  `request_reload()`/`pop_reload_request()`, analog zum bereits
+  vorhandenen `_manual_request`-Mechanismus für manuelle Switches: die
+  Config-Seite ruft nach jeder Änderung `state.request_reload()` auf,
+  der Hauptloop pollt das Flag einmal pro Analysefenster (dieselbe
+  Stelle wie der manuelle-Switch-Check) und lädt bei Bedarf per
+  `state.reload()` neu aus `stations_store`.
+- **`radio_switch.py`**: `current` ist jetzt ein dict (Sender-Snapshot:
+  id/name/url/category/enabled) statt ein int-Index. `do_switch()`
+  snapshotet `state.active_stations` einmal zu Beginn eines Durchlaufs
+  und rotiert innerhalb dieses Snapshots (`len(active)` statt der alten
+  festen `MAX_SKIPS_PER_ROUND`-Konstante). Neuer Reload-Zweig ganz oben
+  im Hauptloop (vor dem manuellen-Switch-Check): wenn die Config-Seite
+  etwas geändert hat, `state.reload()`, dann prüfen ob der *aktuell
+  laufende* Sender noch in der aktiven Liste ist — falls nicht (gerade
+  deaktiviert/gelöscht), automatisch auf den ersten aktiven Sender
+  wechseln (`⚙ Senderliste geändert, aktueller Sender nicht mehr aktiv
+  — schalte auf: ...`). Falls *gar keine* Sender mehr aktiv sind:
+  Wiedergabe pausiert (bleibt auf der letzten Quelle stehen), bis wieder
+  einer aktiviert wird — kein Crash.
+- **Stolperfalle beim Deploy gefunden**: `stations_store._write()` nutzte
+  zuerst write-temp-then-`os.replace()` für atomare Schreibvorgänge —
+  schlug im Container mit `OSError: [Errno 16] Device or resource busy`
+  fehl. Ursache: `stations.json` ist in `docker-compose.yml` als
+  *einzelne Datei* gebindmountet (`./stations.json:/app/stations.json`),
+  und über eine solche Mount-Grenze lässt sich keine neue Inode per
+  `rename()`/`os.replace()` drüberschieben. Fix: direktes Schreiben in
+  die Datei (kein temp+rename) — weniger "atomar" im Crash-Fall, aber
+  bei dieser Nutzungsfrequenz (Admin-Klicks, kein Hot-Loop) irrelevant.
+- **Zweiter Bug beim ersten Test gefunden**: `/api/config/stations`
+  (GET) las zunächst aus `state.all_stations` (dem Rotations-Cache) statt
+  frisch von der Platte — eigene Änderungen der Config-Seite waren dadurch
+  erst sichtbar, nachdem der Hauptloop irgendwann seinen Reload-Poll
+  gemacht hatte (spürbare Verzögerung, UI wirkte kaputt: "füge Sender
+  hinzu, Liste zeigt ihn nicht"). Fix: die Config-Seite liest jetzt immer
+  direkt über `stations_store.load_all()` (Platte), der Cache in
+  `SwitcherState` ist bewusst nur für die Rotationslogik im Hauptloop da.
+
+### Neue Endpunkte (webui.py)
+- `GET /config` — Config-Seite (HTML, gruppiert nach Kategorie, pro
+  Sender: Haken zum Aktivieren, Bearbeiten/Löschen-Buttons, Formular für
+  neue Sender unten)
+- `GET /api/config/stations` — alle Sender + Kategorienliste (JSON)
+- `POST /api/config/stations` — neuer Sender (`name`/`url`/`category`/
+  `enabled`)
+- `POST /api/config/stations/<id>` — Sender bearbeiten (volle Felder)
+- `POST /api/config/stations/<id>/toggle` — aktivieren/deaktivieren
+  (`{"enabled": bool}`)
+- `POST /api/config/stations/<id>/delete` — löschen
+- `/api/switch` auf der Haupt-Player-Seite nutzt jetzt `{"id": "..."}`
+  statt `{"index": N}` (Breaking Change der bisherigen Session, aber
+  beide Seiten — Server und Frontend — wurden zusammen angepasst)
+
+### Bestehende Sender kategorisiert
+Migration hat allen 7 bestehenden Sendern erstmal pauschal
+`category: "National"` gegeben (der Default). Danach von Hand über die
+neue API sinnvoll sortiert:
+- Lokal: Rock Antenne Hamburg, Hamburg Zwei
+- Regional: SWR3, R.SH, ffn
+- National: Radio Bob, 1LIVE
+- International/Global/Interstellar: noch leer (Kategorien erscheinen
+  auf der Config-Seite trotzdem mit "Keine Sender in dieser Kategorie.",
+  damit man sieht, dass es sie gibt)
+
+### Tests (isoliert, ohne Docker, gegen temporäre stations.json)
+- Add → erscheint sofort in `/api/config/stations`
+- Toggle aus → verschwindet NICHT sofort aus `/api/status` (Cache), aber
+  nach `state.reload()` (simuliert Hauptloop-Poll) korrekt weg
+- Update (Rename+Recategorize) → `/api/switch` auf die neue ID schlägt
+  vor Reload fehl (400 invalid id, da Cache noch alte ids/aktiv-Status
+  kennt), nach Reload erfolgreich
+- Delete → funktioniert; Delete auf nicht-existente ID → 404; Delete bis
+  auf 0 Sender → letzter Löschversuch korrekt mit 400 abgelehnt
+
+### Tests (live im Container nach Rebuild)
+- Migration bestätigt: `stations.json` hat jetzt `id`/`category`/
+  `enabled` für alle 7 Sender
+- Sender live deaktiviert (nicht der aktuell laufende) → verschwindet aus
+  `/api/status`-Senderliste, aktueller Sender bleibt unbeeinflusst, Log:
+  `⚙ Senderliste neu geladen.`
+- **Aktuell laufenden Sender live deaktiviert** (R.SH) → automatischer
+  Wechsel auf ersten verbleibenden aktiven Sender (1LIVE) bestätigt,
+  Log: `⚙ Senderliste geändert, aktueller Sender nicht mehr aktiv —
+  schalte auf: 1LIVE`
+- Danach Stream-Gesundheit erneut per `ffprobe` bestätigt (44.1kHz,
+  Stereo, weiterhin sauber).
