@@ -934,3 +934,94 @@ bei offener Erreichbarkeit, und urheberrechtliches Risiko durch
 sinngemäß: "genug Kanzleien, für die das ein Geschäftsmodell ist").
 Bisherige schwächere Erwähnung unter "Bekannte Einschränkungen" gekürzt,
 verweist jetzt auf die neue Sektion statt zu duplizieren.
+
+## 2026-08-02 (Fortsetzung) — Fingerprint-Algorithmus überarbeitet (Frequenzbänder/2D-Peaks)
+
+Auftrag: das schon mehrfach dokumentierte systemische Fingerprint-
+Problem (ein Clip matcht quer über viele Sender) tatsächlich an der
+Wurzel angehen, nicht nur mit dem "Zapping-Fehler"-Knopf drumherum
+kurieren.
+
+### Diagnose mit echten Daten
+- `fingerprint_clips/` enthielt zu diesem Zeitpunkt 26+ echte, vom
+  laufenden System aufgezeichnete 3s-Sprache-Clips aus verschiedenen
+  Sendern/Zeitpunkten — ein realistischer Testdatensatz, kein
+  synthetisches Beispiel.
+- Cross-Match-Test (alle 351 möglichen Paare) mit dem ALTEN Algorithmus
+  (Top-5-Peaks pro Frame global, ohne Frequenzband-Trennung): **351 von
+  351 Paaren "matchten"** mit bis zu 6455 Hashes/Clip, bei einer Schwelle
+  von nur 12 nötigen Treffern. Bestätigt: nicht ein unglücklicher
+  Einzel-Clip, sondern ein strukturelles Problem des Algorithmus selbst.
+- Erster Fix-Versuch (nur Frequenzband-Aufteilung, 1 Peak pro Band statt
+  Top-5 global, wie ursprünglich vom Nutzer vermutet): brachte die
+  Match-Stärke deutlich runter (6000er auf 100-600er Bereich), aber
+  **immer noch 351 von 351 Paaren matchten**. Frequenzband-Trennung
+  allein reichte nicht.
+- Tiefer gegraben: FFT-Analyse der Clips zeigte dominante Energie bei
+  ~48-52Hz (und Oberwellen ~95-105Hz) in mehreren Clips — sehr nah an
+  50Hz-Netzbrumm. Test mit Ausschluss der Bänder unter 200/300/500Hz:
+  **immer noch 351/351 Paare matchten** (Match-Stärke sank weiter,
+  Brumm-Ausschluss half, war aber nicht die Hauptursache).
+- Eigentliche Ursache identifiziert: die Peak-Auswahl nahm pro
+  Zeitframe/Band einfach den LAUTESTEN Bin — bei Sprache ist "lautester
+  Bin" aber kein content-spezifisches Merkmal (menschliche Formanten
+  liegen bei praktisch jedem Sprecher in ähnlichen Frequenzbereichen),
+  das erzeugt über verschiedene Sprecher/Sender hinweg systematisch
+  ähnliche, damit fälschlich matchende Hash-Muster. Der originale
+  Shazam-Algorithmus verlangt deshalb ECHTE lokale Maxima in Zeit UND
+  Frequenz (2D), nicht einfach "laut" — nur echte Landmarken-Ereignisse
+  (Onsets, markante Töne), keine dauerhaft anwesende generische Energie.
+- Mit echter 2D-Peak-Erkennung (lokales Maximum in einer
+  Zeit-Frequenz-Nachbarschaft, log-Magnitude, Schwelle relativ zu
+  Mittelwert+Standardabweichung) im selben 351-Paar-Test: **nur noch 1
+  von 351 Paaren matchte** (Match-Stärke 14, knapp über der alten
+  Schwelle von 12) — Rest lag bei 0-8 Treffern, Median 2.
+- Gegentest (Robustheit auf ECHTE Wiederholungen darf nicht leiden):
+  identischer Clip -> 702/702 Treffer; mit Rauschen -> 651/722; mit
+  halber Lautstärke -> 684/722; mit 0.1s Zeitversatz -> 104/626. Klare
+  Trennung zwischen echten Wiederholungen (100-700+) und verschiedenem
+  Inhalt (0-14) — vorher gab's diese Trennung schlicht nicht.
+
+### Implementierung (fingerprint.py)
+- `_spectrogram()`: STFT wie bisher, jetzt aber als eigene Funktion (das
+  volle Spektrogramm wird für die 2D-Nachbarschaftsanalyse gebraucht,
+  nicht mehr Frame für Frame isoliert verarbeitet).
+- `_local_max_mask()`: reines-NumPy-Ersatz für
+  `scipy.ndimage.maximum_filter` (kein `scipy` als neue Abhängigkeit für
+  eine einzelne 2D-Sliding-Window-Operation — Projekt-Stil ist bewusst
+  minimal an Dependencies, siehe Modul-Docstring).
+- `_spectrogram_peaks()`: schließt zuerst alles unter `MIN_FREQ_HZ=200`
+  aus (Brumm/Rumpeln), rechnet dann Log-Magnitude, findet 2D-lokale
+  Maxima (`PEAK_NEIGHBORHOOD_TIME=5` Frames ≈ 58ms,
+  `PEAK_NEIGHBORHOOD_FREQ=15` Bins ≈ 630Hz) über
+  `PEAK_AMP_MIN_FACTOR=3.0` Standardabweichungen über dem Mittelwert.
+- `MIN_HASH_MATCHES` von 12 auf 25 angehoben — Sicherheitsabstand zum
+  stärksten beobachteten Fehltreffer (14) im Testdatensatz, weit unter
+  dem, was echte Wiederholungen erreichen (100+).
+- `PEAKS_PER_FRAME`-Konstante entfernt (kein "Top-N pro Frame" mehr),
+  Modul-Docstring um einen ausführlichen "Warum 2D-Peaks"-Abschnitt
+  ergänzt, der die ganze Diagnose oben zusammenfasst (für den Fall, dass
+  hier nochmal jemand ansetzen muss).
+- Hash-Format (`f"{f1}-{f2}-{dt}"`) und Voting-Mechanismus (konsistenter
+  Zeitversatz zählt) unverändert — nur WELCHE Peaks überhaupt in die
+  Hash-Bildung eingehen, hat sich geändert.
+- Performance: ~7ms pro 3s-Clip (gemessen) — komplett vernachlässigbar,
+  läuft eh nur einmal pro Fingerprint-Check (alle paar Sekunden), nicht
+  im Audio-Hot-Path.
+
+### Verifiziert über das echte Modul (nicht nur das Test-Script)
+- Alle 28 echten Clips aus `fingerprint_clips/` nacheinander durch das
+  echte `FingerprintDB.match_or_learn()` gejagt (frische Test-DB): 0
+  Fehltreffer, alle 28 korrekt als neu/verschieden erkannt.
+- Echte Wiederholung (derselbe Clip zweimal, dann mit Rauschen) über das
+  echte Modul: korrekt erkannt (675 bzw. 627 konsistente Treffer, `[fingerprint]
+  Treffer: ...`-Log bestätigt).
+- `fingerprints.db` vor dem Deploy komplett geleert (alte Hashes stammen
+  vom fehlerhaften Algorithmus, nicht sinnvoll mit neuen vergleichbar,
+  lernt jetzt sauber neu). Rebuild + Deploy, Container startet sauber,
+  Stream weiterhin 44.1kHz/Stereo, erster neuer Clip (#6 — SQLite-
+  AUTOINCREMENT zählt über die geleerten alten IDs hinaus weiter, kein
+  Bug) korrekt gelernt. Längerfristige Beobachtung (bleibt die
+  Fehlerquote im Live-Betrieb niedrig?) noch ausstehend — dafür sind die
+  WAV-Mitschnitte (`fingerprint_clips/`) weiterhin aktiv, falls doch mal
+  wieder was Verdächtiges auftaucht.

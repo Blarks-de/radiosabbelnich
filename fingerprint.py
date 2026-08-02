@@ -4,7 +4,10 @@ Audio-Clips (Jingles, Werbespots) zuverlässig wiederzuerkennen.
 
 Prinzip (klassischer "Constellation Map" Ansatz):
   1. Spektrogramm des Clips berechnen (STFT).
-  2. Pro Zeitframe die stärksten Frequenz-Peaks finden ("Sterne am Himmel").
+  2. Echte lokale Maxima in Zeit UND Frequenz finden ("Sterne am Himmel") —
+     nicht einfach die lautesten Bins, sondern Punkte, die in ihrer
+     Zeit-Frequenz-Nachbarschaft herausstechen. Siehe "Warum 2D-Peaks"
+     unten für den Grund, warum das nicht optional ist.
   3. Peaks paarweise verhashen: hash(f1, f2, delta_t) — robust gegen
      Rauschen/Lautstärke, weil nur relative Peak-Positionen zählen.
   4. Hashes in SQLite ablegen. Neuer Clip -> Hashes gegen DB matchen:
@@ -14,6 +17,27 @@ Prinzip (klassischer "Constellation Map" Ansatz):
 
 Das ist bewusst simpel gehalten (keine externen Libs wie chromaprint),
 dafür in Python+SQLite komplett selbst verständlich und wartbar.
+
+Warum 2D-Peaks (Zeit + Frequenz), nicht nur "lautester Bin pro Frame":
+Die ursprüngliche Version wählte pro Zeitframe schlicht die N stärksten
+Bins. Das matchte auf echtem Broadcast-Radio fast JEDES Sprache-Fenster
+gegen JEDES andere, egal wie unterschiedlich der Inhalt — verifiziert
+mit 26 echten, unterschiedlichen 3s-Mitschnitten aus fingerprint_clips/:
+351 von 351 möglichen Paaren "matchten" mit bis zu 6455 Hashes/Clip.
+Zwei Ursachen gefunden: (a) tieffrequenter Netzbrumm (~50Hz + Oberwellen)
+dominierte die lautesten Bins in praktisch jedem Clip unabhängig vom
+Inhalt, (b) menschliche Sprache hat generisch ähnliche Formant-Energie
+(die immer gleichen Frequenzbereiche sind "laut"), was "lautester Bin"
+zu einem Content-unabhängigen Merkmal macht. Die pro Frame lautesten
+Bins sind für Sprache einfach nicht diskriminativ genug.
+Fix: nur Punkte behalten, die eine ECHTE lokale Spitze in einer
+Zeit-Frequenz-Nachbarschaft sind (± ein paar Frames, ± ein paar Bins) —
+das filtert dauerhaft anwesende/generische Energie (Brumm, Formanten)
+zuverlässig raus und behält nur echte "Landmarken"-Ereignisse (Onsets,
+markante Töne). Damit sank die Fehlerquote im selben 26-Clip-Test auf
+1 von 351 Paaren (Match-Stärke 14, deutlich unter dem, was ein echter
+Treffer erreicht — Tests mit demselben Clip + Rauschen/halber Lautstärke/
+0.1s Zeitversatz lagen bei 104–702 Treffern).
 """
 
 import sqlite3
@@ -24,39 +48,69 @@ from typing import Optional
 import numpy as np
 
 # ----------------------------------------------------------------------
-# Parameter (Trade-off: mehr Peaks/Fan-out = robuster aber mehr Rechenzeit
-# und größere DB)
+# Parameter (Trade-off: mehr/engere Nachbarschaft = mehr Peaks = robuster
+# aber mehr Rechenzeit, größere DB, und potenziell weniger diskriminativ)
 # ----------------------------------------------------------------------
 FRAME_SIZE = 1024
 HOP_SIZE = 512
-PEAKS_PER_FRAME = 5          # stärkste Peaks pro Zeitframe
+MIN_FREQ_HZ = 200             # alles darunter ausschließen (Netzbrumm/Rumpeln,
+                               # nicht content-spezifisch, siehe Modul-Docstring)
+PEAK_NEIGHBORHOOD_TIME = 5    # Frames (~58ms bei HOP_SIZE=512/44100Hz)
+PEAK_NEIGHBORHOOD_FREQ = 15   # Bins (~630Hz bei FRAME_SIZE=1024/44100Hz)
+PEAK_AMP_MIN_FACTOR = 3.0     # Peak muss > mean + FACTOR*std der Log-Magnitude sein
 FAN_VALUE = 5                 # wie viele nachfolgende Peaks pro Anker gepaart werden
 TARGET_ZONE_FRAMES = 40       # max. Zeitabstand (in Frames) für Peak-Paare
-MIN_HASH_MATCHES = 12         # ab so vielen konsistenten Treffern gilt ein Clip als "wiedererkannt"
+MIN_HASH_MATCHES = 25         # ab so vielen konsistenten Treffern gilt ein Clip als
+                               # "wiedererkannt" — mit Sicherheitsabstand zum stärksten
+                               # beobachteten Fehltreffer (14) im 26-Clip-Test oben
 
 
-def _spectrogram_peaks(pcm_int16: np.ndarray, sr: int) -> list[tuple[int, int]]:
-    """Liefert Liste von (frame_idx, freq_bin) für die stärksten Peaks."""
+def _spectrogram(pcm_int16: np.ndarray, sr: int) -> np.ndarray:
+    """STFT-Magnitudenspektrum, ein Frame pro Zeile."""
     samples = pcm_int16.astype(np.float64) / 32768.0
     n_frames = 1 + (len(samples) - FRAME_SIZE) // HOP_SIZE
-    if n_frames < 2:
-        return []
-
     window = np.hanning(FRAME_SIZE)
-    peaks = []
+    spec = np.zeros((n_frames, FRAME_SIZE // 2 + 1))
     for i in range(n_frames):
         start = i * HOP_SIZE
         frame = samples[start:start + FRAME_SIZE] * window
-        spectrum = np.abs(np.fft.rfft(frame))
-        if spectrum.max() < 1e-6:
-            continue
-        # Top-N Bins dieses Frames als Peaks
-        top_bins = np.argpartition(spectrum, -PEAKS_PER_FRAME)[-PEAKS_PER_FRAME:]
-        threshold = spectrum.mean() * 3  # nur deutlich über dem Rauschgrund
-        for b in top_bins:
-            if spectrum[b] > threshold:
-                peaks.append((i, int(b)))
-    return peaks
+        spec[i] = np.abs(np.fft.rfft(frame))
+    return spec
+
+
+def _local_max_mask(arr: np.ndarray, t_win: int, f_win: int) -> np.ndarray:
+    """True an Stellen, die das Maximum ihrer (t_win x f_win)-Nachbarschaft
+    sind — reines-numpy-Ersatz für scipy.ndimage.maximum_filter (keine
+    zusätzliche Abhängigkeit für eine simple 2D-Sliding-Window-Operation)."""
+    pad_t, pad_f = t_win // 2, f_win // 2
+    padded = np.pad(arr, ((pad_t, pad_t), (pad_f, pad_f)), mode="constant", constant_values=-np.inf)
+    maxed = np.full_like(arr, -np.inf)
+    for dt in range(t_win):
+        for df in range(f_win):
+            shifted = padded[dt:dt + arr.shape[0], df:df + arr.shape[1]]
+            maxed = np.maximum(maxed, shifted)
+    return arr >= maxed
+
+
+def _spectrogram_peaks(pcm_int16: np.ndarray, sr: int) -> list[tuple[int, int]]:
+    """Liefert Liste von (frame_idx, freq_bin) für echte 2D-Landmarken
+    (lokale Maxima in Zeit UND Frequenz, siehe Modul-Docstring)."""
+    spec = _spectrogram(pcm_int16, sr)
+    if spec.shape[0] < 2:
+        return []
+
+    min_freq_bin = int(MIN_FREQ_HZ / (sr / FRAME_SIZE))
+    region = spec[:, min_freq_bin:]
+    if region.size == 0 or region.max() < 1e-6:
+        return []
+
+    log_spec = np.log1p(region)
+    mask_max = _local_max_mask(log_spec, PEAK_NEIGHBORHOOD_TIME, PEAK_NEIGHBORHOOD_FREQ)
+    threshold = log_spec.mean() + PEAK_AMP_MIN_FACTOR * log_spec.std()
+    mask = mask_max & (log_spec > threshold)
+
+    ts, fs = np.nonzero(mask)
+    return list(zip(ts.tolist(), (fs + min_freq_bin).tolist()))
 
 
 def _generate_hashes(peaks: list[tuple[int, int]]) -> list[tuple[str, int]]:

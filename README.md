@@ -162,6 +162,8 @@ ls fingerprint_clips/
 - Nicht jeder Sender liefert brauchbare "Jetzt läuft"-Metadaten; das
   entscheidet der jeweilige Sender-Betreiber.
 - Fingerprint-Erkennung ist ein Best-Effort-Mechanismus (Constellation-
-  Map-Hashing auf stark komprimiertem Broadcast-Audio) — gelegentliche
-  Fehlalarme über mehrere Sender hinweg kommen vor, dafür gibt's den
+  Map-Hashing mit 2D-Landmarken-Peaks, siehe `fingerprint.py`) — an 26
+  echten Mitschnitten aus dem Live-Betrieb verifiziert (0 Fehltreffer
+  bei klarer Trennung zu echten Wiederholungen), gelegentliche
+  Fehlalarme sind trotzdem nie ganz ausgeschlossen. Dafür gibt's den
   "Zapping-Fehler"-Knopf.
