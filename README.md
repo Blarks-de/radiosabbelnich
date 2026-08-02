@@ -93,7 +93,9 @@ Erreichbar unter `http://<host>:5000/`:
 - **⚙ Sender verwalten** (`/config`) — Sender hinzufügen, bearbeiten,
   löschen, per Haken (de)aktivieren, gruppiert nach Kategorie
   (Lokal/Regional/National/International/Global/Interstellar/Unsortiert).
-  Änderungen wirken sofort, ohne Neustart.
+  Jede Kategorie hat einen "Alle deaktivieren"-Knopf (praktisch nach
+  einem Import mit hunderten neuen Sendern). Änderungen wirken sofort,
+  ohne Neustart.
 - **📻 Sender-Import** (auf der Config-Seite) — lädt eine M3U-Playlist
   (Default: die Kodinerds-Kodi-Radioliste), prüft jeden Sender per
   ffprobe auf Erreichbarkeit (parallel, mit Fortschrittsanzeige) und

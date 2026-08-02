@@ -1,4 +1,5 @@
 {
   "prebuffer_seconds": 10.0,
-  "prebuffer_count": 5
+  "prebuffer_count": 5,
+  "import_url": "http://bit.ly/kn-kodi-radio"
 }

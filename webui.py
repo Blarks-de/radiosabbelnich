@@ -20,6 +20,7 @@ import re
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -676,6 +677,15 @@ _CONFIG_PAGE_HTML = """<!doctype html>
     font-size: 1.05rem; margin-top: 2rem; border-bottom: 1px solid #8884;
     padding-bottom: .25rem;
   }
+  h2.category-header {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: .5rem; flex-wrap: wrap;
+  }
+  h2.category-header .disable-all-btn {
+    font-size: .75rem; font-weight: normal; padding: .3rem .6rem;
+    border-radius: .4rem; border: 1px solid #999; background: none;
+    color: inherit; cursor: pointer; flex-shrink: 0;
+  }
   ul.stations { list-style: none; padding: 0; margin: .5rem 0; }
   ul.stations li {
     display: flex; align-items: center; gap: .6rem; padding: .5rem 0;
@@ -843,7 +853,10 @@ async function loadStations() {
       .sort((a, b) => a.name.localeCompare(b.name, 'de'));
 
     const h2 = document.createElement('h2');
-    h2.textContent = cat;
+    h2.className = 'category-header';
+    const h2Label = document.createElement('span');
+    h2Label.textContent = cat;
+    h2.appendChild(h2Label);
     container.appendChild(h2);
 
     if (stations.length === 0) {
@@ -852,6 +865,25 @@ async function loadStations() {
       p.textContent = 'Keine Sender in dieser Kategorie.';
       container.appendChild(p);
       continue;
+    }
+
+    const enabledCount = stations.filter(s => s.enabled).length;
+    if (enabledCount > 0) {
+      const disableAllBtn = document.createElement('button');
+      disableAllBtn.className = 'disable-all-btn';
+      disableAllBtn.textContent = 'Alle deaktivieren';
+      disableAllBtn.title = `Alle ${enabledCount} aktivierten Sender in "${cat}" deaktivieren`;
+      disableAllBtn.addEventListener('click', async () => {
+        if (!confirm(`Wirklich alle ${enabledCount} aktivierten Sender in "${cat}" deaktivieren?`)) return;
+        try {
+          const data = await api('/api/config/categories/' + encodeURIComponent(cat) + '/disable-all', {method: 'POST'});
+          showMsg(`${data.changed} Sender in "${cat}" deaktiviert.`, false);
+          loadStations();
+        } catch (e) {
+          showMsg('Fehler: ' + e.message, true);
+        }
+      });
+      h2.appendChild(disableAllBtn);
     }
 
     const ul = document.createElement('ul');
@@ -1184,12 +1216,32 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                 self._handle_add_station()
             elif self.path.startswith("/api/config/stations/"):
                 self._handle_station_action()
+            elif self.path.startswith("/api/config/categories/"):
+                self._handle_category_action()
             elif self.path == "/api/config/settings":
                 self._handle_update_settings()
             elif self.path == "/api/config/import/start":
                 self._handle_import_start()
             else:
                 self.send_error(404)
+
+        def _handle_category_action(self):
+            # Pfadschema: /api/config/categories/<category>/disable-all
+            # ("Alle deaktivieren"-Knopf hinter jeder Kategorie-Überschrift
+            # auf der Config-Seite — erspart hunderte Einzel-Klicks bei
+            # großen Kategorien wie "Unsortiert" nach einem Import.)
+            rest = self.path[len("/api/config/categories/"):]
+            parts = [p for p in rest.split("/") if p]
+            if len(parts) != 2 or parts[1] != "disable-all":
+                self.send_error(404)
+                return
+            category = urllib.parse.unquote(parts[0])
+            if category not in stations_store.CATEGORIES:
+                self._send_json({"ok": False, "error": "Unbekannte Kategorie."}, status=400)
+                return
+            changed = stations_store.set_category_enabled(category, False)
+            state.request_reload()
+            self._send_json({"ok": True, "changed": changed})
 
         def _handle_update_settings(self):
             payload = self._read_json_body()

@@ -1149,3 +1149,48 @@ wirklich abspielen"), nicht nur "antwortet der Server auf HTTP".
   44.1kHz/Stereo.
 - `fingerprint.clear_all()` über `POST /api/fingerprint/clear` getestet:
   13 Clips gelöscht, DB danach leer, `stations.json` unangetastet.
+
+## 2026-08-02 (Fortsetzung) — "Alle deaktivieren"-Knopf pro Sender-Kategorie
+
+Direkter Auslöser: nach dem Import (344 neue Sender in "Unsortiert")
+wollte der Nutzer nicht jeden einzeln per Haken deaktivieren müssen.
+
+### Implementierung
+- `stations_store.py`: neue Funktion `set_category_enabled(category,
+  enabled) -> int` — ein Read+Write für die ganze Kategorie statt einem
+  Request pro Sender (gleiches Muster wie `bulk_add()` vom Import).
+  Zählt nur tatsächlich geänderte Sender (die schon den Zielzustand
+  hatten, zählen nicht mit).
+- `webui.py`: neuer Endpunkt `POST /api/config/categories/<category>/disable-all`
+  (Pfad-Segment per `urllib.parse.unquote` dekodiert, falls eine
+  Kategorie mal Sonderzeichen/Leerzeichen bekommt), validiert gegen
+  `stations_store.CATEGORIES`, ruft danach `state.request_reload()` wie
+  jede andere Sender-Änderung auch.
+- Config-Seite: jede Kategorie-Überschrift (`<h2>`) ist jetzt eine
+  Flex-Zeile mit Name + Button "Alle deaktivieren" rechts. Button
+  erscheint nur, wenn die Kategorie mindestens einen AKTIVIERTEN Sender
+  hat (bei leerer oder schon komplett deaktivierter Kategorie gibt's
+  nichts zu tun). Klick fragt erst per `confirm()` nach ("Wirklich alle
+  N aktivierten Sender in 'X' deaktivieren?"), erst danach der Request.
+- Bewusst NUR "Alle deaktivieren" gebaut, kein symmetrisches "Alle
+  aktivieren" — war nicht Teil der Anfrage, kann bei Bedarf ergänzt
+  werden (der Unterbau `set_category_enabled(category, enabled)` ist
+  schon generisch genug dafür, nur der Endpunkt/Button fehlt).
+
+### Verifiziert (echter Test gegen die echten 344 "Unsortiert"-Sender)
+- Config-Seite zeigt den Button korrekt (`category-header`/
+  `disable-all-btn`-Klassen im ausgelieferten HTML bestätigt).
+- `POST .../categories/Unsortiert/disable-all` -> `{"ok": true,
+  "changed": 344}`. `stations.json` direkt geprüft: alle 344 auf
+  `enabled: false`, andere Kategorien unberührt.
+- Laufender Player hat den Reload korrekt übernommen: aktive Sender in
+  der Rotation fielen von 356 auf 12 (nur noch die ursprünglichen,
+  nicht-importierten Sender), und da der bis dahin aktuelle Sender
+  ("100'5 Alemannia", einer der importierten) jetzt deaktiviert war,
+  schaltete der Player automatisch auf einen verbleibenden aktiven
+  Sender um (derselbe Reload-erzwungene-Switch-Mechanismus wie bei
+  jeder anderen Deaktivierung des laufenden Senders).
+- Danach die 344 Sender wieder aktiviert (`set_category_enabled(...,
+  True)` — nur mein Test, war nicht als dauerhafte Nutzer-Entscheidung
+  gedacht), Player wieder bei 356 aktiven Sendern, Prozesszahl weiterhin
+  bei 7 ffmpeg-Prozessen, Stream durchgehend 44.1kHz/Stereo.

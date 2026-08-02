@@ -217,6 +217,26 @@ def set_enabled(station_id: str, enabled: bool) -> dict:
         raise KeyError(station_id)
 
 
+def set_category_enabled(category: str, enabled: bool) -> int:
+    """Setzt enabled für ALLE Sender einer Kategorie auf einmal — ein
+    Read+Write statt einem Klick+Request pro Sender (für den
+    "Alle deaktivieren"-Knopf auf der Config-Seite; bei einer großen
+    importierten Kategorie wie "Unsortiert" mit hunderten Sendern macht
+    das den Unterschied zwischen einem Klick und hunderten). Gibt die
+    Anzahl tatsächlich geänderter Sender zurück (Sender, die schon den
+    gewünschten Zustand hatten, zählen nicht mit)."""
+    with _lock:
+        stations = _read_raw()
+        changed = 0
+        for s in stations:
+            if s.get("category") == category and s.get("enabled", True) != enabled:
+                s["enabled"] = enabled
+                changed += 1
+        if changed:
+            _write(stations)
+        return changed
+
+
 def delete(station_id: str) -> None:
     with _lock:
         stations = _read_raw()
