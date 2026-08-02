@@ -183,3 +183,30 @@ class FingerprintDB:
 
     def close(self):
         self.conn.close()
+
+
+def delete_clip(db_path: str, clip_id: int) -> Optional[str]:
+    """Löscht einen Clip + seine Hashes anhand der DB-Datei (eigene, kurze
+    Connection statt der laufenden FingerprintDB-Instanz des Hauptprozesses
+    zu teilen — sqlite3-Connection-Objekte sind nicht thread-übergreifend
+    sicher, und webui.py ruft das aus einem anderen Thread auf).
+
+    Für den "Zapping-Fehler"-Knopf im Web-Interface: falls ein Fingerprint-
+    Treffer fälschlich einen Sender-Wechsel ausgelöst hat, kann der Nutzer
+    den zugrundeliegenden Clip damit aus der DB werfen, statt dass er
+    dauerhaft weiter fehlklassifiziert.
+
+    Gibt das Label des gelöschten Clips zurück, oder None falls die ID
+    nicht (mehr) existiert."""
+    conn = sqlite3.connect(db_path)
+    try:
+        c = conn.cursor()
+        row = c.execute("SELECT label FROM clips WHERE id = ?", (clip_id,)).fetchone()
+        if row is None:
+            return None
+        c.execute("DELETE FROM hashes WHERE clip_id = ?", (clip_id,))
+        c.execute("DELETE FROM clips WHERE id = ?", (clip_id,))
+        conn.commit()
+        return row[0]
+    finally:
+        conn.close()

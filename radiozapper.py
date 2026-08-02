@@ -425,7 +425,7 @@ def main():
             "mount": args.icecast_mount,
             "public_port": args.icecast_public_port,
         }
-        httpd = webui.start_server(args.webui_port, state, icecast_cfg)
+        httpd = webui.start_server(args.webui_port, state, icecast_cfg, args.fingerprint_db)
         print(f"🌐 Web-Interface läuft auf Port {args.webui_port}")
 
     source = StreamSource(SAMPLE_RATE)
@@ -540,6 +540,15 @@ def main():
                 fp_checked_this_run = False
                 continue
 
+            if state.pop_skip_request():
+                # "Gesabbel!"-Knopf: Nutzer hat selbst Sprache erkannt,
+                # auch wenn VAD/Heuristik (noch) nicht angeschlagen haben
+                speech_streak = 0
+                speech_buffer = []
+                fp_checked_this_run = False
+                do_switch("Nutzer meldete Gesabbel")
+                continue
+
             pcm, pcm_stereo = source.read_window(WINDOW_SECONDS)
             if pcm.size == 0:
                 print(f"⚠ Stream '{current['name']}' liefert nichts mehr, "
@@ -576,6 +585,7 @@ def main():
                             combined, SAMPLE_RATE,
                             f"match_clip{match['clip_id']}_{current['id']}_{ts}.wav",
                         )
+                        state.set_last_fingerprint_clip(match["clip_id"], match["label"])
                         print(f"🔁 Bekannter Jingle/Werbespot wiedererkannt "
                               f"(schon {match['times_seen']}x gehört)")
                         speech_streak = 0

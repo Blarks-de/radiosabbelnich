@@ -21,6 +21,7 @@ COPY speech_detector.py .
 COPY webui.py .
 COPY stations_store.py .
 COPY stations.json .
+COPY radiozapper.webp .
 
 # ICECAST_URL wird beim Start via docker-compose environment gesetzt,
 # z.B. icecast://source:PASSWORT@icecast-radiozapper:8000/mix.mp3

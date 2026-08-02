@@ -15,6 +15,7 @@ im selben Prozess, also reicht das.
 
 import base64
 import json
+import os
 import re
 import threading
 import time
@@ -23,7 +24,17 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import fingerprint
 import stations_store
+
+# Einmalig beim Modul-Import gelesen (statt bei jedem Request von der
+# Platte) — kleines statisches Asset, ändert sich nicht zur Laufzeit.
+_BANNER_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "radiozapper.webp")
+try:
+    with open(_BANNER_PATH, "rb") as _f:
+        _BANNER_BYTES = _f.read()
+except OSError:
+    _BANNER_BYTES = None
 
 
 class SwitcherState:
@@ -42,6 +53,8 @@ class SwitcherState:
         self._current_id = None
         self._manual_request = None
         self._reload_requested = False
+        self._skip_requested = False
+        self._last_fingerprint_clip = None  # {"clip_id": int, "label": str}
         self.reload()
 
     def reload(self):
@@ -112,6 +125,36 @@ class SwitcherState:
             flag = self._reload_requested
             self._reload_requested = False
             return flag
+
+    def request_skip(self):
+        """"Gesabbel!"-Knopf: Nutzer hat selbst erkannt, dass gerade
+        geredet wird, auch wenn VAD/Heuristik (noch) nicht angeschlagen
+        haben — sofort weg vom aktuellen Sender, wie ein Auto-Switch."""
+        with self._lock:
+            self._skip_requested = True
+
+    def pop_skip_request(self) -> bool:
+        with self._lock:
+            flag = self._skip_requested
+            self._skip_requested = False
+            return flag
+
+    def set_last_fingerprint_clip(self, clip_id: int, label: str):
+        """Vom Hauptloop nach jedem Fingerprint-Treffer aufgerufen, damit
+        der "Zapping-Fehler"-Knopf weiß, welchen Clip er ggf. aus der DB
+        werfen soll."""
+        with self._lock:
+            self._last_fingerprint_clip = {"clip_id": clip_id, "label": label}
+
+    def pop_last_fingerprint_clip(self):
+        """Liefert den zuletzt per Fingerprint erkannten Clip (oder None)
+        und leert ihn dabei — ein zweiter Klick auf "Zapping-Fehler" ohne
+        neuen Treffer dazwischen soll ins Leere laufen, nicht denselben
+        (schon gelöschten) Clip nochmal anfassen."""
+        with self._lock:
+            clip = self._last_fingerprint_clip
+            self._last_fingerprint_clip = None
+            return clip
 
 
 def _fetch_listeners(admin_url, user, password, mount, timeout=3):
@@ -306,13 +349,32 @@ _PAGE_HTML = """<!doctype html>
   td, th { text-align: left; padding: .3rem .5rem; border-bottom: 1px solid #8884; }
   #meta { color: #888; font-size: .8rem; margin-top: 2rem; }
   a.config-link { display: inline-block; margin-top: 1rem; font-size: .9rem; }
+  img.banner { width: 100%; height: auto; display: block; border-radius: .5rem; margin-bottom: 1rem; }
+  h1.sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+  }
+  .action-buttons { display: flex; gap: .5rem; margin-top: .75rem; }
+  .action-buttons button {
+    flex: 1; padding: .6rem; font-size: .95rem; border-radius: .4rem;
+    border: 1px solid #999; background: none; color: inherit; cursor: pointer;
+  }
+  .action-buttons button:active { opacity: .7; }
+  #action-msg { font-size: .85rem; margin-top: .4rem; min-height: 1.2em; color: #888; }
 </style>
 </head>
 <body>
-<h1>📻 RadioZapper</h1>
+<img class="banner" src="/radiozapper.webp" alt="RadioZapper">
+<h1 class="sr-only">RadioZapper</h1>
 <div id="current">Lade …</div>
 <div id="now-playing"></div>
 <audio id="player" controls preload="none"></audio>
+
+<div class="action-buttons">
+  <button id="btn-zapping-error" title="Letzten fälschlich erkannten Werbe-Clip aus der Datenbank löschen">🛑 Zapping-Fehler</button>
+  <button id="btn-gesabbel" title="Sofort weiterschalten, weil hier gerade geredet wird">🗣️ Gesabbel!</button>
+</div>
+<div id="action-msg"></div>
 
 <h2>Sender</h2>
 <ul id="stations"></ul>
@@ -402,6 +464,32 @@ async function switchStation(id) {
   refresh();
 }
 
+function setActionMsg(text) {
+  const el = document.getElementById('action-msg');
+  el.textContent = text;
+  setTimeout(() => { if (el.textContent === text) el.textContent = ''; }, 5000);
+}
+
+document.getElementById('btn-zapping-error').addEventListener('click', async () => {
+  try {
+    const res = await fetch('/api/fingerprint/undo', {method: 'POST'});
+    const data = await res.json();
+    setActionMsg(data.ok ? ('✓ Clip gelöscht: ' + (data.label || '')) : ('– ' + data.error));
+  } catch (e) {
+    setActionMsg('Fehler: ' + e.message);
+  }
+});
+
+document.getElementById('btn-gesabbel').addEventListener('click', async () => {
+  try {
+    await fetch('/api/skip', {method: 'POST'});
+    setActionMsg('🗣️ Wird umgeschaltet …');
+    setTimeout(refresh, 1500);
+  } catch (e) {
+    setActionMsg('Fehler: ' + e.message);
+  }
+});
+
 refresh();
 setInterval(refresh, 5000);
 </script>
@@ -423,6 +511,7 @@ _CONFIG_PAGE_HTML = """<!doctype html>
     max-width: 720px; margin: 2rem auto; padding: 0 1rem;
   }
   h1 { font-size: 1.4rem; }
+  img.banner { width: 100%; height: auto; display: block; border-radius: .5rem; margin-bottom: 1rem; }
   a.back { display: inline-block; margin-bottom: 1rem; }
   h2 {
     font-size: 1.05rem; margin-top: 2rem; border-bottom: 1px solid #8884;
@@ -461,6 +550,7 @@ _CONFIG_PAGE_HTML = """<!doctype html>
 </style>
 </head>
 <body>
+<img class="banner" src="/radiozapper.webp" alt="RadioZapper">
 <a class="back" href="/">← zurück zum Player</a>
 <h1>⚙ Sender verwalten</h1>
 <div id="categories">Lade …</div>
@@ -685,7 +775,7 @@ loadStations();
 """
 
 
-def make_handler(state: SwitcherState, icecast_cfg: dict):
+def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: str):
     """Baut eine BaseHTTPRequestHandler-Subklasse mit state/icecast_cfg im
     Closure — so bleibt der Handler selbst zustandslos und threadsicher."""
 
@@ -716,6 +806,16 @@ def make_handler(state: SwitcherState, icecast_cfg: dict):
                 self._send(_PAGE_HTML.encode("utf-8"), "text/html; charset=utf-8")
             elif self.path == "/config":
                 self._send(_CONFIG_PAGE_HTML.encode("utf-8"), "text/html; charset=utf-8")
+            elif self.path == "/radiozapper.webp":
+                if _BANNER_BYTES is None:
+                    self.send_error(404)
+                else:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/webp")
+                    self.send_header("Content-Length", str(len(_BANNER_BYTES)))
+                    self.send_header("Cache-Control", "public, max-age=86400")
+                    self.end_headers()
+                    self.wfile.write(_BANNER_BYTES)
             elif self.path == "/api/status":
                 self._send_json(_build_status(state, icecast_cfg))
             elif self.path == "/api/config/stations":
@@ -733,12 +833,44 @@ def make_handler(state: SwitcherState, icecast_cfg: dict):
         def do_POST(self):
             if self.path == "/api/switch":
                 self._handle_switch()
+            elif self.path == "/api/skip":
+                self._handle_skip()
+            elif self.path == "/api/fingerprint/undo":
+                self._handle_fingerprint_undo()
             elif self.path == "/api/config/stations":
                 self._handle_add_station()
             elif self.path.startswith("/api/config/stations/"):
                 self._handle_station_action()
             else:
                 self.send_error(404)
+
+        def _handle_skip(self):
+            # "Gesabbel!"-Knopf: Nutzer hat selbst Sprache erkannt, auch
+            # wenn VAD/Heuristik (noch) nicht angeschlagen haben -> sofort
+            # weiterschalten, ohne auf die automatische Erkennung zu warten.
+            state.request_skip()
+            self._send_json({"ok": True})
+
+        def _handle_fingerprint_undo(self):
+            # "Zapping-Fehler"-Knopf: der letzte automatische Wechsel kam
+            # von einem Fingerprint-Treffer, der sich im Nachhinein als
+            # falsch/unerwünscht rausstellt -> den zugrundeliegenden Clip
+            # aus der DB werfen, damit er nicht weiter fälschlich matcht.
+            clip = state.pop_last_fingerprint_clip()
+            if clip is None:
+                self._send_json({
+                    "ok": False,
+                    "error": "Kein kürzlicher Fingerprint-Treffer zum Zurücknehmen.",
+                }, status=404)
+                return
+            label = fingerprint.delete_clip(fingerprint_db_path, clip["clip_id"])
+            if label is None:
+                self._send_json({
+                    "ok": False,
+                    "error": "Clip war schon nicht mehr in der Datenbank.",
+                }, status=404)
+                return
+            self._send_json({"ok": True, "label": label})
 
         def _handle_switch(self):
             payload = self._read_json_body()
@@ -799,8 +931,9 @@ def make_handler(state: SwitcherState, icecast_cfg: dict):
     return Handler
 
 
-def start_server(port: int, state: SwitcherState, icecast_cfg: dict) -> ThreadingHTTPServer:
-    httpd = ThreadingHTTPServer(("0.0.0.0", port), make_handler(state, icecast_cfg))
+def start_server(port: int, state: SwitcherState, icecast_cfg: dict,
+                  fingerprint_db_path: str) -> ThreadingHTTPServer:
+    httpd = ThreadingHTTPServer(("0.0.0.0", port), make_handler(state, icecast_cfg, fingerprint_db_path))
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     return httpd

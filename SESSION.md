@@ -1,9 +1,12 @@
 # RadioZapper — Session-Log
 
 Laufendes Protokoll der Arbeit an diesem Projekt (chronologisch, neueste
-Einträge unten). Für den aktuellen Architektur-/Status-Überblick siehe
-weiterhin `HANDOVER.md` — hier steht das *Wie und Warum* der einzelnen
-Schritte.
+Einträge unten) — hier steht das *Wie und Warum* der einzelnen Schritte.
+Für den allgemeinen Projekt-Überblick siehe `README.md` (bis 2026-08-02
+gab's dafür `HANDOVER.md`, das war aber als Übergabe-Doku an Claude Code
+gedacht und ist inzwischen durch die README ersetzt — Verweise darauf in
+älteren Einträgen unten sind bewusst nicht rückwirkend korrigiert, siehe
+Eintrag "Umbenennung radio_switch.py → radiozapper.py" für die Begründung).
 
 ## 2026-08-02
 
@@ -630,3 +633,105 @@ striktere Fingerprint-Schwellwerte. Nutzer wählte (a).
   um störende Werbung handelt oder ob die Fingerprint-Schwellwerte
   (`MIN_HASH_MATCHES`, `FINGERPRINT_TRIGGER_SECONDS`) generell
   nachjustiert werden sollten.
+
+## 2026-08-02 (Fortsetzung) — Korrektur-Knöpfe, Hintergrundbild, README statt HANDOVER
+
+Vier Wünsche in einem Rutsch: zwei neue Buttons im Web-Interface, ein
+neues Logo/Hero-Bild als Branding, und README.md statt HANDOVER.md.
+
+### "Zapping-Fehler"-Knopf (Fingerprint-Treffer zurücknehmen)
+- `fingerprint.py`: neue freistehende Funktion `delete_clip(db_path,
+  clip_id)` — öffnet eine eigene kurze SQLite-Connection zur selben DB-
+  Datei statt sich die laufende `FingerprintDB`-Instanz des Hauptprozesses
+  zu teilen (sqlite3-Connection-Objekte sind nicht thread-übergreifend
+  sicher, und `webui.py` läuft in einem anderen Thread). Gibt das Label
+  des gelöschten Clips zurück, oder `None` falls die ID nicht mehr
+  existiert.
+- `webui.SwitcherState`: neue Felder `_last_fingerprint_clip` +
+  `set_last_fingerprint_clip()`/`pop_last_fingerprint_clip()` (pop leert
+  dabei, damit ein zweiter Klick ohne neuen Treffer dazwischen nicht ins
+  Leere/denselben-schon-gelöschten-Clip läuft).
+- `radiozapper.py`: ruft `state.set_last_fingerprint_clip(...)` direkt
+  neben dem bereits vorhandenen `save_fingerprint_debug_clip()`-Aufruf im
+  Match-Zweig auf.
+- Neuer Endpunkt `POST /api/fingerprint/undo` in `webui.py` — braucht den
+  Pfad zur Fingerprint-DB, dafür `make_handler()`/`start_server()` um
+  einen `fingerprint_db_path`-Parameter erweitert, `radiozapper.py`
+  übergibt `args.fingerprint_db` beim Aufruf.
+
+### "Gesabbel!"-Knopf (manueller Sofort-Switch)
+- `webui.SwitcherState`: neues Flag `_skip_requested` +
+  `request_skip()`/`pop_skip_request()`, analog zum bestehenden
+  Reload-Mechanismus.
+- `radiozapper.py`: neue Prüfung im Hauptloop direkt nach dem manuellen-
+  Switch-Check (gleiche Prioritätsebene, vor dem blockierenden
+  `read_window()`) — bei gesetztem Flag: Streak/Buffer zurücksetzen,
+  `do_switch("Nutzer meldete Gesabbel")` aufrufen. Läuft über denselben
+  Code-Pfad wie die automatische Umschaltung (reihum zum nächsten aktiven
+  Sender, bis Musik läuft) — keine Duplizierung der Umschalt-Logik.
+- Neuer Endpunkt `POST /api/skip`.
+- Beide Live getestet: Gesabbel-Klick löste sofort einen echten Wechsel
+  aus (Log: `🎙 Nutzer meldete Gesabbel auf '1LIVE' — schalte um ...` ->
+  `▶ Spiele: 80s80s`, innerhalb von ~1s nach dem Klick).
+
+### Hintergrundbild (radiozapper.webp)
+- Nutzer hat ein transparentes Hero-/Logo-Bild erstellt (1408×768,
+  dunkler Hintergrund, "RADIOZAPPER"-Wortmarke mit Blitz-Icon, Tagline
+  "ZAPPING AWAY! MODERATION · ADS · JINGLES · NEWS").
+  Als `<img>`-Banner (nicht als CSS-`background-image` über die ganze
+  Seite) oben auf Player- UND Config-Seite eingebaut — bei einem so
+  bildlastigen Hero-Grafik-Stil hätte ein Vollflächen-Hintergrund die
+  Lesbarkeit der eigentlichen UI-Elemente (Sender-Liste, Buttons)
+  beeinträchtigt. Die bisherige `<h1>RadioZapper</h1>`-Textüberschrift auf
+  der Player-Seite wurde `sr-only` (visuell versteckt, für Screenreader/
+  Barrierefreiheit weiter vorhanden) — das Bild trägt die Wortmarke schon
+  visuell.
+- `webui.py`: Bild wird einmalig beim Modul-Import von der Platte gelesen
+  (`_BANNER_BYTES`, kein Re-Read pro Request) und über eine neue Route
+  `GET /radiozapper.webp` mit `Cache-Control: public, max-age=86400`
+  ausgeliefert (Browser cached es dann über Player-/Config-Seite hinweg).
+- `Dockerfile`: `COPY radiozapper.webp .` ergänzt, damit es im Image
+  landet (statisches Asset, kein Volume-Mount nötig wie bei
+  `stations.json`).
+- Das vom Nutzer ebenfalls abgelegte `radiozapper.png` (2.3MB, unkomprimiert)
+  bewusst nicht angefasst/committed — nicht Teil der Anfrage, könnte z.B.
+  als Favicon-Rohmaterial gedacht sein, aber das war nicht spezifiziert.
+
+### README.md statt HANDOVER.md
+- `HANDOVER.md` war ursprünglich als Übergabe-Dokument AN Claude Code
+  gedacht (Rahmen: "hier ist der Stand, mach weiter") — passend für die
+  Zusammenarbeit hier, aber keine sinnvolle Projekt-Doku für jemand
+  anderen, der auf das Repo stößt. Per `git rm` entfernt.
+- `README.md` neu geschrieben: was RadioZapper macht, wie die Erkennung
+  funktioniert (VAD + Heuristik-Fallback + Fingerprinting), Web-Interface-
+  Überblick (inkl. der beiden neuen Knöpfe), Architektur-Tabelle,
+  Setup-/Deploy-Befehle, `.env`-Variablen-Tabelle, bekannte
+  Einschränkungen. Bewusst knapper und nach außen gerichtet als
+  `HANDOVER.md` war — der detaillierte Debugging-Verlauf bleibt weiter
+  hier im Session-Log, nicht in der README verlinkt (README ist für
+  Nutzer/Betrachter des Repos, nicht für die Weiterarbeit mit Claude Code).
+
+### Nebenbefund beim Testen: Fingerprinting scheint systematisch zu über-matchen
+- Direkt nach dem DB-Reset von vorhin (siehe voriger Eintrag) bereits
+  wieder ein neuer Clip gelernt (`id=2`, Label "1LIVE") und binnen
+  weniger Minuten **8x** quer über fast alle konfigurierten Sender
+  (80s80s, 90s90s, Hamburg Zwei, Radio Bob, Rock Antenne Hamburg, R.SH)
+  getroffen — bestätigt per `fingerprint_clips/*.wav`-Mitschnitten.
+  Audio-Analyse der Clips (RMS/Peak/Silence-Ratio) zeigt: keine Stille,
+  substantielle Energie (RMS 5600–7200) — also kein Stille-Puffer-Bug.
+- Einordnung (noch nicht behoben, nur notiert): `_spectrogram_peaks()` in
+  `fingerprint.py` wählt pro Zeitframe schlicht die N stärksten FFT-Bins
+  als "Peaks", ohne Frequenzband-Aufteilung (der Original-Shazam-
+  Algorithmus teilt das Spektrum in mehrere Bänder auf und wählt Peaks
+  pro Band, gerade um genau diese Art Über-Matching zu vermeiden). Bei
+  stark komprimiertem/gemastertem Broadcast-Radio-Audio (loudness-war-
+  typisch bass-lastig, wenig dynamische Bandbreite) konzentrieren sich
+  die stärksten Peaks vermutlich systematisch auf ähnliche
+  Frequenzbereiche über völlig unterschiedliche Songs/Sprecher hinweg,
+  was zu zufällig aber konsistent wirkenden Hash-Treffern führt, auch bei
+  komplett unterschiedlichem Audio-Inhalt. Nicht angefasst — wäre ein
+  größerer Umbau von `fingerprint.py` (Band-Aufteilung einführen), nicht
+  Teil dieser Anfrage. Der neue "Zapping-Fehler"-Knopf ist das direkte
+  Werkzeug, um damit im Alltag umzugehen, löst aber nicht die
+  Grundursache. Für später: falls das Muster sich häuft, lohnt sich ein
+  Umbau der Peak-Auswahl auf Frequenzbänder.
