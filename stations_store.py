@@ -24,8 +24,14 @@ import threading
 
 STATIONS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stations.json")
 
-CATEGORIES = ["Lokal", "Regional", "National", "International", "Global", "Interstellar"]
+CATEGORIES = ["Lokal", "Regional", "National", "International", "Global", "Interstellar", "Unsortiert"]
 DEFAULT_CATEGORY = "National"
+
+# Kategorie für importierte Sender (station_import.py) — muss in
+# CATEGORIES enthalten sein, absichtlich als letztes Element dort, damit
+# sie auf der Config-Seite immer nach allen "richtigen" Kategorien
+# erscheint (Config-Seite iteriert einfach in CATEGORIES-Reihenfolge).
+IMPORT_CATEGORY = "Unsortiert"
 
 DEFAULT_STATIONS = [
     {"name": "Radio Bob", "url": "https://streams.radiobob.de/bob-live/mp3-192/mediaplayer",
@@ -145,6 +151,39 @@ def add(name: str, url: str, category: str, enabled: bool = True) -> dict:
         stations.append(station)
         _write(stations)
         return station
+
+
+def bulk_add(entries: list, category: str = DEFAULT_CATEGORY) -> list:
+    """Fügt mehrere Sender in einem Rutsch hinzu — ein Read+Write statt
+    einem pro Sender (für station_import.py, wo sonst bei einer großen
+    Playlist hunderte einzelne Lock-Zyklen anfallen würden). Jeder Eintrag
+    in `entries`: {"name": str, "url": str}. Einträge ohne Name/URL werden
+    stillschweigend übersprungen (Aufrufer hat i.d.R. schon vorgefiltert).
+    Gibt die tatsächlich hinzugefügten Sender-dicts zurück."""
+    if category not in CATEGORIES:
+        category = DEFAULT_CATEGORY
+    with _lock:
+        stations = _read_raw()
+        existing_ids = {s["id"] for s in stations}
+        added = []
+        for e in entries:
+            name = (e.get("name") or "").strip()
+            url = (e.get("url") or "").strip()
+            if not name or not url:
+                continue
+            station = {
+                "id": _unique_id(_slugify(name), existing_ids),
+                "name": name,
+                "url": url,
+                "category": category,
+                "enabled": True,
+            }
+            existing_ids.add(station["id"])
+            stations.append(station)
+            added.append(station)
+        if added:
+            _write(stations)
+        return added
 
 
 def update(station_id: str, name: str, url: str, category: str, enabled: bool) -> dict:

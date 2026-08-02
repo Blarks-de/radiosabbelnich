@@ -82,5 +82,2413 @@
     "url": "https://streams.90s90s.de/web/mp3-128/mediaplayer",
     "category": "National",
     "enabled": true
+  },
+  {
+    "id": "105-5-spreeradio",
+    "name": "105'5 Spreeradio",
+    "url": "http://stream.spreeradio.de/spree-live/mp3-128/konsole",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "1live-diggi",
+    "name": "1LIVE diggi",
+    "url": "http://wdr-1live-diggi.icecast.wdr.de/wdr/1live/diggi/mp3/128/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "105-5-spreeradio-love",
+    "name": "105'5 Spreeradio Love",
+    "url": "http://stream.spreeradio.de/spree-love/mp3-128/konsole",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "89-0-rtl",
+    "name": "89.0 RTL",
+    "url": "http://stream.89.0rtl.de/live/mp3-256/direktlinkHP",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "105-5-spreeradio-rock",
+    "name": "105'5 Spreeradio Rock",
+    "url": "http://stream.spreeradio.de/spree-rock/mp3-128/konsole",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "antenne-brandenburg",
+    "name": "Antenne Brandenburg",
+    "url": "https://dispatcher.rndfnk.com/rbb/antennebrandenburg/live/mp3/mid",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "antenne-1",
+    "name": "antenne 1",
+    "url": "http://stream.antenne1.de/a1stg/livestream2.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "antenne-bayern",
+    "name": "ANTENNE BAYERN",
+    "url": "http://mp3channels.webradio.antenne.de:80/antenne",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "absolut-radio",
+    "name": "Absolut Radio",
+    "url": "https://absolut-top.live-sm.absolutradio.de/absolut-top/stream/mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "br24",
+    "name": "BR24",
+    "url": "https://dispatcher.rndfnk.com/br/br24/live/mp3/mid",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "absolut-relax",
+    "name": "Absolut relax",
+    "url": "https://absolut-relax.live-sm.absolutradio.de/absolut-relax/stream/mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "bayern-1-mittel-und-oberfranken",
+    "name": "Bayern 1 Mittel- und Oberfranken",
+    "url": "https://dispatcher.rndfnk.com/br/br1/franken/mp3/mid",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "bayern-1-schwaben",
+    "name": "Bayern 1 Schwaben",
+    "url": "https://dispatcher.rndfnk.com/br/br1/schwaben/mp3/mid",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "bayern-2",
+    "name": "Bayern 2",
+    "url": "https://dispatcher.rndfnk.com/br/br2/live/mp3/mid",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "antenne-th-ringen",
+    "name": "ANTENNE THÜRINGEN",
+    "url": "http://stream.antennethueringen.de/live/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "100-5-alemannia",
+    "name": "100'5 Alemannia",
+    "url": "https://stream.dashitradio.de/alemannia/mp3-128/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "bayern-3",
+    "name": "Bayern 3",
+    "url": "https://dispatcher.rndfnk.com/br/br3/live/mp3/mid",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "br-heimat",
+    "name": "BR Heimat",
+    "url": "https://dispatcher.rndfnk.com/br/brheimat/live/mp3/mid",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "br-klassik",
+    "name": "BR-Klassik",
+    "url": "https://dispatcher.rndfnk.com/br/brklassik/live/mp3/high",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "bremen-eins",
+    "name": "Bremen Eins",
+    "url": "https://dispatcher.rndfnk.com/rb/bremeneins/live/mp3/128/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "bremen-vier",
+    "name": "Bremen Vier",
+    "url": "https://dispatcher.rndfnk.com/rb/bremenvier/live/mp3/128/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "bremen-vier-rockt",
+    "name": "Bremen Vier rockt",
+    "url": "https://icecast.radiobremen.de/rb/bremenvier/live/mp3/128/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "bremen-zwei",
+    "name": "Bremen Zwei",
+    "url": "https://dispatcher.rndfnk.com/rb/bremenzwei/live/mp3/128/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "100-5-das-hitradio",
+    "name": "100'5 DAS HITRADIO",
+    "url": "https://stream.dashitradio.de/dashitradio/mp3-128/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "105-5-spreeradio-weihnachtsradio",
+    "name": "105'5 Spreeradio Weihnachtsradio",
+    "url": "http://stream.spreeradio.de/spree-event/mp3-128/konsole",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "105-5-spreeradio-80er",
+    "name": "105'5 Spreeradio 80er",
+    "url": "http://stream.spreeradio.de/spree-80er/mp3-128/konsole",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "campusradio-universit-t-duisburg-essen-campusfm",
+    "name": "Campusradio Universität Duisburg-Essen (CampusFM)",
+    "url": "https://www.campusfm.info/stream?x=y",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "bayern-1-niederbayern-und-oberpfalz",
+    "name": "Bayern 1 Niederbayern und Oberpfalz",
+    "url": "https://dispatcher.rndfnk.com/br/br1/nbopf/mp3/mid",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "bayern-1-mainfranken",
+    "name": "Bayern 1 Mainfranken",
+    "url": "https://dispatcher.rndfnk.com/br/br1/mainfranken/mp3/mid",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "bayern-1-oberbayern",
+    "name": "Bayern 1 Oberbayern",
+    "url": "https://dispatcher.rndfnk.com/br/br1/obb/mp3/mid",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "campusradio-m-nster-radio-q",
+    "name": "Campusradio Münster (Radio Q)",
+    "url": "https://rqstream.radioq.de/stream/192.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "campusradio-siegen-radius921",
+    "name": "Campusradio Siegen (radius921)",
+    "url": "http://141.99.154.10:8002/;",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "bigfm",
+    "name": "bigFM",
+    "url": "https://stream.bigfm.de/deutschland/aac-128",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "campusradio-bielefeld-hertz-87-9",
+    "name": "Campusradio Bielefeld (Hertz 87.9)",
+    "url": "http://stream.radiohertz.de/hertz-hq.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "campusradio-regensburg-studentenfunk",
+    "name": "Campusradio Regensburg (Studentenfunk)",
+    "url": "https://studentenfunk.out.airtime.pro/studentenfunk_a#",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "dasding",
+    "name": "DASDING",
+    "url": "https://dispatcher.rndfnk.com/swr/dasding/live/mp3/128/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "campusradio-karlsruhe-radio-kit",
+    "name": "Campusradio Karlsruhe (Radio KIT)",
+    "url": "https://campusradio.forum.kit.edu:8443/campusradiokitbib",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "campusradio-paderborn-l-unico",
+    "name": "Campusradio Paderborn (L'UniCo)",
+    "url": "http://icecast.l-uni.co:8001/lunico_high_mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "deluxe-lounge-radio",
+    "name": "DELUXE LOUNGE RADIO",
+    "url": "https://audiostreams.deluxemusic.tv/lounge/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "campusradio-k-ln-k-lncampus",
+    "name": "Campusradio Köln (Kölncampus)",
+    "url": "https://live.koelncampus.com/live",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "deluxe-easy",
+    "name": "DELUXE EASY",
+    "url": "https://audiostreams.deluxemusic.tv/easy/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "campusradio-bochum-ct-das-radio",
+    "name": "Campusradio Bochum (CT das radio)",
+    "url": "http://live.ctdasradio.de:8008/web-playlist",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "deluxe-music-radio",
+    "name": "DELUXE MUSIC RADIO",
+    "url": "https://audiostreams.deluxemusic.tv/music/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "deutschlandfunk-kultur",
+    "name": "Deutschlandfunk Kultur",
+    "url": "https://st02.sslstream.dlf.de/dlf/02/high/aac/stream.aac",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "deutschlandfunk",
+    "name": "Deutschlandfunk",
+    "url": "https://st01.sslstream.dlf.de/dlf/01/high/aac/stream.aac",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "deutschlandfunk-nova",
+    "name": "Deutschlandfunk Nova",
+    "url": "https://st03.sslstream.dlf.de/dlf/03/high/aac/stream.aac",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "deutschlandradio-dokumente-und-debatten",
+    "name": "Deutschlandradio Dokumente und Debatten",
+    "url": "https://st04.sslstream.dlf.de/dlf/04/high/aac/stream.aac",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "domradio-de",
+    "name": "domradio.de",
+    "url": "https://dom.audiostream.io/domradio/1000/mp3/128/domradio-rp.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "fluxfm",
+    "name": "FluxFM",
+    "url": "http://streams.fluxfm.de/live/mp3-320/audio/",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "die-neue-107-7",
+    "name": "DIE NEUE 107.7",
+    "url": "http://dieneue1077.cast.addradio.de/dieneue1077/simulcast/high/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "donau-3-fm",
+    "name": "DONAU 3 FM",
+    "url": "https://frontend.streamonkey.net/donau3fm-live/stream/mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "freundesdienst",
+    "name": "Freundesdienst",
+    "url": "http://radiofd.ice.infomaniak.ch/radiofd.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "campusradio-mannheim-radioaktiv",
+    "name": "Campusradio Mannheim (Radioaktiv)",
+    "url": "https://stream.radioaktiv.org/VeryHiFi",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "fritz",
+    "name": "Fritz",
+    "url": "https://dispatcher.rndfnk.com/rbb/fritz/live/mp3/mid",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "hbr",
+    "name": "HBR",
+    "url": "https://stream1.radiohbr.de:80/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "hr-info",
+    "name": "hr-info",
+    "url": "https://dispatcher.rndfnk.com/hr/hrinfo/live/mp3/high",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "hr1",
+    "name": "hr1",
+    "url": "https://dispatcher.rndfnk.com/hr/hr1/live/mp3/128/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "egofm",
+    "name": "egoFM",
+    "url": "http://mp3ad.egofm.c.nmdn.net/ps-egofm_192/livestream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "hr2-kultur",
+    "name": "hr2-kultur",
+    "url": "https://dispatcher.rndfnk.com/hr/hr2/live/mp3/256/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "hr4",
+    "name": "hr4",
+    "url": "https://dispatcher.rndfnk.com/hr/hr4/live/mp3/128/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "hr3",
+    "name": "hr3",
+    "url": "https://dispatcher.rndfnk.com/hr/hr3/live/mp3/128/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "hcjb",
+    "name": "hcjb",
+    "url": "http://segenswelle.de/hcjb",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "jam-fm",
+    "name": "JAM FM",
+    "url": "http://stream.jam.fm/jamfm-live/mp3-128/konsole/",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "jam-fm-new-music-radio",
+    "name": "JAM FM New Music Radio",
+    "url": "http://stream.jam.fm/jamfm-nmr/mp3-128/konsole/",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "jam-fm-black-label",
+    "name": "JAM FM Black Label",
+    "url": "http://stream.jam.fm/jamfm-bl/mp3-128/konsole/",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "hit-radio-ffh",
+    "name": "HIT RADIO FFH",
+    "url": "http://mp3.ffh.de/radioffh/hqlivestream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "harmony-fm",
+    "name": "harmony.fm",
+    "url": "https://mp3.harmonyfm.de/harmonyfm/hqlivestream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "jazzradio-berlin",
+    "name": "JazzRadio Berlin",
+    "url": "http://streaming.radio.co:80/s774887f7b/listen",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "wdr-die-maus",
+    "name": "WDR Die Maus",
+    "url": "https://wdr-diemaus-live.icecastssl.wdr.de/wdr/diemaus/live/mp3/128/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "mdr-aktuell",
+    "name": "MDR AKTUELL",
+    "url": "http://mdr-284340-0.cast.mdr.de/mdr/284340/0/mp3/high/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "mdr-jump",
+    "name": "MDR JUMP",
+    "url": "http://mdr-284320-0.cast.mdr.de/mdr/284320/0/mp3/high/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "mdr-klassik",
+    "name": "MDR KLASSIK",
+    "url": "http://mdr-284350-0.cast.mdr.de/mdr/284350/0/mp3/high/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "campusradio-ilmenau",
+    "name": "Campusradio Ilmenau",
+    "url": "https://stream.radio-hsf.de/hsf.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "mdr-kultur",
+    "name": "MDR KULTUR",
+    "url": "http://mdr-284310-0.cast.mdr.de/mdr/284310/0/mp3/high/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "inselradio",
+    "name": "Inselradio",
+    "url": "https://inselradio--di--nacs-ais-lgc--02--cdn.cast.addradio.de/inselradio/live/mp3/high",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "mdr-sachsen",
+    "name": "MDR SACHSEN",
+    "url": "http://mdr-284280-0.cast.mdr.de/mdr/284280/0/mp3/high/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "mdr-th-ringen",
+    "name": "MDR THÜRINGEN",
+    "url": "http://mdr-284300-0.cast.mdr.de/mdr/284300/0/mp3/high/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "mdr-sputnik",
+    "name": "MDR SPUTNIK",
+    "url": "http://mdr-284330-0.cast.mdr.de/mdr/284330/0/mp3/high/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "n-joy",
+    "name": "N-JOY",
+    "url": "https://dispatcher.rndfnk.com/ndr/njoy/live/mp3/128/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "ndr-1-radio-mv",
+    "name": "NDR 1 Radio MV",
+    "url": "https://dispatcher.rndfnk.com/ndr/ndr1radiomv/schwerin/mp3/128/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "ndr-1-niedersachsen",
+    "name": "NDR 1 Niedersachsen",
+    "url": "https://dispatcher.rndfnk.com/ndr/ndr1niedersachsen/hannover/mp3/128/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "ndr-2",
+    "name": "NDR 2",
+    "url": "https://dispatcher.rndfnk.com/ndr/ndr2/niedersachsen/mp3/128/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "ndr-1-welle-nord",
+    "name": "NDR 1 Welle Nord",
+    "url": "https://dispatcher.rndfnk.com/ndr/ndr1wellenord/kiel/mp3/128/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "ndr-90-3",
+    "name": "NDR 90.3",
+    "url": "https://dispatcher.rndfnk.com/ndr/ndr903/hamburg/mp3/128/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "ndr-info",
+    "name": "NDR Info",
+    "url": "https://dispatcher.rndfnk.com/ndr/ndrinfo/niedersachsen/mp3/128/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "ndr-blue",
+    "name": "NDR Blue",
+    "url": "https://dispatcher.rndfnk.com/ndr/ndrblue/live/mp3/128/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "ndr-info-spezial",
+    "name": "NDR Info Spezial",
+    "url": "https://dispatcher.rndfnk.com/ndr/ndrinfospezial/live/mp3/128/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "ndr-kultur",
+    "name": "NDR kultur",
+    "url": "https://dispatcher.rndfnk.com/ndr/ndrkultur/live/mp3/128/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "ndr-schlager",
+    "name": "NDR Schlager",
+    "url": "https://dispatcher.rndfnk.com/ndr/ndrschlager/live/mp3/128/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-7",
+    "name": "Radio 7",
+    "url": "https://streams.radio7.de/dab/aac-128/",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "metal-only",
+    "name": "Metal Only",
+    "url": "http://metal-only.streampanel.cloud/stream",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "ostseewelle-hit-radio",
+    "name": "Ostseewelle HIT-RADIO",
+    "url": "http://mp3.ostseewelle.c.nmdn.net/ostseewellelive/livestream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-national",
+    "name": "RADIO BOB! national",
+    "url": "https://streams.radiobob.de/bob-national/mp3-192/mediaplayer",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-nrw",
+    "name": "RADIO BOB! NRW",
+    "url": "https://streams.radiobob.de/live-nrw-mitte/mp3-192/mediaplayer",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "planet-radio",
+    "name": "planet radio",
+    "url": "http://mp3.planetradio.de/planetradio/hqlivestream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-schleswig-holstein",
+    "name": "RADIO BOB! Schleswig-Holstein",
+    "url": "https://streams.radiobob.de/bob-shlive/mp3-192/mediaplayer",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-metal",
+    "name": "RADIO BOB! Metal",
+    "url": "https://streams.radiobob.de/bob-metal/mp3-192/mediaplayer",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "landeswelle-th-ringen",
+    "name": "LandesWelle Thüringen",
+    "url": "http://stream.landeswelle.de/lwt/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-alternative-rock",
+    "name": "RADIO BOB! Alternative Rock",
+    "url": "https://streams.radiobob.de/bob-alternative/mp3-192/mediaplayer",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "nice",
+    "name": "nice",
+    "url": "https://sd-radio.nice-radiotv.de",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-90-1",
+    "name": "Radio 90.1",
+    "url": "http://mp3.radiomg.c.nmdn.net/radiomg/livestream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-country",
+    "name": "RADIO BOB! Country",
+    "url": "https://streams.radiobob.de/country/mp3-192/mediaplayer/",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-classic-rock",
+    "name": "RADIO BOB! Classic Rock",
+    "url": "https://streams.radiobob.de/bob-classicrock/mp3-192/mediaplayer",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-blues",
+    "name": "RADIO BOB! Blues",
+    "url": "https://streams.radiobob.de/blues/mp3-192/mediaplayer/",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-emo",
+    "name": "RADIO BOB! Emo",
+    "url": "https://streams.radiobob.de/emo/mp3-192/mediaplayer/",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-college-rock",
+    "name": "RADIO BOB! College Rock",
+    "url": "https://streams.radiobob.de/collegerock/mp3-192/mediaplayer/",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-christmas",
+    "name": "RADIO BOB! Christmas",
+    "url": "https://streams.radiobob.de/bob-christmas/mp3-192/mediaplayer/",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-wacken",
+    "name": "RADIO BOB! Wacken",
+    "url": "https://streams.radiobob.de/bob-wacken/mp3-192/mediaplayer",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-acdc",
+    "name": "RADIO BOB! ACDC",
+    "url": "https://streams.radiobob.de/bob-acdc/mp3-192/mediaplayer",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-deutschrock",
+    "name": "RADIO BOB! Deutschrock",
+    "url": "https://streams.radiobob.de/bob-deutsch/mp3-192/mediaplayer",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-90er-rock",
+    "name": "RADIO BOB! 90er Rock",
+    "url": "https://streams.radiobob.de/bob-90srock/mp3-192/mediaplayer",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-80er-rock",
+    "name": "RADIO BOB! 80er Rock",
+    "url": "https://streams.radiobob.de/bob-80srock/mp3-192/mediaplayer",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-70er-rock",
+    "name": "RADIO BOB! 70er Rock",
+    "url": "https://streams.radiobob.de/70errock/mp3-192/mediaplayer/",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-grunge",
+    "name": "RADIO BOB! Grunge",
+    "url": "https://streams.radiobob.de/bob-grunge/mp3-192/mediaplayer",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-hardrock",
+    "name": "RADIO BOB! Hardrock",
+    "url": "https://streams.radiobob.de/bob-hardrock/mp3-192/mediaplayer",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-metalcore",
+    "name": "RADIO BOB! Metalcore",
+    "url": "https://streams.radiobob.de/metalcore/mp3-192/mediaplayer",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-2000er-rock",
+    "name": "RADIO BOB! 2000er Rock",
+    "url": "https://streams.radiobob.de/2000er/mp3-192/mediaplayer/",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-b2",
+    "name": "radio B2",
+    "url": "https://stream.schlagerradio.de/b2-schlagerradio-national/mp3-192/?ref=f0d1",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-tobias-sammet-rockshow",
+    "name": "RADIO BOB! Tobias Sammet Rockshow",
+    "url": "https://streams.radiobob.de/sammet/mp3-192/mediaplayer/",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-the-boss-hoss",
+    "name": "RADIO BOB! The Boss Hoss",
+    "url": "https://streams.radiobob.de/bosshoss/mp3-192/mediaplayer/",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-metallica",
+    "name": "RADIO BOB! Metallica",
+    "url": "https://streams.radiobob.de/metallica/mp3-192/mediaplayer/",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-fury-in-the-slaughterhouse",
+    "name": "RADIO BOB! Fury in the Slaughterhouse",
+    "url": "https://streams.radiobob.de/fury/mp3-192/mediaplayer/",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-mittelalter-rock",
+    "name": "RADIO BOB! Mittelalter Rock",
+    "url": "https://streams.radiobob.de/mittelalter/mp3-192/mediaplayer",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-donots",
+    "name": "RADIO BOB! Donots",
+    "url": "https://streams.radiobob.de/donots/mp3-192/mediaplayer/",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-symphonic-metal",
+    "name": "RADIO BOB! Symphonic Metal",
+    "url": "https://streams.radiobob.de/symphmetal/mp3-192/mediaplayer/",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-punk",
+    "name": "RADIO BOB! Punk",
+    "url": "https://streams.radiobob.de/bob-punk/mp3-192/mediaplayer",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-prog-rock",
+    "name": "RADIO BOB! Prog-Rock",
+    "url": "https://streams.radiobob.de/progrock/mp3-192/mediaplayer/",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-kuschelrock",
+    "name": "RADIO BOB! Kuschelrock",
+    "url": "https://streams.radiobob.de/bob-kuschelrock/mp3-192/mediaplayer",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-power-metal",
+    "name": "RADIO BOB! Power Metal",
+    "url": "https://streams.radiobob.de/powermetal/mp3-192/mediaplayer/",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-death-metal",
+    "name": "RADIO BOB! Death Metal",
+    "url": "https://streams.radiobob.de/deathmetal/mp3-192/mediaplayer/",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-rockparty",
+    "name": "RADIO BOB! Rockparty",
+    "url": "https://streams.radiobob.de/rockparty/mp3-192/mediaplayer/",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-newcomer",
+    "name": "RADIO BOB! Newcomer",
+    "url": "https://streams.radiobob.de/newcomer/mp3-192/mediaplayer/",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-southern-rock",
+    "name": "RADIO BOB! Southern Rock",
+    "url": "https://streams.radiobob.de/southernrock/mp3-192/mediaplayer",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-der-dunkle-parabelritter",
+    "name": "RADIO BOB! Der Dunkle Parabelritter",
+    "url": "https://streams.radiobob.de/ritter/mp3-192/mediaplayer",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-gothic-rock",
+    "name": "RADIO BOB! Gothic Rock",
+    "url": "https://streams.radiobob.de/gothic/mp3-192/mediaplayer",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-folk-rock",
+    "name": "RADIO BOB! Folk Rock",
+    "url": "https://streams.radiobob.de/folkrock/mp3-192/streams.radiobob.de/",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-festival",
+    "name": "RADIO BOB! Festival",
+    "url": "https://regiocast.streamabc.net/regc-radiobobfestival4791239-mp3-192-1869588",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-best-of-rock",
+    "name": "RADIO BOB! Best of Rock",
+    "url": "https://streams.radiobob.de/bob-bestofrock/mp3-192/mediaplayer",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-unplugged",
+    "name": "RADIO BOB! Unplugged",
+    "url": "https://streams.radiobob.de/bob-chillout/mp3-192/mediaplayer/",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-singer-songwriter",
+    "name": "RADIO BOB! Singer-Songwriter",
+    "url": "https://streams.radiobob.de/bob-singersong/mp3-192/mediaplayer",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-harte-saite",
+    "name": "RADIO BOB! Harte Saite",
+    "url": "https://streams.radiobob.de/bob-hartesaite/mp3-192/mediaplayer",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-queen",
+    "name": "RADIO BOB! Queen",
+    "url": "https://streams.radiobob.de/bob-queen/mp3-192/mediaplayer/",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-rock-oldies",
+    "name": "RADIO BOB! Rock Oldies",
+    "url": "https://streams.radiobob.de/rockoldies/mp3-192/mediaplayer",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-brocken",
+    "name": "Radio Brocken",
+    "url": "http://stream.radiobrocken.de/live/mp3-256",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-rock-hits",
+    "name": "RADIO BOB! Rock Hits",
+    "url": "https://streams.radiobob.de/bob-rockhits/mp3-192/mediaplayer",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-horeb",
+    "name": "Radio Horeb",
+    "url": "http://rs16.stream24.org:8000/horeb.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bob-mot-rhead",
+    "name": "RADIO BOB! Motörhead",
+    "url": "https://streams.radiobob.de/motoerhead/mp3-192/mediaplayer/",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-energy-sachsen",
+    "name": "RADIO ENERGY Sachsen",
+    "url": "http://nrj.de/sachsen",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-regenbogen",
+    "name": "Radio Regenbogen",
+    "url": "http://streams.regenbogen.de/rr-mannheim-128-mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-teddy",
+    "name": "Radio TEDDY",
+    "url": "http://streamtdy.ir-media-tec.com/live/mp3-128/web/play.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-saw",
+    "name": "radio SAW",
+    "url": "https://stream.radiosaw.de/saw/mp3-192/radio-browser/",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-teddy-berlin-brandenburg",
+    "name": "Radio TEDDY Berlin Brandenburg",
+    "url": "http://streamtdy.ir-media-tec.com/sc-brandenburg/mp3-128/web/play.com",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-paloma",
+    "name": "Radio Paloma",
+    "url": "http://pool.radiopaloma.de/RADIOPALOMA.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "oldenburg-eins",
+    "name": "oldenburg eins",
+    "url": "http://radio.oeins.de:8000/oeins",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-top-40",
+    "name": "radio TOP 40",
+    "url": "http://stream.radiotop40.de/live/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-energy-stuttgart",
+    "name": "RADIO ENERGY Stuttgart",
+    "url": "http://nrj.de/stuttgart",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-energy-bremen",
+    "name": "RADIO ENERGY Bremen",
+    "url": "http://nrj.de/bremen",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-teddy-gute-nacht-lieder",
+    "name": "Radio TEDDY Gute Nacht Lieder",
+    "url": "http://streamtdy.ir-media-tec.com/gutenacht/mp3-128/web/play.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-teddy-s-dwest",
+    "name": "Radio TEDDY Südwest",
+    "url": "http://streamtdy.ir-media-tec.com/sc-rlp-bw/mp3-128/web/play.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-teddy-deutsch-pop-nonstop",
+    "name": "Radio TEDDY Deutsch-Pop Nonstop",
+    "url": "http://streamtdy.ir-media-tec.com/deutschpop/mp3-128/web/play.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-teddy-kinderlieder",
+    "name": "Radio TEDDY Kinderlieder",
+    "url": "http://streamtdy.ir-media-tec.com/kinderlieder/mp3-128/web/play.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-teddy-kinder-disco",
+    "name": "Radio TEDDY Kinder Disco",
+    "url": "http://streamtdy.ir-media-tec.com/disco/mp3-128/web/play.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-teddy-kita-kabelsalat",
+    "name": "Radio TEDDY Kita Kabelsalat",
+    "url": "http://streamtdy.ir-media-tec.com/kita-kabelsalat/mp3-128/web/play.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-teddy-rolf-zuckowski",
+    "name": "Radio TEDDY Rolf Zuckowski",
+    "url": "http://streamtdy.ir-media-tec.com/zuckowski/mp3-128/web/play.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-teddy-teddy-cool-bibi-tina",
+    "name": "Radio TEDDY TEDDY Cool - Bibi & Tina",
+    "url": "http://streamtdy.ir-media-tec.com/cool/mp3-128/web/play.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-teddy-weihnachtslieder",
+    "name": "Radio TEDDY Weihnachtslieder",
+    "url": "http://streamtdy.ir-media-tec.com/weihnachtslieder/mp3-128/web/play.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "rbb-inforadio",
+    "name": "rbb Inforadio",
+    "url": "https://dispatcher.rndfnk.com/rbb/inforadio/live/mp3/mid",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "rbbkultur",
+    "name": "rbbKultur",
+    "url": "https://dispatcher.rndfnk.com/rbb/rbbkultur/live/mp3/high",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radioeins",
+    "name": "radioeins",
+    "url": "https://dispatcher.rndfnk.com/rbb/radioeins/live/mp3/mid",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "rbb-88-8",
+    "name": "rbb 88.8",
+    "url": "https://dispatcher.rndfnk.com/rbb/rbb888/live/mp3/mid",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "reboot-fm",
+    "name": "reboot.fm",
+    "url": "https://stream.reboot.fm/listen/reboot.fm/radio.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "rock-antenne",
+    "name": "ROCK ANTENNE",
+    "url": "http://mp3channels.webradio.rockantenne.de/rockantenne",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "rock-antenne-heavy-metal",
+    "name": "ROCK ANTENNE HEAVY-METAL",
+    "url": "http://stream.rockantenne.de/heavy-metal",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-teddy-schlager",
+    "name": "Radio TEDDY Schlager",
+    "url": "http://streamtdy.ir-media-tec.com/schlager/mp3-128/web/play.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-teddy-teddy-cool-eure-superstars",
+    "name": "Radio TEDDY TEDDY Cool - Eure Superstars",
+    "url": "http://streamtdy.ir-media-tec.com/eure-superstars/mp3-128/web/play.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "rockland-fm",
+    "name": "ROCKLAND.FM",
+    "url": "https://stream.rockland-digital.de/rockland/mp3-192/radio-browser/",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "rpr1",
+    "name": "RPR1",
+    "url": "http://streams.rpr1.de/rpr-koeln-128-mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "rockland-radio",
+    "name": "Rockland Radio",
+    "url": "https://streams.rockland.de/dab/mp3-192/streams.rockland.de/",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-teddy-bayern",
+    "name": "Radio TEDDY Bayern",
+    "url": "http://streamtdy.ir-media-tec.com/livestream-bayern/mp3-128/web/play.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sr-1-europawelle",
+    "name": "SR 1 Europawelle",
+    "url": "https://liveradio.sr.de/sr/sr1/mp3/128/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sr-2-kulturradio",
+    "name": "SR 2 Kulturradio",
+    "url": "https://liveradio.sr.de/sr/sr2/mp3/128/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sr-3-saarlandwelle",
+    "name": "SR 3 Saarlandwelle",
+    "url": "https://liveradio.sr.de/sr/sr3/mp3/128/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-teddy-hessen",
+    "name": "Radio TEDDY Hessen",
+    "url": "http://streamtdy.ir-media-tec.com/sc-hessen/mp3-128/web/play.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-teddy-bremen",
+    "name": "Radio TEDDY Bremen",
+    "url": "http://streamtdy.ir-media-tec.com/sc-bremen/mp3-128/web/play.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-house",
+    "name": "Sunshine Live House",
+    "url": "http://stream.sunshine-live.de/house/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live",
+    "name": "Sunshine Live",
+    "url": "http://stream.sunshine-live.de/live/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-teddy-mecklenburg-vorpommern",
+    "name": "Radio TEDDY Mecklenburg-Vorpommern",
+    "url": "http://streamtdy.ir-media-tec.com/sc-mv/mp3-128/web/play.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-classics",
+    "name": "Sunshine Live Classics",
+    "url": "http://stream.sunshine-live.de/classics/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-teddy-nordrhein-westfalen",
+    "name": "Radio TEDDY Nordrhein-Westfalen",
+    "url": "http://streamtdy.ir-media-tec.com/sc-nrw/mp3-128/web/play.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-edm",
+    "name": "Sunshine Live EDM",
+    "url": "http://stream.sunshine-live.de/edm/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-trance",
+    "name": "Sunshine Live Trance",
+    "url": "http://stream.sunshine-live.de/trance/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-hard",
+    "name": "Sunshine Live Hard",
+    "url": "http://stream.sunshine-live.de/hard/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-lounge",
+    "name": "Sunshine Live Lounge",
+    "url": "http://stream.sunshine-live.de/lounge/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-techno",
+    "name": "Sunshine Live Techno",
+    "url": "http://stream.sunshine-live.de/techno/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-teddy-th-ringen",
+    "name": "Radio TEDDY Thüringen",
+    "url": "http://streamtdy.ir-media-tec.com/sc-thueringen/mp3-128/web/play.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-festival",
+    "name": "Sunshine Live Festival",
+    "url": "http://stream.sunshine-live.de/festival/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-90er",
+    "name": "Sunshine Live 90er",
+    "url": "http://stream.sunshine-live.de/90er/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-drum-n-bass",
+    "name": "Sunshine Live Drum 'n' Bass",
+    "url": "http://stream.sunshine-live.de/dnb/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-mayday",
+    "name": "Sunshine Live Mayday",
+    "url": "http://stream.sunshine-live.de/mayday/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-hand-s-up",
+    "name": "Sunshine Live Hand's up",
+    "url": "http://stream.sunshine-live.de/handsup/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-nature-one",
+    "name": "Sunshine Live Nature One",
+    "url": "http://stream.sunshine-live.de/natureone/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-time-warp",
+    "name": "Sunshine Live Time Warp",
+    "url": "http://stream.sunshine-live.de/timewarp/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-relax",
+    "name": "Sunshine Live Relax",
+    "url": "http://stream.sunshine-live.de/relax/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-80er",
+    "name": "Sunshine Live 80er",
+    "url": "http://stream.sunshine-live.de/80er/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-2000er",
+    "name": "Sunshine Live 2000er",
+    "url": "http://stream.sunshine-live.de/2000er/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-summer-beats",
+    "name": "Sunshine Live Summer Beats",
+    "url": "http://stream.sunshine-live.de/sp2/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-chillout",
+    "name": "Sunshine Live Chillout",
+    "url": "http://stream.sunshine-live.de/sp8/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-tech-house",
+    "name": "Sunshine Live Tech House",
+    "url": "http://stream.sunshine-live.de/sp4/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "schlagerparadies",
+    "name": "Schlagerparadies",
+    "url": "https://webstream.schlagerparadies.de/schlagerparadies128.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-90s-anthems",
+    "name": "Sunshine Live 90s Anthems",
+    "url": "http://stream.sunshine-live.de/sp5/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-charts",
+    "name": "Sunshine Live Charts",
+    "url": "http://stream.sunshine-live.de/sp6/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-after-hour",
+    "name": "Sunshine Live After Hour",
+    "url": "http://stream.sunshine-live.de/sp7/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-vocal-classic-house",
+    "name": "Sunshine Live Vocal & Classic House",
+    "url": "http://stream.sunshine-live.de/vocalhouse/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-pride",
+    "name": "Sunshine Live Pride",
+    "url": "http://stream.sunshine-live.de/pride/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-tropical-house",
+    "name": "Sunshine Live Tropical House",
+    "url": "http://stream.sunshine-live.de/tropicalhouse/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-prodigy",
+    "name": "Sunshine Live Prodigy",
+    "url": "http://stream.sunshine-live.de/prodigy/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-peaceful-beats-aka-winter-chill",
+    "name": "Sunshine Live Peaceful Beats (aka Winter Chill)",
+    "url": "http://stream.sunshine-live.de/winterchill/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-focus",
+    "name": "Sunshine Live Focus",
+    "url": "http://stream.sunshine-live.de/focus/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-i-am-raving",
+    "name": "Sunshine Live I am raving",
+    "url": "http://stream.sunshine-live.de/iamraving/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-avicii",
+    "name": "Sunshine Live Avicii",
+    "url": "http://stream.sunshine-live.de/avicii/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-female-power",
+    "name": "Sunshine Live Female Power",
+    "url": "http://stream.sunshine-live.de/technoqueens/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-melodic-beats",
+    "name": "Sunshine Live Melodic Beats",
+    "url": "http://stream.sunshine-live.de/melodic-live/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-techno-live",
+    "name": "Sunshine Live Techno Live",
+    "url": "http://stream.sunshine-live.de/techno_live/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-bunker",
+    "name": "Sunshine Live Bunker",
+    "url": "http://stream.sunshine-live.de/amsterdam/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-waiting-for-the-night-aka-depeche-mode",
+    "name": "Sunshine Live Waiting for the Night (aka Depeche Mode)",
+    "url": "http://stream.sunshine-live.de/depechemode/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-ibiza",
+    "name": "Sunshine Live Ibiza",
+    "url": "http://stream.sunshine-live.de/ibiza/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-eurodance",
+    "name": "Sunshine Live Eurodance",
+    "url": "http://stream.sunshine-live.de/eurodance/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-20-jahre-sunhine-live",
+    "name": "Sunshine Live 20 Jahre Sunhine Live",
+    "url": "http://stream.sunshine-live.de/twenty/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-melodic-techno",
+    "name": "Sunshine Live Melodic Techno",
+    "url": "http://stream.sunshine-live.de/melodic-techno/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-teddy-weihnachts-hits",
+    "name": "Radio TEDDY Weihnachts-Hits",
+    "url": "http://streamtdy.ir-media-tec.com/xmas-hits/mp3-128/web/play.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-gaming-aka-gamescom",
+    "name": "Sunshine Live Gaming (aka Gamescom)",
+    "url": "http://stream.sunshine-live.de/gamescom/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-party",
+    "name": "Sunshine Live Party",
+    "url": "http://stream.sunshine-live.de/party/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-remix",
+    "name": "Sunshine Live Remix",
+    "url": "http://stream.sunshine-live.de/germante/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-psytrance",
+    "name": "Sunshine Live Psytrance",
+    "url": "http://stream.sunshine-live.de/xmas/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-clubsound-berlin",
+    "name": "Sunshine Live Clubsound Berlin",
+    "url": "http://stream.sunshine-live.de/playlist1/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-future-bass",
+    "name": "Sunshine Live Future Bass",
+    "url": "http://stream.sunshine-live.de/futurebass/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-workout",
+    "name": "Sunshine Live Workout",
+    "url": "http://stream.sunshine-live.de/workout/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-new-music",
+    "name": "Sunshine Live New Music",
+    "url": "http://stream.sunshine-live.de/newhits/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "unserding",
+    "name": "UNSERDING",
+    "url": "http://liveradio.sr.de/sr/ud/mp3/128/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "swr1-baden-w-rttemberg",
+    "name": "SWR1 Baden-Württemberg",
+    "url": "https://dispatcher.rndfnk.com/swr/swr1/bw/mp3/128/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "wdr-2",
+    "name": "WDR 2",
+    "url": "http://wdr-wdr2-rheinland.icecast.wdr.de/wdr/wdr2/rheinland/mp3/128/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-01-mai-2021-aka-backstage",
+    "name": "Sunshine Live 01. Mai 2021 (aka Backstage)",
+    "url": "http://stream.sunshine-live.de/backstage/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "swr4-baden-w-rttemberg",
+    "name": "SWR4 Baden-Württemberg",
+    "url": "https://dispatcher.rndfnk.com/swr/swr4/bw/mp3/128/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "wdr-3",
+    "name": "WDR 3",
+    "url": "http://wdr-wdr3-live.icecast.wdr.de/wdr/wdr3/live/mp3/256/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "swr1-rheinland-pfalz",
+    "name": "SWR1 Rheinland-Pfalz",
+    "url": "https://dispatcher.rndfnk.com/swr/swr1/rp/mp3/128/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "swr4-rheinland-pfalz",
+    "name": "SWR4 Rheinland-Pfalz",
+    "url": "https://dispatcher.rndfnk.com/swr/swr4/rp/mp3/128/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "swr2",
+    "name": "SWR2",
+    "url": "https://dispatcher.rndfnk.com/swr/swr2/live/mp3/256/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "wdr-4",
+    "name": "WDR 4",
+    "url": "http://wdr-wdr4-live.icecast.wdr.de/wdr/wdr4/live/mp3/128/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "wdr-5",
+    "name": "WDR 5",
+    "url": "http://wdr-wdr5-live.icecast.wdr.de/wdr/wdr5/live/mp3/128/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "you-fm",
+    "name": "YOU FM",
+    "url": "https://dispatcher.rndfnk.com/hr/youfm/live/mp3/128/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-21-hannover",
+    "name": "Radio 21 Hannover",
+    "url": "https://radio21.streamabc.net/radio21-hannover-mp3-192-3735655",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-k-ln-90er",
+    "name": "Radio Köln 90er",
+    "url": "https://stream.lokalradio.nrw/444zkbb",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-k-ln-deutschpop",
+    "name": "Radio Köln Deutschpop",
+    "url": "https://stream.lokalradio.nrw/444znpt",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-k-ln-lounge",
+    "name": "Radio Köln Lounge",
+    "url": "https://stream.lokalradio.nrw/444ztft",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-k-ln-oldie",
+    "name": "Radio Köln Oldie",
+    "url": "https://stream.lokalradio.nrw/44548n3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sunshine-live-love",
+    "name": "Sunshine Live Love",
+    "url": "http://stream.sunshine-live.de/love/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-k-ln-80er",
+    "name": "Radio Köln 80er",
+    "url": "https://stream.lokalradio.nrw/444zgxt",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-k-ln-love",
+    "name": "Radio Köln Love",
+    "url": "https://stream.lokalradio.nrw/444zwtb",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-k-ln",
+    "name": "Radio Köln",
+    "url": "https://stream.lokalradio.nrw/444z7kb",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-k-ln-rockclassic",
+    "name": "Radio Köln Rockclassic",
+    "url": "https://stream.lokalradio.nrw/44578v5",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-k-ln-urban",
+    "name": "Radio Köln Urban",
+    "url": "https://stream.lokalradio.nrw/44528bb",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-k-ln-rock",
+    "name": "Radio Köln Rock",
+    "url": "https://stream.lokalradio.nrw/444zz6t",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-k-ln-karneval",
+    "name": "Radio Köln Karneval",
+    "url": "https://stream.lokalradio.nrw/444zdhk",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-k-ln-2000er",
+    "name": "Radio Köln 2000er",
+    "url": "https://stream.lokalradio.nrw/4456wvh",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-k-ln-hiphop",
+    "name": "Radio Köln HipHop",
+    "url": "https://stream.lokalradio.nrw/4458c6f",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-k-ln-xmas",
+    "name": "Radio Köln XMAS",
+    "url": "https://stream.lokalradio.nrw/444zr3b",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-k-ln-singer",
+    "name": "Radio Köln Singer",
+    "url": "https://stream.lokalradio.nrw/44566w7",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "fm4",
+    "name": "FM4",
+    "url": "https://orf-live.ors-shoutcast.at/fm4-q2a",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-k-ln-top40",
+    "name": "Radio Köln Top40",
+    "url": "https://stream.lokalradio.nrw/44525xt",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-k-ln-country",
+    "name": "Radio Köln Country",
+    "url": "https://stream.lokalradio.nrw/4457z6s",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "hitradio-3",
+    "name": "Hitradio Ö3",
+    "url": "https://orf-live.ors-shoutcast.at/oe3-q2a",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-k-ln-schlager",
+    "name": "Radio Köln Schlager",
+    "url": "https://stream.lokalradio.nrw/44523kb",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "austria-first",
+    "name": "Austria First",
+    "url": "https://n01a-eu.rcs.revma.com/3zudpqfxh0cwv?rj-ttl=5&rj-tok=AAABm8uuzlsAWVPrc0mLiKWX-Q",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "klassik-radio",
+    "name": "Klassik Radio",
+    "url": "https://klassikr.streamabc.net/klr-krdnational-aac-128-3888428?sABC",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "1",
+    "name": "Ö1",
+    "url": "https://orf-live.ors-shoutcast.at/oe1-q2a",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-k-ln-dance",
+    "name": "Radio Köln Dance",
+    "url": "https://stream.lokalradio.nrw/4456jvv",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-k-ln-sommer",
+    "name": "Radio Köln Sommer",
+    "url": "https://stream.lokalradio.nrw/4457mts",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "life-radio",
+    "name": "Life Radio",
+    "url": "https://stream.liferadio.at/liferadio/mp3-192",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "1-campus",
+    "name": "Ö1 Campus",
+    "url": "https://orf-live.ors-shoutcast.at/campus-q2a",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-steiermark",
+    "name": "Radio Steiermark",
+    "url": "https://orf-live.ors-shoutcast.at/stm-q2a",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-tirol",
+    "name": "Radio Tirol",
+    "url": "https://orf-live.ors-shoutcast.at/tir-q2a",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-nieder-sterreich",
+    "name": "Radio Niederösterreich",
+    "url": "https://orf-live.ors-shoutcast.at/noe-q2a",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-wien",
+    "name": "Radio Wien",
+    "url": "https://orf-live.ors-shoutcast.at/wie-q2a",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-srf-1",
+    "name": "Radio SRF 1",
+    "url": "http://stream.srg-ssr.ch/m/drs1/mp3_128",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-srf-3",
+    "name": "Radio SRF 3",
+    "url": "http://stream.srg-ssr.ch/m/drs3/mp3_128",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-srf-2-kultur",
+    "name": "Radio SRF 2 Kultur",
+    "url": "http://stream.srg-ssr.ch/m/drs2/mp3_128",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-srf-musikwelle",
+    "name": "Radio SRF Musikwelle",
+    "url": "http://stream.srg-ssr.ch/m/drsmw/mp3_128",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-srf-4-news",
+    "name": "Radio SRF 4 News",
+    "url": "http://stream.srg-ssr.ch/m/drs4news/mp3_128",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-bollerwagen",
+    "name": "Radio Bollerwagen",
+    "url": "http://player.ffn.de/radiobollerwagen.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "kronehit",
+    "name": "KRONEHIT",
+    "url": "https://secureonair.krone.at/kronehit-hp.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "u1-tirol",
+    "name": "U1 Tirol",
+    "url": "https://live.u1-radio.at/stream.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "kontrafunk",
+    "name": "KONTRAFUNK",
+    "url": "https://stream.kontrafunk.radio/listen/kontrafunk/radio.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-srf-virus",
+    "name": "Radio SRF Virus",
+    "url": "http://stream.srg-ssr.ch/m/drsvirus/mp3_128",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-swiss-pop",
+    "name": "Radio Swiss Pop",
+    "url": "http://stream.srg-ssr.ch/m/rsp/mp3_128",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-swiss-jazz",
+    "name": "Radio Swiss Jazz",
+    "url": "http://stream.srg-ssr.ch/m/rsj/mp3_128",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-swiss-classic",
+    "name": "Radio Swiss Classic",
+    "url": "http://stream.srg-ssr.ch/m/rsc_de/mp3_128",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "bbc-asian-network",
+    "name": "BBC Asian Network",
+    "url": "https://a.files.bbci.co.uk/ms6/live/3441A116-B12E-4D2F-ACA8-C1984642FA4B/audio/simulcast/dash/nonuk/pc_hd_abr_v2/cfs/bbc_asian_network.mpd",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "bbc-radio-2",
+    "name": "BBC Radio 2",
+    "url": "https://a.files.bbci.co.uk/ms6/live/3441A116-B12E-4D2F-ACA8-C1984642FA4B/audio/simulcast/dash/nonuk/pc_hd_abr_v2/cfs/bbc_radio_two.mpd",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-z-risee",
+    "name": "Radio Zürisee",
+    "url": "http://mp3.radio.ch/radiozuerisee128k",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "bbc-radio-1",
+    "name": "BBC Radio 1",
+    "url": "https://a.files.bbci.co.uk/ms6/live/3441A116-B12E-4D2F-ACA8-C1984642FA4B/audio/simulcast/dash/nonuk/pc_hd_abr_v2/aks/bbc_radio_one.mpd",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "bbc-radio-1xtra",
+    "name": "BBC Radio 1Xtra",
+    "url": "https://a.files.bbci.co.uk/ms6/live/3441A116-B12E-4D2F-ACA8-C1984642FA4B/audio/simulcast/dash/nonuk/pc_hd_abr_v2/aks/bbc_1xtra.mpd",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "bbc-radio-4-extra",
+    "name": "BBC Radio 4 Extra",
+    "url": "https://a.files.bbci.co.uk/ms6/live/3441A116-B12E-4D2F-ACA8-C1984642FA4B/audio/simulcast/dash/nonuk/pc_hd_abr_v2/cfs/bbc_radio_four_extra.mpd",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "bbc-radio-3",
+    "name": "BBC Radio 3",
+    "url": "https://a.files.bbci.co.uk/ms6/live/3441A116-B12E-4D2F-ACA8-C1984642FA4B/audio/simulcast/dash/nonuk/pc_hd_abr_v2/aks/bbc_radio_three.mpd",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "bbc-radio-4",
+    "name": "BBC Radio 4",
+    "url": "https://a.files.bbci.co.uk/ms6/live/3441A116-B12E-4D2F-ACA8-C1984642FA4B/audio/simulcast/dash/nonuk/pc_hd_abr_v2/aksgc/bbc_radio_fourfm.mpd",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "bbc-radio-6-music",
+    "name": "BBC Radio 6 Music",
+    "url": "https://a.files.bbci.co.uk/ms6/live/3441A116-B12E-4D2F-ACA8-C1984642FA4B/audio/simulcast/dash/nonuk/pc_hd_abr_v2/cfs/bbc_6music.mpd",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "bbc-radio-cymru",
+    "name": "BBC Radio Cymru",
+    "url": "https://a.files.bbci.co.uk/ms6/live/3441A116-B12E-4D2F-ACA8-C1984642FA4B/audio/simulcast/dash/nonuk/pc_hd_abr_v2/cfs/bbc_radio_cymru.mpd",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "bbc-radio-foyle",
+    "name": "BBC Radio Foyle",
+    "url": "https://a.files.bbci.co.uk/ms6/live/3441A116-B12E-4D2F-ACA8-C1984642FA4B/audio/simulcast/dash/nonuk/pc_hd_abr_v2/cfs/bbc_radio_foyle.mpd",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "bbc-radio-5-live",
+    "name": "BBC Radio 5 Live",
+    "url": "https://a.files.bbci.co.uk/ms6/live/3441A116-B12E-4D2F-ACA8-C1984642FA4B/audio/simulcast/dash/nonuk/pc_hd_abr_v2/aks/bbc_radio_five_live.mpd",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "bbc-radio-scotland",
+    "name": "BBC Radio Scotland",
+    "url": "https://a.files.bbci.co.uk/ms6/live/3441A116-B12E-4D2F-ACA8-C1984642FA4B/audio/simulcast/dash/nonuk/pc_hd_abr_v2/cfs/bbc_radio_scotland_fm.mpd",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "classic-fm",
+    "name": "Classic FM",
+    "url": "http://media-ice.musicradio.com:80/ClassicFMMP3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "bbc-radio-nan-g-idheal",
+    "name": "BBC Radio nan Gàidheal",
+    "url": "https://a.files.bbci.co.uk/ms6/live/3441A116-B12E-4D2F-ACA8-C1984642FA4B/audio/simulcast/dash/nonuk/pc_hd_abr_v2/cfs/bbc_radio_nan_gaidheal.mpd",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "lbc-national",
+    "name": "LBC (national)",
+    "url": "https://media-ssl.musicradio.com/LBCUK",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "bbc-world-service",
+    "name": "BBC World Service",
+    "url": "https://a.files.bbci.co.uk/ms6/live/3441A116-B12E-4D2F-ACA8-C1984642FA4B/audio/simulcast/dash/nonuk/pc_hd_abr_v2/cfsgc/bbc_world_service_news_internet.mpd",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "bbc-radio-wales",
+    "name": "BBC Radio Wales",
+    "url": "https://a.files.bbci.co.uk/ms6/live/3441A116-B12E-4D2F-ACA8-C1984642FA4B/audio/simulcast/dash/nonuk/pc_hd_abr_v2/cfs/bbc_radio_wales_fm.mpd",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "bbc-radio-ulster",
+    "name": "BBC Radio Ulster",
+    "url": "https://a.files.bbci.co.uk/ms6/live/3441A116-B12E-4D2F-ACA8-C1984642FA4B/audio/simulcast/dash/nonuk/pc_hd_abr_v2/aks/bbc_radio_ulster.mpd",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "mouv",
+    "name": "Mouv'",
+    "url": "http://direct.mouv.fr/live/mouv-midfi.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-nova",
+    "name": "Radio Nova",
+    "url": "http://novazz.ice.infomaniak.ch/novazz-128.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "eldoradio",
+    "name": "eldoradio",
+    "url": "http://sender.eldoradio.de:8000/128.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "orange-94-0",
+    "name": "Orange 94.0",
+    "url": "https://securestream.o94.at/live.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-538-dance-department",
+    "name": "Radio 538 Dance Department",
+    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR01.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-538",
+    "name": "Radio 538",
+    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/RADIO538.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-538-hitzone",
+    "name": "Radio 538 Hitzone",
+    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR11.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-538-zomer",
+    "name": "Radio 538 Zomer",
+    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR06.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-538-drops",
+    "name": "Radio 538 Drops",
+    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR08.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-538-ibiza",
+    "name": "Radio 538 Ibiza",
+    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR19.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-zet",
+    "name": "Radio ZET",
+    "url": "https://r.dcs.redcdn.pl/sc/o2/Eurozet/live/audio.livx",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-538-non-stop",
+    "name": "Radio 538 Non-Stop",
+    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR09.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "planeta-fm",
+    "name": "Planeta FM",
+    "url": "https://pa04.cdn.eurozet.pl/pla-net.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-zet-2000",
+    "name": "Radio ZET 2000",
+    "url": "http://zet.cdn.eurozet.pl/ZET200.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-538-party",
+    "name": "Radio 538 Party",
+    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR16.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-538-verr-ckte-stunde",
+    "name": "Radio 538 Verrückte Stunde",
+    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR21.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-538-top-50-radio",
+    "name": "Radio 538 Top 50 Radio",
+    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/TLPSTR13.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "sky-radio-101-fm",
+    "name": "Sky Radio 101 FM",
+    "url": "http://playerservices.streamtheworld.com/api/livestream-redirect/SKYRADIO.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-zet-dance",
+    "name": "Radio ZET Dance",
+    "url": "http://zet.cdn.eurozet.pl/ZETDAN.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-zet-80",
+    "name": "Radio ZET 80",
+    "url": "http://zet.cdn.eurozet.pl/ZET080.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-veronica",
+    "name": "Radio Veronica",
+    "url": "http://playerservices.streamtheworld.com/api/livestream-redirect/VERONICA.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-zet-hits",
+    "name": "Radio ZET Hits",
+    "url": "http://zet.cdn.eurozet.pl/ZETHIT.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-zet-90",
+    "name": "Radio ZET 90",
+    "url": "http://zet.cdn.eurozet.pl/ZET090.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-2000",
+    "name": "Radio 2000",
+    "url": "https://stream.radio2000.it",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-manele",
+    "name": "Radio Manele",
+    "url": "https://ssl.servereradio.ro/8044/stream",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-zet-party",
+    "name": "Radio ZET Party",
+    "url": "http://zet.cdn.eurozet.pl/ZETPAR.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-zet-love",
+    "name": "Radio ZET Love",
+    "url": "https://zt02.cdn.eurozet.pl/ZETLOV.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "radio-zet-pl",
+    "name": "Radio ZET PL",
+    "url": "http://zet.cdn.eurozet.pl/ZETPL1.mp3",
+    "category": "Unsortiert",
+    "enabled": true
+  },
+  {
+    "id": "rmf-fm",
+    "name": "RMF FM",
+    "url": "https://rs103-krk.rmfstream.pl/RMFFM48",
+    "category": "Unsortiert",
+    "enabled": true
   }
 ]

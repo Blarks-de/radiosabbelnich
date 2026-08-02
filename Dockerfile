@@ -21,6 +21,7 @@ COPY speech_detector.py .
 COPY webui.py .
 COPY stations_store.py .
 COPY settings_store.py .
+COPY station_import.py .
 COPY stations.json .
 COPY radiozapper.webp .
 

@@ -26,6 +26,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import fingerprint
 import settings_store
+import station_import
 import stations_store
 
 # Einmalig beim Modul-Import gelesen (statt bei jedem Request von der
@@ -206,6 +207,77 @@ class SwitcherState:
             flag = self._filter_toggle_requested
             self._filter_toggle_requested = False
             return flag
+
+
+class ImportState:
+    """Thread-sicherer Fortschritts-/Ergebnis-Tracker für den Sender-
+    Import (station_import.py). Läuft komplett unabhängig von
+    SwitcherState/dem Hauptloop — der Import schreibt direkt in
+    stations.json über stations_store.bulk_add(), genau wie die übrigen
+    Config-Seiten-Aktionen (add/update/delete), und stößt danach wie die
+    auch nur ein state.request_reload() an. Ein eigenes Objekt statt in
+    SwitcherState, weil das hier rein webui-intern ist (Downloaden/Prüfen
+    einer Playlist), der Hauptloop muss davon nichts wissen.
+
+    Der Import selbst läuft in einem Hintergrund-Thread (kann bei einer
+    langen Playlist mehrere Minuten dauern) — die Config-Seite pollt
+    snapshot() für die Fortschrittsanzeige ("X von Y geprüft")."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._running = False
+        self._phase = "idle"  # idle | downloading | checking | done | error
+        self._checked = 0
+        self._total = 0
+        self._result = None
+        self._error = None
+
+    def start(self) -> bool:
+        """Markiert einen Import als laufend. Gibt False zurück, wenn
+        schon einer läuft (Aufrufer soll das dann nicht nochmal starten)."""
+        with self._lock:
+            if self._running:
+                return False
+            self._running = True
+            self._phase = "downloading"
+            self._checked = 0
+            self._total = 0
+            self._result = None
+            self._error = None
+            return True
+
+    def set_phase(self, phase: str, total: int = None):
+        with self._lock:
+            self._phase = phase
+            if total is not None:
+                self._total = total
+
+    def increment_checked(self):
+        with self._lock:
+            self._checked += 1
+
+    def finish(self, result: dict):
+        with self._lock:
+            self._running = False
+            self._phase = "done"
+            self._result = result
+
+    def fail(self, error: str):
+        with self._lock:
+            self._running = False
+            self._phase = "error"
+            self._error = error
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            return {
+                "running": self._running,
+                "phase": self._phase,
+                "checked": self._checked,
+                "total": self._total,
+                "result": self._result,
+                "error": self._error,
+            }
 
 
 def _fetch_listeners(admin_url, user, password, mount, timeout=3):
@@ -641,6 +713,24 @@ _CONFIG_PAGE_HTML = """<!doctype html>
   }
   form#settings-form button { padding: .6rem; font-size: 1rem; cursor: pointer; }
   form#settings-form .hint { font-size: .8rem; color: #888; margin: 0; }
+  form#import-form {
+    margin-top: 1.5rem; padding: 1rem; border: 1px solid #8884; border-radius: .5rem;
+    display: grid; gap: .6rem;
+  }
+  form#import-form label { display: grid; gap: .25rem; font-size: .9rem; }
+  form#import-form input {
+    padding: .5rem; font-size: 1rem; width: 100%; box-sizing: border-box;
+  }
+  form#import-form button { padding: .6rem; font-size: 1rem; cursor: pointer; }
+  form#import-form .hint { font-size: .8rem; color: #888; margin: 0; }
+  #import-progress { font-size: .9rem; margin-top: .5rem; min-height: 1.2em; }
+  section#fingerprint-section {
+    margin-top: 1.5rem; padding: 1rem; border: 1px solid #8884; border-radius: .5rem;
+  }
+  section#fingerprint-section button {
+    padding: .6rem 1rem; font-size: 1rem; cursor: pointer; border-radius: .4rem;
+    border: 1px solid #c33; color: #c33; background: none;
+  }
   #msg { margin-top: 1rem; font-size: .9rem; min-height: 1.2em; }
   #msg.error { color: #d33; }
   #msg.ok { color: #2a7a4a; }
@@ -661,6 +751,19 @@ _CONFIG_PAGE_HTML = """<!doctype html>
   <button type="submit">Hinzufügen</button>
 </form>
 
+<h2>📻 Sender-Import</h2>
+<form id="import-form">
+  <p class="hint">Lädt eine M3U-Playlist, prüft jeden Sender per ffprobe
+    auf Erreichbarkeit und übernimmt nur funktionierende, noch nicht
+    vorhandene Sender in die Kategorie "Unsortiert". Kann bei einer
+    langen Liste einige Minuten dauern.</p>
+  <label>Playlist-URL
+    <input type="url" id="import-url" placeholder="http://...">
+  </label>
+  <button type="submit" id="btn-import">Sender importieren</button>
+</form>
+<div id="import-progress"></div>
+
 <h2>⏱ Puffer-Einstellungen</h2>
 <form id="settings-form">
   <p class="hint">Die nächsten Sender in Rotationsreihenfolge laufen im
@@ -674,6 +777,13 @@ _CONFIG_PAGE_HTML = """<!doctype html>
   </label>
   <button type="submit">Speichern</button>
 </form>
+
+<section id="fingerprint-section">
+  <h2 style="margin-top:0">🗑 Fingerprint-Datenbank</h2>
+  <p class="hint">Löscht alle gelernten Jingle-/Werbespot-Clips (nicht
+    die Senderliste). Danach lernt die Erkennung wieder bei Null.</p>
+  <button type="button" id="btn-clear-fingerprints">Clip-DB leeren</button>
+</section>
 
 <div id="msg"></div>
 
@@ -884,8 +994,9 @@ async function loadSettings() {
     const settings = await api('/api/config/settings');
     document.getElementById('settings-seconds').value = settings.prebuffer_seconds;
     document.getElementById('settings-count').value = settings.prebuffer_count;
+    document.getElementById('import-url').value = settings.import_url;
   } catch (e) {
-    showMsg('Konnte Puffer-Einstellungen nicht laden: ' + e.message, true);
+    showMsg('Konnte Einstellungen nicht laden: ' + e.message, true);
   }
 }
 
@@ -905,8 +1016,92 @@ document.getElementById('settings-form').addEventListener('submit', async (ev) =
   }
 });
 
+let importPolling = null;
+
+function setImportProgress(text) {
+  document.getElementById('import-progress').textContent = text;
+}
+
+async function pollImportStatus() {
+  let data;
+  try {
+    data = await api('/api/config/import/status');
+  } catch (e) {
+    setImportProgress('Fehler beim Abfragen des Fortschritts: ' + e.message);
+    return;
+  }
+
+  if (data.phase === 'downloading') {
+    setImportProgress('Lade Playlist …');
+  } else if (data.phase === 'checking') {
+    setImportProgress(`Prüfe Sender … ${data.checked} von ${data.total}`);
+  }
+
+  if (!data.running) {
+    clearInterval(importPolling);
+    importPolling = null;
+    document.getElementById('btn-import').disabled = false;
+    if (data.phase === 'error') {
+      setImportProgress('');
+      showMsg('Import fehlgeschlagen: ' + data.error, true);
+    } else if (data.phase === 'done' && data.result) {
+      const r = data.result;
+      setImportProgress('');
+      showMsg(`${r.checked} Sender geprüft, ${r.working} funktionieren, ` +
+              `${r.added} neu hinzugefügt zu "Unsortiert".`, false);
+      loadStations();
+    }
+  }
+}
+
+document.getElementById('import-form').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const import_url = document.getElementById('import-url').value;
+  const btn = document.getElementById('btn-import');
+  try {
+    // URL mitspeichern, falls geändert, bevor der Import losläuft
+    await api('/api/config/settings', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({import_url}),
+    });
+    btn.disabled = true;
+    setImportProgress('Starte Import …');
+    await api('/api/config/import/start', {method: 'POST'});
+    if (importPolling) clearInterval(importPolling);
+    importPolling = setInterval(pollImportStatus, 1000);
+    pollImportStatus();
+  } catch (e) {
+    btn.disabled = false;
+    showMsg('Fehler: ' + e.message, true);
+  }
+});
+
+document.getElementById('btn-clear-fingerprints').addEventListener('click', async () => {
+  if (!confirm('Wirklich ALLE gelernten Fingerprint-Clips löschen? Das kann nicht rückgängig gemacht werden.')) {
+    return;
+  }
+  try {
+    const data = await api('/api/fingerprint/clear', {method: 'POST'});
+    showMsg(`${data.cleared} Clip(s) aus der Fingerprint-Datenbank gelöscht.`, false);
+  } catch (e) {
+    showMsg('Fehler: ' + e.message, true);
+  }
+});
+
 loadStations();
 loadSettings();
+
+// Falls die Seite neu geladen wird, während ein Import noch läuft (z.B.
+// nach einem Reload), sofort den Fortschritt abfragen und ggf. weiter pollen.
+(async () => {
+  const data = await api('/api/config/import/status').catch(() => null);
+  if (data && data.running) {
+    document.getElementById('btn-import').disabled = true;
+    importPolling = setInterval(pollImportStatus, 1000);
+    pollImportStatus();
+  }
+})();
 </script>
 </body>
 </html>
@@ -916,6 +1111,8 @@ loadSettings();
 def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: str):
     """Baut eine BaseHTTPRequestHandler-Subklasse mit state/icecast_cfg im
     Closure — so bleibt der Handler selbst zustandslos und threadsicher."""
+
+    import_state = ImportState()
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
@@ -967,6 +1164,8 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                 })
             elif self.path == "/api/config/settings":
                 self._send_json(settings_store.load())
+            elif self.path == "/api/config/import/status":
+                self._send_json(import_state.snapshot())
             else:
                 self.send_error(404)
 
@@ -979,12 +1178,16 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                 self._handle_filter_toggle()
             elif self.path == "/api/fingerprint/undo":
                 self._handle_fingerprint_undo()
+            elif self.path == "/api/fingerprint/clear":
+                self._handle_fingerprint_clear()
             elif self.path == "/api/config/stations":
                 self._handle_add_station()
             elif self.path.startswith("/api/config/stations/"):
                 self._handle_station_action()
             elif self.path == "/api/config/settings":
                 self._handle_update_settings()
+            elif self.path == "/api/config/import/start":
+                self._handle_import_start()
             else:
                 self.send_error(404)
 
@@ -994,11 +1197,46 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                 settings = settings_store.update(
                     prebuffer_seconds=payload.get("prebuffer_seconds"),
                     prebuffer_count=payload.get("prebuffer_count"),
+                    import_url=payload.get("import_url"),
                 )
                 state.request_reload()
                 self._send_json({"ok": True, "settings": settings})
             except ValueError as e:
                 self._send_json({"ok": False, "error": str(e)}, status=400)
+
+        def _handle_fingerprint_clear(self):
+            # "Clip-DB leeren"-Knopf: löscht ALLE gelernten Fingerprint-
+            # Clips (nicht stations.json!). Sicherheitsabfrage passiert im
+            # Frontend (confirm()) — hier keine weitere Rückfrage nötig.
+            cleared = fingerprint.clear_all(fingerprint_db_path)
+            self._send_json({"ok": True, "cleared": cleared})
+
+        def _handle_import_start(self):
+            # "Sender importieren"-Knopf: laden+prüfen kann bei einer
+            # langen Playlist mehrere Minuten dauern -> läuft in einem
+            # Hintergrund-Thread, die Config-Seite pollt
+            # /api/config/import/status für den Fortschritt.
+            if not import_state.start():
+                self._send_json({
+                    "ok": False,
+                    "error": "Es läuft bereits ein Import.",
+                }, status=409)
+                return
+
+            settings = settings_store.load()
+            import_url = settings["import_url"]
+
+            def worker():
+                try:
+                    result = station_import.run_import(import_url, progress=import_state)
+                    import_state.finish(result)
+                    if result["added"]:
+                        state.request_reload()
+                except Exception as e:
+                    import_state.fail(str(e))
+
+            threading.Thread(target=worker, daemon=True).start()
+            self._send_json({"ok": True})
 
         def _handle_skip(self):
             # "Gesabbel!"-Knopf: Nutzer hat selbst Sprache erkannt, auch

@@ -2,11 +2,12 @@
 """
 settings_store.py — Laufzeit-Einstellungen, persistiert in settings.json.
 
-Aktuell nur die Prebuffer-Parameter (wie viele Sekunden/Sender im Voraus
-gepuffert werden, siehe PrebufferedSource in radiozapper.py). Analog zu
-stations_store.py: eigener Lock, direktes Schreiben statt write-temp-
-then-rename (settings.json ist wie stations.json einzeln gebindmountet,
-os.replace() schlägt darüber mit "Device or resource busy" fehl).
+Prebuffer-Parameter (wie viele Sekunden/Sender im Voraus gepuffert
+werden, siehe PrebufferedSource in radiozapper.py) und die Import-URL
+für den Sender-Import (station_import.py). Analog zu stations_store.py:
+eigener Lock, direktes Schreiben statt write-temp-then-rename
+(settings.json ist wie stations.json einzeln gebindmountet, os.replace()
+schlägt darüber mit "Device or resource busy" fehl).
 """
 
 import json
@@ -18,6 +19,7 @@ SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settin
 DEFAULTS = {
     "prebuffer_seconds": 10.0,
     "prebuffer_count": 5,
+    "import_url": "http://bit.ly/kn-kodi-radio",
 }
 
 # (min, max) — grobe Leitplanken gegen Tippfehler/Unsinn, nicht als
@@ -51,9 +53,9 @@ def load() -> dict:
         return _read_raw()
 
 
-def update(prebuffer_seconds=None, prebuffer_count=None) -> dict:
+def update(prebuffer_seconds=None, prebuffer_count=None, import_url=None) -> dict:
     """Aktualisiert nur die übergebenen Felder (None = unverändert lassen),
-    validiert gegen LIMITS. Wirft ValueError bei ungültigen Werten."""
+    validiert. Wirft ValueError bei ungültigen Werten."""
     with _lock:
         data = _read_raw()
         if prebuffer_seconds is not None:
@@ -74,5 +76,12 @@ def update(prebuffer_seconds=None, prebuffer_count=None) -> dict:
             if not (lo <= prebuffer_count <= hi):
                 raise ValueError(f"prebuffer_count muss zwischen {lo} und {hi} liegen.")
             data["prebuffer_count"] = prebuffer_count
+        if import_url is not None:
+            import_url = str(import_url).strip()
+            if not import_url:
+                raise ValueError("import_url darf nicht leer sein.")
+            if not (import_url.startswith("http://") or import_url.startswith("https://")):
+                raise ValueError("import_url muss mit http:// oder https:// beginnen.")
+            data["import_url"] = import_url
         _write(data)
         return data

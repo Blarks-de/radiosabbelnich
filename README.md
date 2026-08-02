@@ -92,8 +92,15 @@ Erreichbar unter `http://<host>:5000/`:
 - **Hörer-Übersicht** — wer gerade zuhört (IP/Client/Verbindungsdauer)
 - **⚙ Sender verwalten** (`/config`) — Sender hinzufügen, bearbeiten,
   löschen, per Haken (de)aktivieren, gruppiert nach Kategorie
-  (Lokal/Regional/National/International/Global/Interstellar).
+  (Lokal/Regional/National/International/Global/Interstellar/Unsortiert).
   Änderungen wirken sofort, ohne Neustart.
+- **📻 Sender-Import** (auf der Config-Seite) — lädt eine M3U-Playlist
+  (Default: die Kodinerds-Kodi-Radioliste), prüft jeden Sender per
+  ffprobe auf Erreichbarkeit (parallel, mit Fortschrittsanzeige) und
+  übernimmt nur funktionierende, noch nicht vorhandene Sender in die
+  Kategorie "Unsortiert". Manueller Trigger, kein Auto-Import.
+- **🗑 Clip-DB leeren** (auf der Config-Seite) — löscht alle gelernten
+  Fingerprint-Clips (nicht die Senderliste), mit Sicherheitsabfrage.
 
 Der rohe Icecast-Stream bleibt parallel unter `http://<host>:8000/radiozapper.mp3`
 erreichbar (z.B. für VLC).
@@ -106,7 +113,8 @@ erreichbar (z.B. für VLC).
 | `speech_detector.py` | Silero-VAD-Wrapper mit Signal-Heuristik-Fallback |
 | `fingerprint.py` | Audio-Fingerprinting (Constellation-Map-Hashing) in SQLite |
 | `stations_store.py` | Laden/Speichern/CRUD der Senderliste (`stations.json`) |
-| `settings_store.py` | Laufzeit-Einstellungen (Puffer-Parameter, `settings.json`) |
+| `settings_store.py` | Laufzeit-Einstellungen (Puffer-Parameter, Import-URL, `settings.json`) |
+| `station_import.py` | M3U-Import: laden, parsen, per ffprobe parallel auf Erreichbarkeit prüfen |
 | `webui.py` | Eingebettetes Web-Interface (Player-Seite + Config-Seite) |
 | `stations.json` | Senderliste (Name, URL, Kategorie, aktiv/inaktiv) |
 | `docker-compose.yml` | Icecast + RadioZapper als zwei Services |

@@ -1025,3 +1025,127 @@ kurieren.
   Fehlerquote im Live-Betrieb niedrig?) noch ausstehend — dafür sind die
   WAV-Mitschnitte (`fingerprint_clips/`) weiterhin aktiv, falls doch mal
   wieder was Verdächtiges auftaucht.
+
+## 2026-08-02 (Fortsetzung) — Sender-Import aus Kodinerds-Radioliste
+
+Neue Funktion nach genauer Spezifikation: Sender aus einer M3U-Playlist
+(Default: Kodinerds-Kodi-Radioliste) importieren, mit Erreichbarkeits-
+Check, Duplikat-Vermeidung, Kategorie "Unsortiert", Fortschrittsanzeige.
+Zusätzlich ein "Clip-DB leeren"-Knopf für die Fingerprint-DB.
+
+### Vorarbeit (wie angefordert): bestehende Struktur zuerst angeschaut
+- `stations_store.py`: Schema `{id, name, url, category, enabled}`,
+  `CATEGORIES`-Liste bestimmt Anzeigereihenfolge auf der Config-Seite
+  (einfache Iteration `for cat of categories`).
+- `settings_store.py`: bereits etabliertes Muster für Config-Seiten-
+  Einstellungen (`DEFAULTS`/`update()`/eigener Lock) — für die Import-URL
+  wiederverwendet statt was Neues zu erfinden.
+- Reale M3U live geladen (`http://bit.ly/kn-kodi-radio` -> redirectet zu
+  einem GitHub-Raw-Link, 362 Einträge): Extended-M3U-Format,
+  `#EXTINF:-1 tvg-name="..." group-title="..." ...,Anzeigename` gefolgt
+  von der Stream-URL-Zeile — Name ist der Teil NACH dem letzten Komma.
+
+### Erreichbarkeits-Check: ffprobe statt HTTP HEAD/GET (Begründung)
+Live an drei Beispielen verifiziert, bevor die Entscheidung fiel:
+- Normale Stream-URL: ffprobe liefert in ~1s `audio`.
+- Eine verschachtelte `.m3u`-Playlist-URL (kommt in der Kodinerds-Liste
+  vor, z.B. AntenneSaar): ffprobe lehnt mit "Invalid data found when
+  processing input" ab — und das ist KORREKT, denn unser eigener Player
+  (`StreamSource` in radiozapper.py) ruft genau denselben
+  `ffmpeg -i url`-Demuxer-Stack auf und könnte diese URL genauso wenig
+  direkt abspielen. Ein simples HTTP-GET hätte 200 OK gemeldet und die
+  URL fälschlich als "erreichbar" durchgewunken.
+- Nicht existente Domain: DNS-Fehler in ~0.06s, kein Hängen.
+Begründung: ffprobe prüft exakt das, was zählt ("kann unser Player das
+wirklich abspielen"), nicht nur "antwortet der Server auf HTTP".
+
+### Implementierung
+- `stations_store.py`: `CATEGORIES` um `"Unsortiert"` erweitert (bewusst
+  als LETZTES Element -> erscheint auf der Config-Seite immer nach allen
+  "richtigen" Kategorien, ohne Sonderlogik nötig — die Seite iteriert
+  einfach in `CATEGORIES`-Reihenfolge). Neue Konstante `IMPORT_CATEGORY
+  = "Unsortiert"`. Neue Funktion `bulk_add(entries, category)`: ein
+  Read+Write für die ganze Charge statt einem Lock-Zyklus pro Sender
+  (bei 300+ Sendern spürbar effizienter als N Einzel-`add()`-Aufrufe).
+- `settings_store.py`: `import_url` zu `DEFAULTS` hinzugefügt (Default
+  `http://bit.ly/kn-kodi-radio`), `update()` validiert auf nicht-leer +
+  `http(s)://`-Präfix (kein `LIMITS`-Zahlenbereich wie bei den
+  Puffer-Werten, andere Art von Eingabe).
+- `fingerprint.py`: neue Funktion `clear_all(db_path)` — löscht ALLE
+  Clips+Hashes (nicht die Datei, nicht stations.json), eigene kurze
+  SQLite-Connection aus demselben Grund wie `delete_clip()` (Thread-
+  Sicherheit gegenüber der laufenden `FingerprintDB`-Instanz).
+- Neues Modul `station_import.py`: `fetch_m3u()` (urllib, User-Agent
+  gesetzt), `parse_m3u()` (Regex auf `#EXTINF:[^,]*,(.*)$` für den
+  Namen, nächste Nicht-Kommentar-Zeile als URL), `check_reachable()`
+  (ffprobe-Aufruf mit Timeout, siehe oben), `run_import()`
+  (Orchestrierung: laden -> `ThreadPoolExecutor(max_workers=10)` für die
+  parallelen Checks mit `as_completed()` -> Duplikat-Filter gegen
+  bestehende Sender UND innerhalb der eigenen Charge -> `bulk_add()`).
+  `run_import()` nimmt ein optionales `progress`-Objekt
+  (`set_phase()`/`increment_checked()`) für die Fortschrittsanzeige,
+  ohne dass das Modul selbst irgendwas über HTTP/Threading auf
+  Webserver-Seite wissen muss (sauberer Schnitt).
+- `webui.py`:
+  - Neue Klasse `ImportState` (analog zu `SwitcherState`, aber komplett
+    unabhängig davon — der Import ist reine Webserver-Sache, der
+    Hauptloop bekommt davon nichts mit außer dem normalen
+    `state.request_reload()` danach, genau wie bei jeder anderen
+    Sender-Änderung über die Config-Seite). Eine Instanz pro
+    `make_handler()`-Aufruf (= einmal pro Prozesslaufzeit).
+  - Import läuft in einem `threading.Thread(daemon=True)` — bei 362
+    Sendern und 10-facher Parallelität dauert der komplette Durchlauf
+    ca. 40-45s (live gemessen), das würde einen synchronen HTTP-Request
+    blockieren; `POST /api/config/import/start` gibt deshalb sofort
+    zurück, `GET /api/config/import/status` liefert den Fortschritt zum
+    Pollen. Schutz gegen doppeltes Starten: `ImportState.start()` gibt
+    `False` zurück, wenn schon einer läuft -> Endpunkt antwortet mit 409.
+  - Neuer Endpunkt `POST /api/fingerprint/clear` für den "Clip-DB
+    leeren"-Knopf (Sicherheitsabfrage sitzt im Frontend als
+    `confirm()`, nicht serverseitig — reicht für eine Config-Seite ohne
+    Auth im eigenen Netz).
+  - `_handle_update_settings` um `import_url` erweitert (nutzt einfach
+    `settings_store.update()`s neuen Parameter durch).
+  - Config-Seite: neue Sektion "📻 Sender-Import" (URL-Feld,
+    "Sender importieren"-Button, Fortschritts-/Ergebnisanzeige mit
+    1s-Polling) und "🗑 Fingerprint-Datenbank" (Button + `confirm()`).
+    Beim Laden der Config-Seite wird außerdem geprüft, ob gerade schon
+    ein Import läuft (z.B. nach einem Seiten-Reload mittendrin) und das
+    Polling ggf. sofort fortgesetzt.
+- `Dockerfile`: `COPY station_import.py .` ergänzt. Kein neues Volume in
+  `docker-compose.yml` nötig — `station_import.py` ist Code (landet im
+  Image), schreibt nur in bereits gemountete `stations.json`/
+  `settings.json`.
+
+### Verifiziert (echter Import gegen die echte Kodinerds-Liste, kein Mock)
+- Isolierter Test zuerst: `parse_m3u()` gegen die echte Liste -> 362
+  Sender korrekt geparst. `run_import()` mit einer kleinen Test-Playlist
+  (2x derselbe erreichbare Sender, 1 nicht-existent, 1 verschachtelte
+  M3U, gegen eine vorbelegte Test-`stations.json` mit einem Namens- UND
+  einem URL-Duplikat) -> alle Fälle korrekt behandelt: `checked=5,
+  working=3, added=1`, Namens- und URL-Duplikate beide korrekt
+  übersprungen, verschachtelte M3U und nicht-existente Domain korrekt
+  als nicht erreichbar erkannt.
+- Danach live über die echten API-Endpunkte gegen die echte, gerade
+  laufende stations.json (12 Sender): Import gestartet, Fortschritt per
+  Polling verfolgt (`19 von 362` -> `333 von 362` -> `362 von 362`),
+  Ergebnis `{"checked": 362, "working": 349, "added": 344}`. Finale
+  `stations.json`-Prüfung: 356 Sender gesamt (12+344), keine
+  Namensduplikate, "Unsortiert" korrekt mit 344 Einträgen, erscheint auf
+  der Config-Seite nach allen anderen Kategorien.
+  **Diese 344 Sender sind jetzt live im System** (nicht zurückgesetzt —
+  legitimer Test des Features mit echten Daten, Kategorisierung/Aufräumen
+  bleibt dem Nutzer über die Config-Seite überlassen, genau wie das
+  Feature es vorsieht).
+- 409-Schutz gegen doppelten Start verifiziert (zweiter Start-Request
+  während des laufenden ersten Imports -> `409 Es läuft bereits ein
+  Import.`).
+- Re-Import (gleiche URL, gegen die jetzt schon 356 Sender umfassende
+  Liste) korrekt mit `added: 0` (alle 347 erreichbaren waren schon
+  vorhanden) — Dedupe funktioniert auch über mehrere Import-Läufe hinweg.
+- Player währenddessen durchgehend stabil: trotz Sprung von 12 auf 356
+  aktive Sender blieb die Prozesszahl bei 7 ffmpeg-Prozessen (Prebuffer-
+  Anzahl ist unabhängig von der Gesamt-Senderzahl), Stream weiterhin
+  44.1kHz/Stereo.
+- `fingerprint.clear_all()` über `POST /api/fingerprint/clear` getestet:
+  13 Clips gelöscht, DB danach leer, `stations.json` unangetastet.

@@ -264,3 +264,23 @@ def delete_clip(db_path: str, clip_id: int) -> Optional[str]:
         return row[0]
     finally:
         conn.close()
+
+
+def clear_all(db_path: str) -> int:
+    """Löscht ALLE gelernten Clips + Hashes (nicht die Datei selbst, nicht
+    stations.json). Für den "Clip-DB leeren"-Knopf auf der Config-Seite —
+    z.B. nützlich nach einem Algorithmus-Wechsel (alte Hashes sind mit
+    einem neuen Verfahren nicht mehr sinnvoll vergleichbar) oder wenn man
+    einfach komplett neu lernen lassen will. Eigene kurze Connection aus
+    demselben Grund wie delete_clip(). Gibt die Anzahl gelöschter Clips
+    zurück."""
+    conn = sqlite3.connect(db_path)
+    try:
+        c = conn.cursor()
+        count = c.execute("SELECT COUNT(*) FROM clips").fetchone()[0]
+        c.execute("DELETE FROM hashes")
+        c.execute("DELETE FROM clips")
+        conn.commit()
+        return count
+    finally:
+        conn.close()
