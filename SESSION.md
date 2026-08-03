@@ -1443,3 +1443,246 @@ Das steht so auch in der Startmeldung im Log ("grob X Min."). Für einen
 manuell ausgelösten Import, der einmal im Monat läuft, ist das der
 richtige Tausch: die Alternative war ein Sender, der den Player nachts
 8,5 Stunden lahmlegt.
+
+## 2026-08-03 (Fortsetzung) — Prebuffer-Burst: nur die Lücke ausstrahlen
+
+Letzter offener Punkt aus dem Review mit messbarer Auswirkung auf Hörer.
+
+### Befund
+
+Beim Übernehmen eines Hintergrund-Puffers ging bisher der **komplette**
+Puffer an den Encoder (`output.write(buf_stereo)`), also bis zu
+`prebuffer_seconds` = 10s Audio auf einen Schlag. Am laufenden Betrieb
+gemessen: 87,6s Audio in 75s Wall-Clock, 224 statt 192 kbit/s. Drei Folgen:
+
+- Der Hörer rutscht mit jedem Zap ~10s weiter hinter Live, **kumulativ** —
+  das holt nichts wieder auf.
+- Er hört denselben Zeitraum doppelt: die letzten 10s des alten Senders
+  waren schon raus, dann kommen die letzten 10s des neuen.
+- Icecasts Client-Queue (`queue-size` 524288 B ≈ 21s bei 192 kbit/s) läuft
+  bei ein paar schnellen Wechseln über → Hörer fliegen raus.
+
+### Denkfehler dahinter
+
+Der Ringpuffer enthält Audio, das bis zu 10s **alt** ist. Ihn auszustrahlen
+heißt, bewusst alte Audio zu senden. Gebraucht wird er nur, um die Lücke zu
+füllen, die während der Übergabe entsteht (`promote()`/`join()`/
+Klassifikation) — das sind typisch Bruchteile einer Sekunde, in Ausnahmen
+ein paar Sekunden.
+
+### Umsetzung (`radiozapper.py`)
+
+- Neuer modulweiter Helper `stereo_tail(stereo, seconds, sample_rate)`.
+  Wichtig: der Schnitt wird **ab Array-Anfang** in Frames gerechnet, nicht
+  per `stereo[-n:]`. Beim Testen aufgefallen: endet der Puffer mit einem
+  angefangenen Halb-Frame (möglich, wenn ein `read_window()` in den Timeout
+  lief und mit ungerader Sample-Zahl zurückkam), landet ein naives
+  Tail-Slice auf ungeradem Index und **vertauscht ab da links und rechts**.
+- `write_audio(pcm)` als einziger Schreibpfad zum Output; führt Buch, wann
+  zuletzt geschrieben wurde (`last_output_at`). Alle bisherigen
+  `output.write()`-Aufrufe (Hauptloop, `quick_forward`, Probe-Fenster,
+  beide Puffer-Übernahmen) laufen jetzt darüber.
+- `promote_bridge(buf_stereo)` liefert genau so viel Audio, wie seit dem
+  letzten Schreiben Wall-Clock-Zeit vergangen ist. Damit bleibt die
+  Audio-Zeitachse deckungsgleich mit der echten Zeit — der Puffer
+  kompensiert die Übergabedauer, statt sie zu überzahlen. Selbstkorrigierend:
+  dauerte die Übergabe ausnahmsweise 2,5s, werden 2,5s überbrückt; dauerte
+  sie 0,14s, eben 0,14s.
+- `prebuffer_seconds` bedeutet dadurch etwas Sinnvolles: die Obergrenze
+  dafür, wie lange ein Wechsel dauern darf, ohne dass eine Lücke entsteht.
+
+### Verifiziert
+
+- **Unit** (`stereo_tail`): 1s aus 10s exakt das Pufferende, 0,25s,
+  "mehr angefordert als vorhanden" → alles, 0s/negativ/leerer Puffer → leer,
+  ungerade Puffergröße → Ergebnis bleibt frame-sauber (L/R korrekt), 1 Sample
+  → leer, 1 Frame → genau dieses Frame.
+- **Live gemessen** am Deployment, drei erzwungene Wechsel während eines
+  100s-Mitschnitts: **102,7s Audio in 100s** (197,3 kbit/s). Die
+  Bridge-Zeilen im Log zeigen 0,14s / 0,45s / 2,53s / 0,25s überbrückt bei
+  jeweils 10,0s vorhandenem Puffer.
+- **Kontrollmessung ohne Wechsel**: 42,5s Audio in 40s, also derselbe
+  Überschuss von ~2,5s. Der stammt nicht aus den Wechseln, sondern aus
+  Icecasts `burst-on-connect` (65536 B = 2,73s bei 192 kbit/s), den der
+  Mitschnitt beim Verbinden geschenkt bekommt.
+- Damit: **Drift pro Wechsel vorher ~10s, jetzt praktisch 0.** (Die
+  75s-Messung von vorhin enthielt dieselben 2,7s Connect-Burst, der reale
+  Überschuss dort war also ~9,9s = genau ein Puffer.)
+
+### Weiterhin offen
+
+Der *frische* Wechselpfad in `do_switch()` (nicht gepufferter Kandidat)
+macht `time.sleep(1.5)` und schreibt danach ein einzelnes Probe-Fenster —
+der produziert also weniger Audio als Wall-Clock-Zeit vergeht, also eher
+eine kleine Lücke statt Überschuss. Nicht angefasst; betrifft nur Kandidaten
+jenseits der ersten `prebuffer_count` Sender.
+
+## 2026-08-03 (Fortsetzung) — Neues Feature: Nachrichten-Pause / News-Zapper
+
+Wunsch: zur vollen und halben Stunde, wo praktisch jeder Sender
+Nachrichten sendet, für ein kurzes Zeitfenster stattdessen eine zufällige
+MP3 aus einem lokalen Ordner (SMB-Mount) spielen, danach automatisch
+zurück zum pausierten Sender.
+
+### Architekturentscheidung (vor der Umsetzung mit Nutzer abgestimmt)
+
+Statt eines synthetischen "Sender"-Objekts bleibt `current` (die lokale
+Variable im Hauptloop) während der Pause bewusst UNVERÄNDERT der
+pausierte Sender. Nur `source` wird kurz auf die MP3 umgehängt und über
+dieselbe `switch_to_station()`-Funktion zurückgeschaltet, die auch jeder
+normale Wechsel benutzt. Damit läuft Prebuffering für die übrigen Sender
+während der Pause unbeeinflusst weiter (keine Sonderbehandlung nötig),
+und Watchdog/do_switch bekommen die synthetische ID nie zu Gesicht, weil
+sie während der Pause schlicht nicht aufgerufen werden. Das
+Web-Interface zeigt trotzdem korrekt "📰 Nachrichten-Pause": eine neue
+`SwitcherState.set_news_break()`/`current_station()`-Überschreibung
+liefert währenddessen eine virtuelle Station, unabhängig vom
+Hauptloop-internen `current`.
+
+### Neue/geänderte Dateien
+- **`news_break.py`** (neu): reine Domänenlogik, kein Zugriff auf
+  StreamSource/SwitcherState. `active_slot(cfg, now)` liefert eine
+  stabile Slot-ID (nächstgelegene :00/:30 als ISO-Zeit) für "gerade
+  aktiv", oder None. `pick_random_mp3(folder, exclude)` wählt zufällig,
+  vermeidet die zuletzt gespielte Datei falls möglich, loggt und gibt
+  `None` zurück statt zu werfen (Ordner fehlt/leer/unlesbar).
+- **`settings_store.py`**: neuer verschachtelter `news_break`-Block
+  (`enabled`, `mp3_folder`, `window_minutes`, `enabled_hours`) in den
+  DEFAULTS. `_read_raw()` merged ihn jetzt speziell (bekannte Unterfelder
+  übernehmen, Rest Default) statt der bisherigen flachen Top-Level-Logik.
+  `update()` bekommt vier `news_break_*`-Kwargs, Stil bleibt: benannte
+  Parameter statt generischem Dict-Merge.
+- **`webui.py`**: `SwitcherState` bekommt `news_break_cfg`
+  (aus settings.json gecacht wie prebuffer_seconds/-count),
+  `set_news_break()`/`news_break_active`/`news_break_file`.
+  `current_station()` liefert während der Pause eine virtuelle Station
+  (`NEWS_BREAK_STATION_ID = "__news_break__"`, existiert absichtlich
+  NICHT in stations.json). `_build_status()` setzt `now_playing` auf den
+  MP3-Dateinamen statt ICY-Metadaten abzufragen, neues Feld
+  `news_break_active` in der API-Antwort. `_handle_update_settings()`
+  leitet die vier neuen Felder weiter.
+- **`radiozapper.py`**: `StreamSource.start()` bekommt einen neuen
+  `realtime`-Parameter (siehe Bug unten). Neue State-Variablen
+  (`news_break_active`, `news_break_resume_id`, `news_break_last_file`,
+  `news_break_served_slot`) und zwei geschachtelte Funktionen
+  (`note_news_break_interrupted()`, `resume_from_news_break()`) im
+  Hauptloop. Drei Eingriffe in die bestehende Schleife: Zeitfenster-Check
+  vor `read_window()` (Eintritt + Fensterablauf-Austritt), MP3-Ende
+  VOR dem Watchdog abgefangen (im `pcm.size==0`-Zweig), Auto-Erkennung
+  komplett übersprungen (`if news_break_active: continue` nach
+  `write_audio()`).
+- **Dockerfile**: `news_break.py` zur COPY-Liste hinzugefügt.
+- **docker-compose.yml**: neuer Bind-Mount
+  `${NEWS_MP3_FOLDER:-./news_mp3}:/app/news_mp3:ro`.
+- **env.example**, **.gitignore** (`news_mp3/`), **README.md** (neuer
+  Abschnitt "Nachrichten-Pause"), **CLAUDE.md** (neuer Architektur-
+  Unterabschnitt).
+
+### Zwei echte Bugs beim Durcharbeiten gefunden (nicht nur beim Testen —
+beim genauen Nachvollziehen der bestehenden Interaktionen)
+
+1. **Reload während laufender Pause hätte die MP3 gekappt.** Der
+   bestehende Reload-Zweig prüft `current["id"] not in active_ids` und
+   schaltet dann zwangsweise um. Weil `current["id"]` während der Pause
+   der PAUSIERTE (nicht der hörbare) Sender ist, hätte JEDE Config-
+   Änderung während einer Pause — auch eine, die mit dem pausierten
+   Sender gar nichts zu tun hat — die MP3 live gegen einen Sender
+   ausgetauscht, während die UI weiter "Nachrichten-Pause" gezeigt hätte
+   (inkonsistenter Zustand). Fix: `elif news_break_active:` als eigener
+   Zweig davor, der nur "Senderliste neu geladen (Nachrichten-Pause
+   läuft weiter)" loggt.
+2. **Klick auf den pausierten Sender selbst wäre verschluckt worden.**
+   Die bestehende Bedingung für einen manuellen Switch ist
+   `manual_id != current["id"]`. Da `current` während der Pause
+   unverändert der pausierte Sender bleibt, wäre ein Klick GENAU auf den
+   (der naheliegendste Klick überhaupt — "ich will jetzt zurück zu dem,
+   was pausiert war") vom Vergleich als "schon aktuell" fehlinterpretiert
+   und stillschweigend ignoriert worden. Fix:
+   `manual_id is not None and (news_break_active or manual_id != current["id"])`.
+
+Beide sind beim Durchspielen der Interaktionen VOR dem Testen gefunden
+worden (Teil des Umsetzungsvorschlags), dann live bestätigt (siehe unten).
+
+### Dritter Bug, beim ersten Live-Test entdeckt: keine Echtzeit-Taktung für lokale Dateien
+
+Erster Testlauf: eine 35s-MP3 wurde in 0,8 Sekunden komplett "abgespielt"
+(Log zeigte sofortigen Übergang Eintritt -> "MP3 zu Ende"). Ursache:
+anders als eine Radio-URL (deren Auslieferung durch den Sender selbst in
+Echtzeit getaktet ist — DAS ist der Mechanismus, der den ganzen
+Hauptloop bei ~1 Analysefenster/Sekunde hält, keine explizite Bremse in
+radiozapper.py) dekodiert ffmpeg eine LOKALE Datei so schnell wie
+CPU/Disk erlauben. Verifiziert isoliert:
+```
+ffmpeg -i 35s.mp3 ...        -> 0,1s Wall-Clock
+ffmpeg -re -i 35s.mp3 ...    -> 35,1s Wall-Clock
+```
+Fix: `StreamSource.start()` bekommt einen `realtime: bool = False`
+Parameter, der ffmpegs `-re`-Flag einfügt (Input in "nativer" Wall-Clock-
+Geschwindigkeit lesen). Default bleibt False (unnötig und nicht der
+Normalfall für echte Radio-URLs), der Nachrichten-Pause-Eintritt ruft
+`source.start(path, realtime=True)`.
+
+### Verifiziert
+
+- **Unit `news_break.active_slot()`**: 15 Fälle — Fensterkanten exakt
+  auf/knapp innerhalb/knapp außerhalb um :00 und :30 (inkl.
+  Mitternachtsgrenze 23:59:30 -> nächster Tag :00), Slot-ID-Stabilität
+  über das ganze Fenster hinweg, verschiedene Fenster -> verschiedene
+  IDs, `enabled=False`, `enabled_hours`-Filter, `window_minutes<=0`.
+  Alle korrekt.
+- **Unit `news_break.pick_random_mp3()`**: fehlender/leerer/unlesbarer
+  Ordner -> None + Log, nur `.mp3` (case-insensitive) ausgewählt (200
+  Züge, Verteilung ~50/50 zwischen zwei Dateien), `exclude` vermieden
+  wenn Alternative da, bei nur 1 Datei + exclude=sie selbst trotzdem
+  gespielt, unlesbarer Ordner (chmod 000) -> None.
+- **Unit `settings_store`-Validierung**: 12 Fälle inkl. Migration von
+  altem settings.json ohne news_break-Feld, teilweise gesetztem
+  news_break-Subdict (unbekannte Felder ignoriert, Rest Default),
+  DEFAULTS-Dict bleibt bei Mutation der zurückgegebenen Kopie
+  unangetastet, window_minutes-/enabled_hours-Grenzen. Dabei **einen
+  echten Bug gefunden und gefixt**: `news_break_enabled_hours=None` sollte
+  laut Docstring "aktiv auf 'immer' zurücksetzen" bedeuten, kollidierte
+  aber mit der allgemeinen Konvention "None = Parameter nicht übergeben,
+  unverändert lassen" — beide Fälle waren nicht unterscheidbar. Fix: neues
+  Sentinel `settings_store.UNSET` als Default für dieses eine Argument;
+  `webui.py`s Handler unterscheidet jetzt explizit "Key fehlt im Payload"
+  (-> UNSET) von "Key ist im Payload null" (-> None, aktiv zurücksetzen).
+- **Live-Integrationstests** (isoliertes Projekt-Verzeichnis, eigene
+  stations.json mit 2 echten Sendern, eigener Icecast-Test-Mount, echte
+  generierte Test-MP3s via ffmpeg/lavfi):
+  - Kurze MP3 (8,05s) mit langem Fenster -> Resume nach 8,17s über
+    "MP3 zu Ende" (nicht Fensterablauf), Sender korrekt zurückgewechselt.
+  - Lange MP3 (35s) mit kurzem Fenster, Eintritt exakt auf einer echten
+    :00-Grenze abgewartet (realer Wall-Clock-Test, kein Mock) -> Resume
+    nach 22s über "Fenster abgelaufen" (nicht MP3-Ende), während die MP3
+    noch mitten in der Wiedergabe war.
+  - `/api/status` während der Pause: `current_id: "__news_break__"`,
+    `current_name: "📰 Nachrichten-Pause"`, `now_playing: "🎵
+    long_news.mp3"`, `news_break_active: true` — alles über die
+    bestehenden Frontend-Felder, ohne `_PAGE_HTML`/JS anzufassen.
+  - Manueller Switch auf einen ANDEREN Sender während der Pause: sofort
+    interrupted, nutzte sogar den weiterlaufenden Prebuffer ("aus
+    Puffer") — bestätigt, dass Prebuffering während der Pause unbeeinflusst
+    normal weiterläuft, wie im Architektur-Entwurf vorgesehen.
+  - Manueller Switch auf GENAU den pausierten Sender während der Pause
+    (Bug #2 oben): korrekt interrupted und umgeschaltet, `news_break_active`
+    danach `false` — ohne den Fix wäre das (verifiziert per Code-Nachvollzug)
+    stillschweigend ignoriert worden.
+  - Config-Änderung (neuer Sender angelegt) während laufender Pause
+    (Bug #1 oben): Log zeigt "Senderliste neu geladen (Nachrichten-Pause
+    läuft weiter)", MP3 lief unangetastet weiter, `/api/status` zeigte
+    währenddessen durchgehend `news_break_active: true`.
+  - Nach jedem Testlauf: echte `stations.json` unverändert geprüft (kein
+    Test-Sender durchgesickert), keine verwaisten Prozesse.
+
+### Bewusst nicht gebaut
+- Kein echtes Audio-Ducking/Überblenden — klarer Hart-Switch (Verbindung
+  trennen/neu aufbauen), passt zur bestehenden "Zapper"-Architektur (jeder
+  andere Wechsel im Programm funktioniert genauso) und zum Feature-Namen.
+- Keine eigene Formular-Sektion auf der Config-Seite — war nicht Teil der
+  Anfrage, Konfiguration läuft über den bestehenden
+  `POST /api/config/settings`-Endpunkt (curl/API). Der Unterbau
+  (`settings_store.update(news_break_*=...)`) ist bereits generisch genug,
+  falls später ein Formular gewünscht wird.
+- Kein Übernacht-`enabled_hours`-Wraparound (z.B. 22–6 Uhr) — nur
+  `0 <= start < end <= 24`.

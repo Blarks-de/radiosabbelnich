@@ -15,10 +15,20 @@ Icecast neu aus. Überblick und Feature-Beschreibung: `README.md`.
   `_write()` in `stations_store.py` kein write-temp-then-rename macht, warum
   der Import-Check nicht per ffprobe läuft). Diese Begründungen sind hart
   erarbeitet; nicht wegkürzen.
-- **`SESSION.md` ist append-only**: pro Arbeitseinheit ein neuer Eintrag am
-  Ende (Datum, Auslöser, Umsetzung, "Verifiziert", ggf. "bewusst NICHT
-  gemacht"). Ältere Einträge werden nicht rückwirkend korrigiert. Dort steht
-  das Wie und Warum, in der README das Was.
+- **Doku gehört zur Änderung, nicht danach.** Vor jedem Commit beide Dateien
+  nachziehen:
+  - **`SESSION.md`** ist append-only: pro Arbeitseinheit ein neuer Eintrag am
+    Ende (Datum, Auslöser, Umsetzung, "Verifiziert" mit echten Messwerten,
+    ggf. "bewusst NICHT gemacht"). Ältere Einträge werden **nicht**
+    rückwirkend korrigiert — was sich später als überholt herausstellt, wird
+    im neuen Eintrag richtiggestellt. Hier steht das *Wie und Warum*.
+  - **`README.md`** beschreibt den *aktuellen Stand* für Nutzer: alles, was
+    Verhalten, Setup, Bedienung, Konfigurationswerte oder die Datei-Tabelle
+    verändert, muss dort mitgezogen werden (keine Historie, keine
+    Doppelung von SESSION.md).
+  - **`CLAUDE.md`** (diese Datei) nachziehen, wenn sich Architektur,
+    Invarianten oder Arbeitsabläufe ändern — inklusive der Liste offener
+    Punkte unten.
 - Commit-Messages: die neueren sind Englisch, ältere Deutsch — am jeweils
   letzten Commit orientieren.
 
@@ -112,7 +122,7 @@ Thread und einen Ringpuffer der letzten Sekunden. Beim Wechsel gibt
 `promote()` sowohl die gepufferten Samples als auch die **weiterlaufende
 Quelle** zurück, die der Hauptloop übernimmt.
 
-Zwei harte Regeln:
+Drei harte Regeln:
 
 1. **Eine Pipe hat genau einen Leser.** `promote()`/`stop()` joinen den
    Reader-Thread; überlebt er den Join, wird die Quelle als `dead` markiert
@@ -120,6 +130,14 @@ Zwei harte Regeln:
 2. **`pb.stop()` blockiert den Hauptloop** (bis ~9 s pro Quelle, weil es auf
    ein laufendes `read_window()` wartet). `sync_prebuffer()` läuft einmal pro
    Durchlauf — dort keine weiteren blockierenden Operationen einbauen.
+3. **Nie den ganzen Puffer ausstrahlen.** Beim Übernehmen geht nur die
+   Bridge raus: so viel Audio, wie seit dem letzten `write_audio()`
+   Wall-Clock-Zeit vergangen ist (`promote_bridge()` + `stereo_tail()`).
+   Sonst wandert pro Wechsel bis zu `prebuffer_seconds` zusätzliche Audio in
+   die Ausstrahlung, der Hörer rutscht kumulativ hinter Live und Icecasts
+   Client-Queue läuft über. **Audio verlässt den Prozess ausschließlich über
+   `write_audio()`** — `output.write()` direkt aufzurufen bricht die
+   Zeitrechnung.
 
 `sync_prebuffer()` startet gestorbene Puffer **nicht** selbst neu, sondern gibt
 deren IDs zurück; der Hauptloop sperrt sie. Sonst gäbe es bei einer dauerhaft
@@ -168,6 +186,40 @@ f-Strings.
 Fragment-Vorrat aus, bestehen jeden kurzen Check und verstummen danach für
 immer. Importierte Sender landen **deaktiviert** in "Unsortiert".
 
+### Nachrichten-Pause (news_break.py)
+
+Reine Domänenlogik (Zeitfenster-Berechnung, MP3-Auswahl) getrennt vom
+Hauptloop, der die eigentliche Audio-Umschaltung übernimmt — `news_break.py`
+kennt weder `StreamSource` noch `SwitcherState`. Zwei Punkte, an denen sich
+das lokale Verhalten von einem Live-Sender unterscheidet und die man beim
+Anfassen dieses Codes im Kopf haben muss:
+
+- **`current` bleibt während der Pause bewusst der pausierte Sender**, nicht
+  ein synthetisches "News"-Objekt. Dadurch laufen `sync_prebuffer()` und
+  Watchdog (falls sie überhaupt aufgerufen werden) mit korrekten Daten
+  weiter, und der Resume nutzt einfach `switch_to_station(current)` — dieselbe
+  Funktion wie jeder normale Wechsel. Die Web-UI zeigt trotzdem korrekt "📰
+  Nachrichten-Pause": `SwitcherState.current_station()` liefert währenddessen
+  eine virtuelle Station (`NEWS_BREAK_STATION_ID`), unabhängig vom
+  Hauptloop-internen `current`.
+- **Lokale Dateien werden von ffmpeg NICHT in Echtzeit gelesen** — anders als
+  eine Radio-URL (die durch die Netzwerk-Auslieferung beim Sender selbst
+  taktet) dekodiert ffmpeg eine lokale Datei so schnell wie CPU/Disk
+  erlauben. `StreamSource.start(path, realtime=True)` (das `-re`-Flag) ist
+  deshalb für die MP3 PFLICHT, nicht optional — ohne das landet ein 35s-Clip
+  in Sekundenbruchteilen komplett in den Pipes (live gemessen: 0,1s statt
+  35s). Für echte Radio-URLs bleibt `realtime` False (Default).
+
+Ein Zeitfenster wird per Slot-ID (`news_break.active_slot()`, siehe
+Docstring) höchstens einmal bedient — MP3-Ende, Fensterablauf und manueller
+Interrupt markieren den Slot alle gleichermaßen als "schon dran". Zwei
+Interaktionen mit bestehendem Code brauchten deshalb einen Zusatz-Guard:
+Reload-erzwungener Wechsel (`current["id"] not in active_ids`) darf während
+der Pause nicht feuern (`current["id"]` ist ja der PAUSIERTE, nicht der
+laufende Sender), und ein manueller Klick auf genau diesen pausierten Sender
+braucht `news_break_active or manual_id != current["id"]` statt nur `!=` —
+sonst wird der Klick sonst stillschweigend verschluckt.
+
 ## Docker-Besonderheiten
 
 - `stations.json`, `settings.json` und `fingerprints.db` sind als **einzelne
@@ -182,6 +234,9 @@ immer. Importierte Sender landen **deaktiviert** in "Unsortiert".
 - Der Icecast-Service überschreibt den Entrypoint des Basis-Images (`icegen`
   kennt `<location>`/`<admin>` nicht, und ohne `rm -f icecast.xml` hängt es bei
   jedem Neustart eine zweite Kopie an → ungültiges XML, Absturzschleife).
+- `news_break.mp3_folder` in `settings.json` ist ein **Container-interner**
+  Pfad (Default `/app/news_mp3`), nicht der Host-SMB-Pfad — letzterer kommt
+  über `NEWS_MP3_FOLDER` in `.env` rein (Bind-Mount in `docker-compose.yml`).
 
 ## Kein Auth, nur hinter VPN
 
@@ -193,8 +248,8 @@ Forwarding, öffentlicher Reverse-Proxy) — siehe Warnung in der README.
 ## Bekannte offene Punkte
 
 Aktueller Stand am Ende von `SESSION.md` (Abschnitt "bewusst NICHT in diesem
-Durchgang"), u.a.: der Puffer-Burst beim Wechsel schiebt bis zu
-`prebuffer_seconds` Audio auf einen Schlag in den Encoder (Hörer rutschen pro
-Wechsel hinter Live), `sync_prebuffer()`/`pb.stop()` können den Hauptloop
-blockieren, das Web-Interface zeigt keinen Stream-Health-Status, und
-`SpeechDetector.leftover` wird beim Senderwechsel nicht zurückgesetzt.
+Durchgang"), u.a.: `sync_prebuffer()`/`pb.stop()` können den Hauptloop
+blockieren, das Web-Interface zeigt keinen Stream-Health-Status,
+`SpeechDetector.leftover` wird beim Senderwechsel nicht zurückgesetzt, die
+Fingerprint-DB wächst ohne Pruning, und die Config-Seite skaliert nicht auf
+mehrere hundert Sender (keine Suche, kein Bulk-Delete).

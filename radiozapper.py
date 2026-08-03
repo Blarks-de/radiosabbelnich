@@ -50,6 +50,7 @@ import numpy as np
 
 import fingerprint
 import logging_setup
+import news_break
 import webui
 from speech_detector import SpeechDetector
 
@@ -238,21 +239,38 @@ class StreamSource:
         self.proc = None
         self._stereo_read_fd = None
 
-    def start(self, url: str):
+    def start(self, url: str, realtime: bool = False):
+        """`realtime=True` fügt ffmpegs `-re` ein (Input in "nativer"
+        Wall-Clock-Geschwindigkeit lesen, statt so schnell wie CPU/Disk
+        erlauben). Für echte Radio-URLs unnötig und deshalb NICHT der
+        Default: die sind durch die Netzwerk-Auslieferung beim Sender
+        selbst schon in Echtzeit getaktet (das ist der Mechanismus, der
+        den ganzen Hauptloop auf ~1 Analysefenster/Sekunde hält, ohne dass
+        radiozapper.py selbst irgendwo bremst).
+
+        PFLICHT dagegen für lokale Dateien (siehe news_break.py/
+        Nachrichten-Pause): ohne -re dekodiert ffmpeg eine lokale Datei so
+        schnell wie möglich — ein 35s-Clip landet dann in
+        Sekundenbruchteilen komplett in den Ausgabe-Pipes, statt über
+        seine echte Spieldauer verteilt zu werden (gemessen: 35s Audio in
+        0,1s statt 35s Wall-Clock ohne -re; mit -re exakt 35s)."""
         self.stop()
         stereo_read_fd, stereo_write_fd = os.pipe()
         os.set_inheritable(stereo_write_fd, True)
+        cmd = ["ffmpeg", "-loglevel", "error"]
+        if realtime:
+            cmd += ["-re"]
+        cmd += [
+            "-i", url,
+            "-map", "0:a", "-f", "s16le", "-acodec", "pcm_s16le",
+            "-ar", str(self.sample_rate), "-ac", "1",
+            "pipe:1",
+            "-map", "0:a", "-f", "s16le", "-acodec", "pcm_s16le",
+            "-ar", str(self.sample_rate), "-ac", "2",
+            f"pipe:{stereo_write_fd}",
+        ]
         self.proc = subprocess.Popen(
-            [
-                "ffmpeg", "-loglevel", "error",
-                "-i", url,
-                "-map", "0:a", "-f", "s16le", "-acodec", "pcm_s16le",
-                "-ar", str(self.sample_rate), "-ac", "1",
-                "pipe:1",
-                "-map", "0:a", "-f", "s16le", "-acodec", "pcm_s16le",
-                "-ar", str(self.sample_rate), "-ac", "2",
-                f"pipe:{stereo_write_fd}",
-            ],
+            cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             pass_fds=(stereo_write_fd,),
@@ -476,6 +494,30 @@ class IcecastOutput:
             self.proc.wait(timeout=5)
 
 
+def stereo_tail(stereo: np.ndarray, seconds: float, sample_rate: int) -> np.ndarray:
+    """Die letzten `seconds` Sekunden eines interleaved Stereo-Puffers, sauber
+    auf einer Frame-Grenze abgeschnitten (sonst verrutschen L und R
+    gegeneinander und der Kanal kippt für den Rest des Streams).
+
+    Wird beim Übernehmen eines Hintergrund-Puffers gebraucht: dort darf NICHT
+    der komplette Puffer an den Output gehen, siehe write_audio()/Bridge in
+    main().
+
+    Frame-Grenze heißt hier: gezählt wird ab Array-ANFANG (gerade Indizes =
+    linker Kanal). Ein simples stereo[-n:] reicht nicht — endet der Puffer mit
+    einem angefangenen Halb-Frame (möglich, wenn ein read_window() in einen
+    Timeout lief und mit ungerader Sample-Zahl zurückkam), landet der Schnitt
+    auf einem ungeraden Index und ab da sind links und rechts vertauscht."""
+    if seconds <= 0 or stereo.size < 2:
+        return stereo[:0]
+    avail_frames = stereo.size // 2   # angefangenes Halb-Frame am Ende ignorieren
+    take = min(int(sample_rate * seconds), avail_frames)
+    if take <= 0:
+        return stereo[:0]
+    start = (avail_frames - take) * 2
+    return stereo[start:start + take * 2]
+
+
 def alive_stations(active: list, dead_until: dict, keep_id: str = None) -> list:
     """Filtert Sender raus, die der Watchdog gerade als tot markiert hat
     (siehe STREAM_FAILURE_LIMIT/STATION_DEAD_COOLDOWN) — Rotationsreihenfolge
@@ -644,6 +686,50 @@ def main():
     log.info("⏱  Puffere die nächsten %d Sender %.0fs im Voraus.",
              len(prebuffer), state.prebuffer_seconds)
 
+    # Zeitpunkt, bis zu dem Audio an den Output rausgegangen ist. Einziger
+    # Schreibpfad ist write_audio() -- daran hängt die Bridge-Berechnung beim
+    # Übernehmen eines Hintergrund-Puffers (siehe promote_bridge()).
+    last_output_at = time.monotonic()
+
+    def write_audio(pcm: np.ndarray):
+        """Einziger Weg, Audio an den Output zu geben. Führt nebenbei Buch,
+        wann zuletzt geschrieben wurde."""
+        nonlocal last_output_at
+        if pcm.size:
+            output.write(pcm)
+            last_output_at = time.monotonic()
+
+    def promote_bridge(buf_stereo: np.ndarray) -> np.ndarray:
+        """Beim Übernehmen eines Hintergrund-Puffers: NUR das Stück, das die
+        Lücke seit dem letzten geschriebenen Audio überbrückt — nicht den
+        ganzen Puffer.
+
+        Warum das wichtig ist: der Puffer hält bis zu prebuffer_seconds (per
+        Default 10s) vor. Die früher hier übliche Variante "kompletten Puffer
+        auf einen Schlag an den Encoder" hat pro Wechsel bis zu 10 Sekunden
+        Audio zusätzlich in die Ausstrahlung geschoben. Gemessen am
+        laufenden Betrieb: 87,6s Audio in 75s Wall-Clock (224 statt 192
+        kbit/s). Folgen: der Hörer rutscht mit jedem Zap weiter hinter Live
+        (kumulativ, das holt nichts wieder auf), hört die letzten Sekunden
+        doppelt (einmal vom alten, einmal vom neuen Sender), und Icecasts
+        Client-Queue (default 512 KB ~ 21s bei 192 kbit/s) läuft bei ein
+        paar schnellen Wechseln über -> Hörer fliegen raus.
+
+        Richtig ist, genau so viel Audio nachzuschieben, wie seit dem letzten
+        Schreiben Wall-Clock-Zeit vergangen ist: dann bleibt die
+        Audio-Zeitachse deckungsgleich mit der echten Zeit. Der Puffer ist
+        damit das, was er sein sollte -- ein Vorrat für die Dauer der
+        Übergabe (promote()/join/Klassifikation), nicht ein Schwall alter
+        Audio. Genau dafür ist prebuffer_seconds die Obergrenze: es puffert
+        so lange, wie ein Wechsel maximal dauern darf, ohne dass eine Lücke
+        entsteht."""
+        bridge = time.monotonic() - last_output_at
+        tail = stereo_tail(buf_stereo, bridge, SAMPLE_RATE)
+        log.debug("Puffer-Übergabe: %.2fs Lücke zu überbrücken, %.2fs aus dem "
+                  "Puffer geschrieben (%.1fs vorhanden)",
+                  bridge, tail.size / 2 / SAMPLE_RATE, buf_stereo.size / 2 / SAMPLE_RATE)
+        return tail
+
     def quick_forward(seconds: float = 0.3):
         """Nach einem direkten Sender-Wechsel (manuell oder erzwungen durch
         einen Config-Reload) sofort einen kurzen Schnipsel lesen und an den
@@ -653,16 +739,15 @@ def main():
         bei Icecast/Hörern ankommt — nicht weil die Verbindung zur neuen
         Quelle lange dauert (die steht meist in <1s), sondern weil
         read_window() sonst erst ein volles 1-Sekunden-Fenster sammelt,
-        bevor output.write() überhaupt aufgerufen wird."""
+        bevor write_audio() überhaupt aufgerufen wird."""
         _, stereo = source.read_window(seconds)
-        if stereo.size:
-            output.write(stereo)
+        write_audio(stereo)
 
     def switch_to_station(station: dict) -> str:
         """Wechselt auf `station` — nutzt einen laufenden Hintergrund-
-        Puffer falls vorhanden (sofortiger Übergang inkl. Burst der
-        letzten PREBUFFER_SECONDS Sekunden gepufferten Audios), sonst
-        frischer Connect + quick_forward(). Aktualisiert `source`, gibt
+        Puffer falls vorhanden (sofortiger Übergang, die Lücke wird aus dem
+        Puffer überbrückt — siehe promote_bridge()), sonst frischer
+        Connect + quick_forward(). Aktualisiert `source`, gibt
         aber KEIN state.set_current()/Logmeldung aus — das bleibt Sache der
         Aufrufer, die je nach Situation unterschiedliche Meldungen
         ausgeben. Gibt zurück, ob der Puffer genutzt werden konnte.
@@ -684,8 +769,7 @@ def main():
             else:
                 source.stop()
                 source = adopted_source
-                if stereo.size:
-                    output.write(stereo)
+                write_audio(promote_bridge(stereo))
                 return "prebuffered" if mono.size else "prebuffered-empty"
         source.start(station["url"])
         quick_forward()
@@ -696,6 +780,58 @@ def main():
     speech_buffer = []       # sammelt PCM-Chunks des aktuellen Sprache-Laufs
     fp_checked_this_run = False
     stream_failures = 0      # leere Reads in Folge vom aktuellen Sender (Watchdog)
+
+    # Nachrichten-Pause (siehe news_break.py): `current` bleibt während der
+    # Pause bewusst UNVERÄNDERT der pausierte Sender -> Watchdog/do_switch/
+    # sync_prebuffer laufen (falls sie überhaupt aufgerufen werden) mit
+    # korrekten Daten weiter, nur `source` zeigt vorübergehend auf die MP3.
+    news_break_active = False
+    news_break_resume_id = None   # id des Senders, zu dem danach zurückgeschaltet wird
+    news_break_last_file = None   # zuletzt gespielte Datei (Basename) -> kein Repeat direkt danach
+    news_break_served_slot = None  # welcher Slot (siehe news_break.active_slot) schon dran war
+
+    def note_news_break_interrupted():
+        """Eine explizite Nutzer-Aktion (manueller Switch, 'Gesabbel!')
+        während einer laufenden Nachrichten-Pause beendet die Pause sofort
+        — eigene Entscheidung schlägt Automatik, wie überall sonst auch in
+        diesem Programm. Markiert den Slot als bedient, damit die Pause
+        nicht im selben Zeitfenster gleich wieder anspringt und den
+        gerade erst gewählten Sender sofort wieder verdrängt."""
+        nonlocal news_break_active, news_break_served_slot
+        if news_break_active:
+            state.set_news_break(False)
+            news_break_active = False
+            news_break_served_slot = news_break.active_slot(state.news_break_cfg)
+
+    def resume_from_news_break(reason: str):
+        """Beendet die Nachrichten-Pause und schaltet zurück zum Sender,
+        der vorher lief — oder, falls der inzwischen deaktiviert/gelöscht
+        wurde, zum ersten aktivierten Sender (wie beim Reload-erzwungenen
+        Wechsel). Aufgerufen sowohl bei abgelaufenem Zeitfenster als auch
+        bei einer MP3, die kürzer ist als das Fenster."""
+        nonlocal current, news_break_active, last_switch_time
+        nonlocal speech_streak, speech_buffer, fp_checked_this_run
+        state.set_news_break(False)
+        news_break_active = False
+        active_now = state.active_stations
+        resume = next((s for s in active_now if s["id"] == news_break_resume_id), None)
+        if resume is None and active_now:
+            resume = active_now[0]
+            log.warning("📰 Nachrichten-Pause-Ende: ursprünglicher Sender nicht mehr "
+                        "aktiv, schalte auf: %s", resume["name"])
+        if resume is None:
+            log.error("📰 Nachrichten-Pause-Ende: keine aktivierten Sender mehr "
+                      "konfiguriert — Wiedergabe pausiert, bis wieder einer aktiv ist.")
+            return
+        current = resume
+        used_buffer = switch_to_station(current)
+        state.set_current(current["id"])
+        log.info("📰 %s — zurück zu: %s%s", reason, current["name"],
+                 " (aus Puffer)" if used_buffer.startswith("prebuffered") else "")
+        last_switch_time = time.time()
+        speech_streak = 0
+        speech_buffer = []
+        fp_checked_this_run = False
 
     def do_switch(reason: str):
         """Springt reihum zum nächsten (aktivierten) Sender, bis Musik läuft
@@ -709,9 +845,9 @@ def main():
 
         Gepufferte Kandidaten (siehe PrebufferedSource) werden direkt
         anhand ihres bereits vorhandenen Puffers beurteilt (kein
-        1.5s-Warten + frisches Fenster nötig) — bei "music" sofort mit
-        vollem Puffer-Burst übernommen, bei "speech" verworfen und der
-        nächste Kandidat probiert.
+        1.5s-Warten + frisches Fenster nötig) — bei "music" sofort
+        übernommen, bei "speech" verworfen und der nächste Kandidat
+        probiert.
 
         Kandidaten, die der Watchdog gerade als tot markiert hat, werden
         übersprungen, ohne sie überhaupt anzufassen."""
@@ -770,8 +906,7 @@ def main():
                         source = candidate_source
                         state.set_current(current["id"])
                         stream_failures = 0
-                        if buf_stereo.size:
-                            output.write(buf_stereo)
+                        write_audio(promote_bridge(buf_stereo))
                         log.info("▶ Spiele: %s (aus Puffer, nahtlos)", current["name"])
                         last_switch_time = time.time()
                         break
@@ -788,8 +923,7 @@ def main():
             time.sleep(1.5)
             probe_mono, probe_stereo = source.read_window(WINDOW_SECONDS)
             if probe_mono.size:
-                if probe_stereo.size:
-                    output.write(probe_stereo)
+                write_audio(probe_stereo)
                 if classify(probe_mono) == "music":
                     break
             else:
@@ -843,6 +977,15 @@ def main():
                 if not active:
                     log.warning("⚠ Keine aktivierten Sender mehr konfiguriert — "
                                 "spiele den aktuellen weiter, bis wieder einer aktiv ist.")
+                elif news_break_active:
+                    # `current["id"]` zeigt während der Pause weiter auf den
+                    # pausierten (also nicht aktiv gespielten) Sender -> er
+                    # kann fälschlich als "nicht mehr aktiv" erscheinen, wenn
+                    # sich die Senderliste ändert. NICHT deswegen die MP3
+                    # kappen und live umschalten -- resume_from_news_break()
+                    # prüft ohnehin frisch, ob news_break_resume_id noch
+                    # aktiv ist, sobald die Pause tatsächlich endet.
+                    log.info("⚙ Senderliste neu geladen (Nachrichten-Pause läuft weiter).")
                 elif current["id"] not in active_ids:
                     current = active[0]
                     used_buffer = switch_to_station(current)
@@ -859,12 +1002,18 @@ def main():
                 continue
 
             manual_id = state.pop_manual_request()
-            if manual_id is not None and manual_id != current["id"]:
+            # "or news_break_active": während der Pause ist `current["id"]`
+            # weiter der PAUSIERTE Sender (siehe oben) -- klickt der Nutzer
+            # genau DEN in der Senderliste an, wäre manual_id == current["id"]
+            # und der Klick würde ohne diesen Zusatz stillschweigend
+            # verschluckt, statt die Pause zu beenden und dorthin zu wechseln.
+            if manual_id is not None and (news_break_active or manual_id != current["id"]):
                 station = next((s for s in state.active_stations if s["id"] == manual_id), None)
                 if station is None:
                     log.warning("⚠ Manueller Switch auf unbekannten/inaktiven Sender "
                                 "ignoriert: %s", manual_id)
                     continue
+                note_news_break_interrupted()
                 current = station
                 # Ausdrücklicher Nutzerwunsch: eine alte Tot-Markierung darf
                 # dem nicht im Weg stehen (der Sender kann längst wieder da sein).
@@ -882,6 +1031,7 @@ def main():
             if state.pop_skip_request():
                 # "Gesabbel!"-Knopf: Nutzer hat selbst Sprache erkannt,
                 # auch wenn VAD/Heuristik (noch) nicht angeschlagen haben
+                note_news_break_interrupted()
                 speech_streak = 0
                 speech_buffer = []
                 fp_checked_this_run = False
@@ -904,8 +1054,46 @@ def main():
                          "läuft weiter" if new_enabled else "pausiert")
                 continue
 
+            # Nachrichten-Pause: Zeitfenster prüfen. Bewusst NACH den
+            # Nutzer-Aktionen oben -- ein manueller Wechsel in DIESEM
+            # Durchlauf (der news_break_active/news_break_served_slot schon
+            # aktualisiert hat) hat Vorrang vor einem Neueintritt hier.
+            news_break_cfg = state.news_break_cfg
+            slot = news_break.active_slot(news_break_cfg)
+            if slot and not news_break_active and slot != news_break_served_slot:
+                news_break_served_slot = slot
+                path = news_break.pick_random_mp3(news_break_cfg.get("mp3_folder"), exclude=news_break_last_file)
+                if path is not None:
+                    news_break_resume_id = current["id"]
+                    news_break_last_file = os.path.basename(path)
+                    # realtime=True ist hier PFLICHT, nicht optional -- siehe
+                    # StreamSource.start()-Docstring. StreamSource.start()
+                    # räumt die alte Verbindung (den pausierten Sender)
+                    # selbst auf.
+                    source.start(path, realtime=True)
+                    state.set_news_break(True, news_break_last_file)
+                    news_break_active = True
+                    quick_forward()
+                    log.info("📰 Nachrichten-Pause: spiele '%s' (zurück zu '%s' danach)",
+                             news_break_last_file, current["name"])
+                    last_switch_time = time.time()
+                    speech_streak = 0
+                    speech_buffer = []
+                    fp_checked_this_run = False
+                continue
+            if news_break_active and not slot:
+                resume_from_news_break("Nachrichten-Pause-Fenster abgelaufen")
+                continue
+
             pcm, pcm_stereo = source.read_window(WINDOW_SECONDS)
             if pcm.size == 0:
+                if news_break_active:
+                    # Die MP3 ist zu Ende (kürzer als das Fenster) -- das ist
+                    # ein planmäßiges Ereignis, kein toter Sender. VOR dem
+                    # Watchdog abgefangen, damit der davon nichts mitbekommt
+                    # (siehe Modul-weite Konstanten oben/CLAUDE.md).
+                    resume_from_news_break("Nachrichten-Pause-MP3 zu Ende")
+                    continue
                 # WATCHDOG: erst ein paar Reconnects (ein kurzer Hänger soll
                 # keinen Senderwechsel auslösen), dann ist der Sender raus.
                 stream_failures += 1
@@ -940,8 +1128,15 @@ def main():
 
             stream_failures = 0
 
-            if pcm_stereo.size:
-                output.write(pcm_stereo)
+            write_audio(pcm_stereo)
+
+            if news_break_active:
+                # Keine automatische Erkennung während der Nachrichten-
+                # Pause -- die MP3 enthält u.U. selbst Sprache/Jingles, das
+                # soll VAD/Heuristik/Fingerprint nicht als "Moderation auf
+                # dem echten Sender" fehldeuten. Unabhängig vom Sabbelfilter-
+                # Zustand des Nutzers (der bleibt unangetastet).
+                continue
 
             if not state.filter_enabled:
                 # Sabbelfilter aus: einfach weiterspielen, keine

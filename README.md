@@ -83,14 +83,70 @@ Stunden, Icecast-Mount die ganze Zeit weg.
 Damit ein Wechsel nicht erst neu verbinden muss, hält RadioZapper die
 nächsten Sender in Rotationsreihenfolge im Hintergrund bereits am Laufen
 und puffert von jedem die letzten paar Sekunden vor. Ein Wechsel dorthin
-(automatisch oder manuell) übernimmt den fertigen Puffer sofort, statt
-neu zu verbinden — spürbar flüssiger, kostet aber zusätzliche
+(automatisch oder manuell) übernimmt die schon laufende Quelle sofort,
+statt neu zu verbinden — spürbar flüssiger, kostet aber zusätzliche
 Bandbreite/CPU (ein zusätzlicher ffmpeg-Prozess pro gepuffertem Sender,
 parallel zum aktuellen; Default 5 Sender × 10s ist auf haushaltsüblicher
 Hardware unkritisch).
 
+Aus dem Puffer ausgestrahlt wird dabei nur so viel, wie der Wechsel
+tatsächlich gedauert hat (typisch Bruchteile einer Sekunde) — der Rest
+wird verworfen. Die gepufferten Sekunden sind also ein *Vorrat für die
+Dauer der Übergabe*, kein Vorlauf, der mitgesendet wird: die
+Audio-Zeitachse bleibt deckungsgleich mit der echten Zeit, egal wie oft
+gezappt wird. `prebuffer_seconds` legt damit fest, wie lange ein Wechsel
+maximal dauern darf, ohne dass eine Lücke entsteht.
+
 Beide Werte (Sekunden pro Sender, Anzahl vorausgepufferter Sender) sind
 unter `/config` einstellbar und wirken sofort, ohne Neustart.
+
+## Nachrichten-Pause
+
+Zur vollen und halben Stunde verlesen praktisch alle Radiosender
+Nachrichten. Statt dessen kann RadioZapper für ein kurzes Zeitfenster
+eine zufällige MP3 aus einem lokalen Ordner abspielen (z.B. eigene
+Jingles/Musikstücke von einem SMB-Mount) — danach geht's automatisch
+mit dem pausierten Sender weiter, ganz normal.
+
+Konfiguriert wird das über den `news_break`-Block in `settings.json`
+(aktuell nur über die API setzbar, siehe unten — keine eigene
+Formular-Sektion auf der Config-Seite):
+
+```json
+"news_break": {
+  "enabled": false,
+  "mp3_folder": "/app/news_mp3",
+  "window_minutes": 2.0,
+  "enabled_hours": null
+}
+```
+
+- **`enabled`** — Feature an/aus.
+- **`mp3_folder`** — Container-interner Pfad (nicht der Host-Pfad!). Der
+  Ordner wird über `NEWS_MP3_FOLDER` in `.env` von außen reingemountet
+  (siehe `docker-compose.yml`), typischerweise ein SMB-Mount. Ordner
+  fehlt/ist leer/nicht lesbar → Feature wird für dieses Zeitfenster
+  einfach übersprungen, mit Logeintrag, kein Fehler.
+- **`window_minutes`** — wie viele Minuten vor/nach :00 und :30 aktiv.
+- **`enabled_hours`** — optional `[start, end]`, z.B. `[6, 22]` für "nur
+  6–22 Uhr"; `null` = rund um die Uhr. Kein Übernacht-Wraparound (22–6
+  wird nicht unterstützt).
+
+Setzen per API:
+```bash
+curl -X POST http://<host>:5000/api/config/settings \
+     -H 'Content-Type: application/json' \
+     -d '{"news_break_enabled": true, "news_break_window_minutes": 2}'
+```
+
+Ein Zeitfenster wird höchstens einmal bedient — läuft die MP3 kürzer als
+das Fenster, geht's danach sofort zurück zum Sender (kein Nachlegen einer
+zweiten MP3 im selben Fenster). Ein manueller Sender-Wechsel während der
+Pause bricht sie sofort ab (eigene Entscheidung schlägt Automatik, wie
+überall sonst in RadioZapper auch). Während der Pause pausiert auch die
+automatische Sprache-Erkennung (VAD/Heuristik/Fingerprint) — die MP3
+selbst enthält u.U. Sprache, das soll nicht als "Moderation" auf dem
+eigentlichen Sender fehlgedeutet werden.
 
 ## Web-Interface
 
@@ -148,6 +204,7 @@ erreichbar (z.B. für VLC).
 | `station_import.py` | M3U-Import: laden, parsen, parallel auf dauerhaften Audiofluss prüfen |
 | `webui.py` | Eingebettetes Web-Interface (Player-Seite + Config-Seite) |
 | `logging_setup.py` | Zentrale Logging-Konfiguration (Konsole + rotierende Logdatei) |
+| `news_break.py` | Nachrichten-Pause: Zeitfenster-Logik + zufällige MP3-Auswahl |
 | `stations.json` | Senderliste (Name, URL, Kategorie, aktiv/inaktiv) |
 | `docker-compose.yml` | Icecast + RadioZapper als zwei Services |
 

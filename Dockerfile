@@ -23,6 +23,7 @@ COPY stations_store.py .
 COPY settings_store.py .
 COPY station_import.py .
 COPY logging_setup.py .
+COPY news_break.py .
 COPY stations.json .
 COPY radiozapper.webp .
 

@@ -33,6 +33,12 @@ import stations_store
 
 log = logging.getLogger("webui")
 
+# Synthetische Sender-ID für die Nachrichten-Pause (siehe news_break.py) —
+# existiert absichtlich NICHT in stations.json, damit Rotation/Watchdog/
+# Prebuffering sie nie zu Gesicht bekommen. Nur SwitcherState.current_station()
+# kennt sie, um dem Web-Interface während der Pause etwas Sinnvolles zu zeigen.
+NEWS_BREAK_STATION_ID = "__news_break__"
+
 # Einmalig beim Modul-Import gelesen (statt bei jedem Request von der
 # Platte) — kleines statisches Asset, ändert sich nicht zur Laufzeit.
 _BANNER_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "radiozapper.webp")
@@ -66,6 +72,9 @@ class SwitcherState:
         self._filter_toggle_requested = False
         self._prebuffer_seconds = settings_store.DEFAULTS["prebuffer_seconds"]
         self._prebuffer_count = settings_store.DEFAULTS["prebuffer_count"]
+        self._news_break_cfg = dict(settings_store.DEFAULTS["news_break"])
+        self._news_break_active = False
+        self._news_break_file = None
         self.reload()
 
     def reload(self):
@@ -82,6 +91,7 @@ class SwitcherState:
                 self._current_id = active[0]["id"]
             self._prebuffer_seconds = settings["prebuffer_seconds"]
             self._prebuffer_count = settings["prebuffer_count"]
+            self._news_break_cfg = settings["news_break"]
 
     @property
     def prebuffer_seconds(self) -> float:
@@ -92,6 +102,11 @@ class SwitcherState:
     def prebuffer_count(self) -> int:
         with self._lock:
             return self._prebuffer_count
+
+    @property
+    def news_break_cfg(self) -> dict:
+        with self._lock:
+            return dict(self._news_break_cfg)
 
     @property
     def active_stations(self) -> list:
@@ -115,8 +130,16 @@ class SwitcherState:
             self._current_id = station_id
 
     def current_station(self):
-        """Aktuell laufender Sender als dict, oder None."""
+        """Aktuell laufender Sender als dict, oder None.
+
+        Während einer Nachrichten-Pause (siehe set_news_break()) liefert
+        das eine virtuelle Station statt in stations.json nachzuschlagen
+        (dort existiert kein solcher Eintrag) — sonst würde das
+        Web-Interface fälschlich "Kein Sender aktiv" zeigen, obwohl aktiv
+        eine MP3 läuft."""
         with self._lock:
+            if self._news_break_active:
+                return {"id": NEWS_BREAK_STATION_ID, "name": "📰 Nachrichten-Pause"}
             cid = self._current_id
             for s in self._active_stations:
                 if s["id"] == cid:
@@ -125,6 +148,27 @@ class SwitcherState:
                 if s["id"] == cid:
                     return s
             return None
+
+    def set_news_break(self, active: bool, file_name: str = None):
+        """Vom Hauptloop aufgerufen, sobald eine Nachrichten-Pause beginnt
+        oder endet (siehe news_break.py). `file_name` (Basename der
+        gerade laufenden MP3) füttert das "Jetzt läuft"-Feld im
+        Web-Interface — dieselbe Anzeige, die sonst ICY-Metadaten zeigt."""
+        with self._lock:
+            self._news_break_active = active
+            self._news_break_file = file_name
+            if active:
+                self._current_id = NEWS_BREAK_STATION_ID
+
+    @property
+    def news_break_active(self) -> bool:
+        with self._lock:
+            return self._news_break_active
+
+    @property
+    def news_break_file(self):
+        with self._lock:
+            return self._news_break_file
 
     def request_switch(self, station_id):
         with self._lock:
@@ -425,7 +469,13 @@ def _build_status(state: SwitcherState, icecast_cfg: dict) -> dict:
         icecast_cfg.get("admin_url"), icecast_cfg.get("user"),
         icecast_cfg.get("password"), icecast_cfg.get("mount"),
     )
-    now_playing = _fetch_now_playing(current) if current else None
+    if state.news_break_active:
+        # Kein Grund, hier ICY-Metadaten vom pausierten Sender abzufragen —
+        # der Dateiname der laufenden MP3 ist die korrekte Antwort auf
+        # "was läuft gerade", nicht dessen letzter Titel.
+        now_playing = f"🎵 {state.news_break_file}" if state.news_break_file else None
+    else:
+        now_playing = _fetch_now_playing(current) if current else None
     return {
         "current_id": current["id"] if current else None,
         "current_name": current["name"] if current else None,
@@ -435,6 +485,7 @@ def _build_status(state: SwitcherState, icecast_cfg: dict) -> dict:
         "stream_port": icecast_cfg.get("public_port"),
         "stream_mount": icecast_cfg.get("mount"),
         "filter_enabled": state.filter_enabled,
+        "news_break_active": state.news_break_active,
     }
 
 
@@ -1262,6 +1313,19 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                     prebuffer_seconds=payload.get("prebuffer_seconds"),
                     prebuffer_count=payload.get("prebuffer_count"),
                     import_url=payload.get("import_url"),
+                    news_break_enabled=payload.get("news_break_enabled"),
+                    news_break_mp3_folder=payload.get("news_break_mp3_folder"),
+                    news_break_window_minutes=payload.get("news_break_window_minutes"),
+                    # payload.get(...) allein würde "Feld fehlt" und "Feld
+                    # ist null" nicht unterscheiden können — beides ergäbe
+                    # Python None. settings_store.update() braucht aber
+                    # genau diese Unterscheidung (None = aktiv zurücksetzen,
+                    # UNSET = unverändert lassen), siehe dortiger Docstring.
+                    news_break_enabled_hours=(
+                        payload["news_break_enabled_hours"]
+                        if "news_break_enabled_hours" in payload
+                        else settings_store.UNSET
+                    ),
                 )
                 state.request_reload()
                 self._send_json({"ok": True, "settings": settings})

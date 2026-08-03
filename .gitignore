@@ -5,3 +5,4 @@ __pycache__/
 fingerprints.db
 fingerprint_clips/
 logs/
+news_mp3/

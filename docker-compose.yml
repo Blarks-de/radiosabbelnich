@@ -84,3 +84,12 @@ services:
       # gemountet, damit man sie ohne `docker exec` direkt vom Host lesen
       # kann, auch nachdem der Container neugestartet ist.
       - ./logs:/app/logs
+      # Nachrichten-Pause (news_break.py): Ordner mit MP3s, die zur vollen/
+      # halben Stunde statt eines Radiosenders laufen. settings.json'
+      # "news_break.mp3_folder" zeigt auf den Container-internen Pfad
+      # rechts vom Doppelpunkt (/app/news_mp3) -- NICHT auf NEWS_MP3_FOLDER
+      # selbst, das ist nur der Host-Pfad (z.B. ein SMB-Mount), der hier
+      # reingemountet wird. Immer aktiv (auch wenn das Feature per
+      # settings.json deaktiviert ist) -- ein leerer/fehlender Ordner wird
+      # zur Laufzeit einfach übersprungen, siehe README.
+      - ${NEWS_MP3_FOLDER:-./news_mp3}:/app/news_mp3:ro
