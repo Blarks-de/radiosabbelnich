@@ -1365,3 +1365,81 @@ Container zufällig nicht neugestartet worden war.
 - Config-Seite skaliert nicht auf 356 Sender (keine Suche, kein
   Bulk-Delete, kein "Alle aktivieren"), CSRF auf `/api/skip` und
   `/api/filter/toggle`, keine automatisierten Tests im Repo.
+
+## 2026-08-03 (Fortsetzung) — Import-Fix: deaktiviert importieren + echter Audiofluss-Check
+
+Die beiden Punkte, die der Watchdog-Durchgang oben als Ursache benannt,
+aber bewusst offen gelassen hatte.
+
+### Teil 1: importierte Sender kommen deaktiviert an
+
+`stations_store.bulk_add()` hat jetzt einen `enabled`-Parameter (Default
+weiter True, damit die Funktion generisch bleibt); `station_import.py`
+übergibt explizit `enabled=False`. Hunderte fremde Sender ungefragt in
+die laufende Rotation zu kippen ist keine Entscheidung, die ein
+Import-Knopf treffen sollte — und genau so kam BBC Radio Scotland dorthin.
+
+Web-Interface/README entsprechend umformuliert; die Ergebnismeldung sagt
+jetzt "X neu (deaktiviert) in 'Unsortiert' — zum Aktivieren Haken setzen".
+
+### Teil 2: der Check — erste Idee war falsch, Messung hat sie widerlegt
+
+Geplant war "statt ffprobe einfach 3 Sekunden mit ffmpeg dekodieren".
+Vor dem Einbau gegen die echte BBC-URL gemessen — und die besteht diesen
+Check mühelos:
+
+```
+ffmpeg -v error -t 3  -i <bbc.mpd> ... -> 3,00s Audio in 0,2s Wall-Clock, rc=0
+ffmpeg -v error -t 12 -i <bbc.mpd> ... -> 12,00s Audio in 0,4s Wall-Clock, rc=0
+ffmpeg -v error -t 12 -i <swr3.mp3> .. -> 12,00s Audio in 7,4s Wall-Clock, rc=0
+```
+
+Der Dauerlauf zeigt, warum: die DASH-Quelle schüttet den vorhandenen
+Fragment-Pool auf einen Schlag aus (insgesamt ~38s Audio in Sekunden-
+bruchteilen) und bekommt danach auf jedes weitere Fragment ein HTTP 404
+(`Failed to open fragment of playlist`, 143 KB stderr in 35s). Der
+Prozess lebt weiter, liefert aber nie wieder ein Sample. "Kommt Audio?"
+ist also die falsche Frage — jede Menge Audio kommt.
+
+Die richtige Frage ist "kommt am ENDE eines Zeitfensters noch Audio?".
+Genau daran hängt auch der Hauptloop (`StreamSource.read_window`).
+
+`check_reachable()` läuft deshalb nicht mehr über `subprocess.run()`,
+sondern über einen eigenen select-Lese-Loop: ffmpeg dekodiert nach
+`pipe:1`, CHECK_WINDOW=8s lang wird mitgelesen und der Zeitpunkt des
+letzten Bytes festgehalten. Bestanden nur, wenn insgesamt ≥3s Audio kamen
+UND das letzte Byte höchstens CHECK_TAIL=3s vor Fensterende ankam.
+Gebraucht wird nicht "wie viel kam", sondern "wann kam das letzte".
+
+### Verifiziert
+
+- **Einzelfälle**: BBC-DASH False (19,2s Audio, aber die letzten 7,5s
+  nichts), SWR3/1LIVE/Radio Bob True (zuletzt vor 0,0–0,2s), tote URL
+  und nicht existente Domain False in 0,1s. 6/6 wie erwartet.
+- **Falsch-Negativ-Rate an echten Daten**: 40 zufällige der 341
+  importierten "Unsortiert"-Sender mit altem ffprobe-Check UND neuem
+  Check geprüft. 37× beide OK, 0× nur neu OK, **3× nur alt OK** — und
+  diese drei sind BBC Radio 4, BBC Radio 3 und BBC Radio nan Gàidheal,
+  also exakt dieselbe DASH-Klasse wie der Übeltäter. Kein einziger
+  gesunder Sender fällt durch das strengere Raster.
+- **Ende zu Ende isoliert**: eigene Test-Playlist (gesunder Sender,
+  BBC-DASH, tote URL, Duplikat) über einen lokalen HTTP-Server gegen eine
+  eigene stations.json: `{'checked': 4, 'working': 2, 'added': 1}`,
+  Duplikat übersprungen, hinzugefügter Sender `enabled=False`. 8 Sekunden
+  für alles (parallel).
+- **Live am echten Deployment** über die echten API-Endpunkte
+  (`/api/config/settings` -> Test-Playlist, `/api/config/import/start`,
+  Status gepollt): identisches Ergebnis, neuer Sender in der echten
+  stations.json mit `enabled: false` in "Unsortiert", BBC im Log als
+  "nur ein Vorrat, kein laufender Stream" abgelehnt. Test-Sender danach
+  gelöscht, `import_url` auf die Kodinerds-URL zurückgesetzt, Liste
+  wieder bei 356 Sendern / 14 aktiven.
+
+### Kostenpunkt
+
+Der Check dauert jetzt fixe 8s pro Sender statt bis zu 6s — bei 362
+Einträgen und 10 parallelen Checks also grob 5 Minuten statt vorher ~2.
+Das steht so auch in der Startmeldung im Log ("grob X Min."). Für einen
+manuell ausgelösten Import, der einmal im Monat läuft, ist das der
+richtige Tausch: die Alternative war ein Sender, der den Player nachts
+8,5 Stunden lahmlegt.

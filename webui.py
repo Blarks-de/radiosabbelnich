@@ -767,9 +767,11 @@ _CONFIG_PAGE_HTML = """<!doctype html>
 
 <h2>📻 Sender-Import</h2>
 <form id="import-form">
-  <p class="hint">Lädt eine M3U-Playlist, prüft jeden Sender per ffprobe
-    auf Erreichbarkeit und übernimmt nur funktionierende, noch nicht
-    vorhandene Sender in die Kategorie "Unsortiert". Kann bei einer
+  <p class="hint">Lädt eine M3U-Playlist und hört bei jedem Sender ein
+    paar Sekunden mit: übernommen wird nur, wer dabei durchgehend Audio
+    liefert (nicht bloß beim Verbinden). Neue Sender landen
+    <strong>deaktiviert</strong> in der Kategorie "Unsortiert" — du
+    entscheidest per Haken, wer in die Rotation darf. Kann bei einer
     langen Liste einige Minuten dauern.</p>
   <label>Playlist-URL
     <input type="url" id="import-url" placeholder="http://...">
@@ -1083,8 +1085,8 @@ async function pollImportStatus() {
     } else if (data.phase === 'done' && data.result) {
       const r = data.result;
       setImportProgress('');
-      showMsg(`${r.checked} Sender geprüft, ${r.working} funktionieren, ` +
-              `${r.added} neu hinzugefügt zu "Unsortiert".`, false);
+      showMsg(`${r.checked} Sender geprüft, ${r.working} liefern dauerhaft Audio, ` +
+              `${r.added} neu (deaktiviert) in "Unsortiert" — zum Aktivieren Haken setzen.`, false);
       loadStations();
     }
   }

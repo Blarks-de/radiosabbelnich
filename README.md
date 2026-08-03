@@ -120,10 +120,16 @@ Erreichbar unter `http://<host>:5000/`:
   einem Import mit hunderten neuen Sendern). Änderungen wirken sofort,
   ohne Neustart.
 - **📻 Sender-Import** (auf der Config-Seite) — lädt eine M3U-Playlist
-  (Default: die Kodinerds-Kodi-Radioliste), prüft jeden Sender per
-  ffprobe auf Erreichbarkeit (parallel, mit Fortschrittsanzeige) und
-  übernimmt nur funktionierende, noch nicht vorhandene Sender in die
-  Kategorie "Unsortiert". Manueller Trigger, kein Auto-Import.
+  (Default: die Kodinerds-Kodi-Radioliste) und hört bei jedem Sender ein
+  paar Sekunden mit (parallel, mit Fortschrittsanzeige). Übernommen wird
+  nur, wer dabei *durchgehend* Audio liefert — inklusive der letzten
+  Sekunden des Prüffensters. Das ist bewusst strenger als ein
+  ffprobe-Blick beim Verbinden: DASH-/HLS-Quellen schütten gerne einen
+  Fragment-Vorrat auf einen Schlag aus und verstummen danach für immer
+  (siehe "Umgang mit toten Sendern"). Neue Sender landen
+  **deaktiviert** in der Kategorie "Unsortiert" — was tatsächlich in die
+  Rotation kommt, entscheidet der Haken auf der Config-Seite. Manueller
+  Trigger, kein Auto-Import.
 - **🗑 Clip-DB leeren** (auf der Config-Seite) — löscht alle gelernten
   Fingerprint-Clips (nicht die Senderliste), mit Sicherheitsabfrage.
 
@@ -139,7 +145,7 @@ erreichbar (z.B. für VLC).
 | `fingerprint.py` | Audio-Fingerprinting (Constellation-Map-Hashing) in SQLite |
 | `stations_store.py` | Laden/Speichern/CRUD der Senderliste (`stations.json`) |
 | `settings_store.py` | Laufzeit-Einstellungen (Puffer-Parameter, Import-URL, `settings.json`) |
-| `station_import.py` | M3U-Import: laden, parsen, per ffprobe parallel auf Erreichbarkeit prüfen |
+| `station_import.py` | M3U-Import: laden, parsen, parallel auf dauerhaften Audiofluss prüfen |
 | `webui.py` | Eingebettetes Web-Interface (Player-Seite + Config-Seite) |
 | `logging_setup.py` | Zentrale Logging-Konfiguration (Konsole + rotierende Logdatei) |
 | `stations.json` | Senderliste (Name, URL, Kategorie, aktiv/inaktiv) |

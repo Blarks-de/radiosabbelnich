@@ -2,28 +2,50 @@
 """
 station_import.py — Sender-Import aus einer M3U-Playlist (z.B. die
 Kodinerds-Kodi-Radioliste, Default-URL siehe settings_store.DEFAULTS).
-Lädt die Liste, prüft jeden Sender per ffprobe auf Erreichbarkeit
-(parallelisiert), und übernimmt nur funktionierende, noch nicht
-vorhandene Sender in stations.json (Kategorie stations_store.IMPORT_CATEGORY).
+Lädt die Liste, prüft jeden Sender auf dauerhaften Audiofluss
+(parallelisiert, siehe unten), und übernimmt nur funktionierende, noch
+nicht vorhandene Sender in stations.json (Kategorie
+stations_store.IMPORT_CATEGORY) — dort DEAKTIVIERT, damit ein Import
+nicht ungefragt hunderte fremde Sender in die laufende Rotation kippt.
 
-Erreichbarkeits-Check: ffprobe statt HTTP HEAD/GET. Begründung: unsere
-eigene Wiedergabe (StreamSource in radiozapper.py) öffnet Sender-URLs
-ebenfalls über ffmpeg — ffprobe nutzt denselben Demuxer-/Protokoll-Stack,
-prüft also genau das, was zählt ("kann unser Player das tatsächlich
-abspielen"), nicht nur "antwortet der Server irgendwie auf HTTP". Viele
-Icecast/Shoutcast-Server unterstützen HEAD gar nicht richtig oder liefern
-200 ohne echten Audio-Inhalt; manche Playlist-Einträge zeigen selbst
-wieder auf verschachtelte M3U/PLS-Dateien, die ein simpler HTTP-Request
-als "erreichbar" durchwinken würde, obwohl unser Player (genau wie
-ffprobe mit denselben Optionen) sie gar nicht direkt abspielen kann —
-live gegen einen Kodinerds-Listeneintrag verifiziert (ffprobe lehnt eine
-verschachtelte .m3u korrekt als "Invalid data" ab, ein HTTP-GET hätte
-sie fälschlich als erreichbar gemeldet).
+Erreichbarkeits-Check: ffmpeg dekodiert den Stream über ein Zeitfenster
+und es wird geprüft, ob am ENDE dieses Fensters noch Audio ankommt —
+nicht bloß, ob überhaupt welches kam.
+
+Warum so aufwendig, warum kein HTTP HEAD/GET und kein ffprobe:
+
+- HTTP HEAD/GET sagt gar nichts. Viele Icecast/Shoutcast-Server können
+  HEAD nicht richtig oder liefern 200 ohne echten Audio-Inhalt; manche
+  Playlist-Einträge zeigen wieder auf verschachtelte M3U/PLS-Dateien,
+  die unser Player gar nicht direkt abspielen kann.
+- ffprobe (die frühere Lösung) prüft nur, ob am Anfang ein Audio-Stream
+  erkennbar ist. Das reicht nachweislich nicht: die BBC-Radio-Scotland-
+  DASH-URL aus der Kodinerds-Liste wurde so als "erreichbar" übernommen,
+  landete in der Rotation und legte den Player für 8,5 Stunden lahm.
+  ffmpeg holt dort beim Verbinden den vorhandenen Fragment-Pool auf
+  einen Schlag (gemessen: 12s Audio in 0,4s Wall-Clock, insgesamt ~38s)
+  und bekommt danach auf JEDES weitere Fragment ein HTTP 404
+  ("Failed to open fragment of playlist") — der Prozess lebt weiter,
+  liefert aber nie wieder ein Sample. Auch ein "dekodiere mal 3
+  Sekunden"-Check läuft da glatt durch, weil die ersten Sekunden ja
+  tadellos kommen.
+
+Deshalb: CHECK_WINDOW Sekunden lang echt mitlesen (Wall-Clock, nicht
+Audio-Zeit) und verlangen, dass in den letzten CHECK_TAIL Sekunden noch
+Daten eintrudeln. Ein gesunder Live-Stream liefert nach dem anfänglichen
+Burst dauerhaft ungefähr in Echtzeit weiter (gemessen SWR3: 12s Audio in
+7,4s) und besteht das mühelos; eine Quelle, die nur einen Vorrat
+ausschüttet und dann verstummt, fällt durch. Das ist exakt die Bedingung,
+an der auch der Hauptloop hängt (StreamSource.read_window in
+radiozapper.py liest fortlaufend genau solche Fenster).
 """
 
 import logging
+import os
 import re
+import select
 import subprocess
+import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -31,9 +53,14 @@ import stations_store
 
 log = logging.getLogger("import")
 
-CHECK_TIMEOUT = 6.0      # Sekunden pro ffprobe-Check
+CHECK_WINDOW = 8.0       # Sekunden Wall-Clock, die pro Sender mitgelesen werden
+CHECK_TAIL = 3.0         # in den letzten so vielen Sekunden muss noch Audio kommen
+CHECK_MIN_SECONDS = 3.0  # so viel Audio muss insgesamt mindestens rauskommen
+CHECK_SAMPLE_RATE = 8000 # Prüf-Samplerate (Mono); nur zum Mitzählen, keine Hifi-Frage
 CHECK_CONCURRENCY = 10   # max. gleichzeitige Checks
 FETCH_TIMEOUT = 15.0     # Sekunden zum Laden der M3U-Datei
+
+USER_AGENT = "RadioZapper/1.0"
 
 _EXTINF_RE = re.compile(r"^#EXTINF:[^,]*,(.*)$")
 
@@ -69,23 +96,63 @@ def parse_m3u(text: str) -> list:
     return entries
 
 
-def check_reachable(url: str, timeout: float = CHECK_TIMEOUT) -> bool:
-    """True, wenn ffprobe unter der URL mindestens einen Audio-Stream
-    findet (siehe Modul-Docstring für die Begründung ggü. HTTP HEAD/GET)."""
+def check_reachable(url: str, window: float = CHECK_WINDOW) -> bool:
+    """True, wenn der Sender über ein `window` Sekunden langes Zeitfenster
+    dauerhaft Audio liefert — inklusive der letzten CHECK_TAIL Sekunden
+    (siehe Modul-Docstring: eine Quelle, die einmalig einen Vorrat
+    ausschüttet und dann verstummt, ist für uns unbrauchbar).
+
+    Läuft bewusst über einen eigenen Lese-Loop statt subprocess.run():
+    gebraucht wird nicht "wie viel kam insgesamt", sondern "WANN kam das
+    letzte Byte"."""
     try:
-        result = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "a",
-             "-show_entries", "stream=codec_type", "-of", "csv=p=0", url],
-            capture_output=True, text=True, timeout=timeout,
+        proc = subprocess.Popen(
+            ["ffmpeg", "-v", "error", "-user_agent", USER_AGENT,
+             "-i", url,
+             "-map", "0:a:0", "-f", "s16le", "-acodec", "pcm_s16le",
+             "-ar", str(CHECK_SAMPLE_RATE), "-ac", "1", "pipe:1"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         )
-    except (subprocess.TimeoutExpired, OSError) as e:
-        log.debug("[check] %s -> nicht erreichbar (%s)", url, type(e).__name__)
+    except OSError as e:
+        log.debug("[check] %s -> ffmpeg nicht startbar (%s)", url, e)
         return False
-    ok = result.returncode == 0 and "audio" in result.stdout
-    if not ok:
-        log.debug("[check] %s -> kein Audio-Stream (rc=%d, stderr=%s)",
-                  url, result.returncode, (result.stderr or "").strip()[:120])
-    return ok
+
+    total_bytes = 0
+    last_data_at = None
+    deadline = time.monotonic() + window
+    try:
+        fd = proc.stdout.fileno()
+        while True:
+            time_left = deadline - time.monotonic()
+            if time_left <= 0:
+                break
+            ready, _, _ = select.select([fd], [], [], time_left)
+            if not ready:
+                break  # Stream steht still, wir sind fertig mit ihm
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break  # EOF: Quelle hat abgeschlossen, liefert nichts mehr
+            total_bytes += len(chunk)
+            last_data_at = time.monotonic()
+    finally:
+        proc.kill()
+        proc.wait()
+
+    seconds_of_audio = total_bytes / (CHECK_SAMPLE_RATE * 2)
+    if seconds_of_audio < CHECK_MIN_SECONDS:
+        log.debug("[check] %s -> nur %.1fs Audio (min. %.1fs)",
+                  url, seconds_of_audio, CHECK_MIN_SECONDS)
+        return False
+
+    silent_for = deadline - last_data_at
+    if silent_for > CHECK_TAIL:
+        log.debug("[check] %s -> %.1fs Audio, aber die letzten %.1fs kam nichts mehr "
+                  "(nur ein Vorrat, kein laufender Stream)", url, seconds_of_audio, silent_for)
+        return False
+
+    log.debug("[check] %s -> ok (%.1fs Audio, zuletzt vor %.1fs)",
+              url, seconds_of_audio, silent_for)
+    return True
 
 
 def run_import(url: str, progress=None) -> dict:
@@ -105,9 +172,10 @@ def run_import(url: str, progress=None) -> dict:
         progress.set_phase("downloading")
     text = fetch_m3u(url)
     entries = parse_m3u(text)
-    log.info("📻 Playlist geladen: %d Einträge, prüfe Erreichbarkeit "
-             "(max. %d parallel, %.0fs Timeout pro Sender) ...",
-             len(entries), CHECK_CONCURRENCY, CHECK_TIMEOUT)
+    log.info("📻 Playlist geladen: %d Einträge, prüfe je %.0fs auf dauerhaften "
+             "Audiofluss (max. %d parallel, grob %.0f Min.) ...",
+             len(entries), CHECK_WINDOW, CHECK_CONCURRENCY,
+             len(entries) * CHECK_WINDOW / CHECK_CONCURRENCY / 60)
 
     if progress:
         progress.set_phase("checking", total=len(entries))
@@ -144,8 +212,13 @@ def run_import(url: str, progress=None) -> dict:
         seen_urls.add(url_key)
         to_add.append(e)
 
-    added = stations_store.bulk_add(to_add, category=stations_store.IMPORT_CATEGORY)
-    log.info("📻 Import fertig: %d geprüft, %d erreichbar, %d neu in '%s'.",
+    # enabled=False: importierte Sender landen deaktiviert in der Liste und
+    # werden erst durch eine bewusste Entscheidung des Nutzers Teil der
+    # Rotation (Haken auf der Config-Seite).
+    added = stations_store.bulk_add(to_add, category=stations_store.IMPORT_CATEGORY,
+                                    enabled=False)
+    log.info("📻 Import fertig: %d geprüft, %d dauerhaft spielbar, %d neu in '%s' "
+             "(deaktiviert).",
              len(entries), len(working), len(added), stations_store.IMPORT_CATEGORY)
 
     return {"checked": len(entries), "working": len(working), "added": len(added)}

@@ -157,13 +157,20 @@ def add(name: str, url: str, category: str, enabled: bool = True) -> dict:
         return station
 
 
-def bulk_add(entries: list, category: str = DEFAULT_CATEGORY) -> list:
+def bulk_add(entries: list, category: str = DEFAULT_CATEGORY, enabled: bool = True) -> list:
     """Fügt mehrere Sender in einem Rutsch hinzu — ein Read+Write statt
     einem pro Sender (für station_import.py, wo sonst bei einer großen
     Playlist hunderte einzelne Lock-Zyklen anfallen würden). Jeder Eintrag
     in `entries`: {"name": str, "url": str}. Einträge ohne Name/URL werden
     stillschweigend übersprungen (Aufrufer hat i.d.R. schon vorgefiltert).
-    Gibt die tatsächlich hinzugefügten Sender-dicts zurück."""
+    Gibt die tatsächlich hinzugefügten Sender-dicts zurück.
+
+    `enabled` gilt für alle Einträge des Aufrufs. Der Import übergibt hier
+    bewusst False: hunderte fremde Sender ungefragt in die laufende
+    Rotation zu kippen ist keine Entscheidung, die ein Import-Knopf für
+    den Nutzer treffen sollte — und ein einziger davon, der sich später
+    als unspielbar herausstellt, hat den Player schon mal für 8,5 Stunden
+    lahmgelegt (siehe Watchdog in radiozapper.py)."""
     if category not in CATEGORIES:
         category = DEFAULT_CATEGORY
     with _lock:
@@ -180,14 +187,15 @@ def bulk_add(entries: list, category: str = DEFAULT_CATEGORY) -> list:
                 "name": name,
                 "url": url,
                 "category": category,
-                "enabled": True,
+                "enabled": bool(enabled),
             }
             existing_ids.add(station["id"])
             stations.append(station)
             added.append(station)
         if added:
             _write(stations)
-        log.info("➕ %d Sender per Bulk-Add in '%s' übernommen.", len(added), category)
+        log.info("➕ %d Sender per Bulk-Add in '%s' übernommen (%s).", len(added), category,
+                 "aktiviert" if enabled else "deaktiviert")
         return added
 
 
