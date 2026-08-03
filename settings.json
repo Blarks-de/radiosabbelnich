@@ -1,5 +1,22 @@
 {
   "prebuffer_seconds": 10.0,
   "prebuffer_count": 5,
-  "import_url": "http://bit.ly/kn-kodi-radio"
+  "import_url": "http://bit.ly/kn-kodi-radio",
+  "stream_url": "",
+  "tls_enabled": true,
+  "news_break": {
+    "enabled": true,
+    "mp3_folder": "/app/news_mp3",
+    "window_minutes": 5.0,
+    "enabled_hours": null
+  },
+  "stt_filter": {
+    "enabled": true,
+    "engine": "vosk",
+    "vosk_model_path": "/app/vosk-model-de",
+    "whisper_model_size": "tiny",
+    "sample_interval_seconds": 8.0,
+    "confidence_threshold": 0.75,
+    "combine_mode": "and"
+  }
 }

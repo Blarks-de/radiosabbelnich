@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import re
+import ssl
 import threading
 import time
 import urllib.error
@@ -49,6 +50,17 @@ except OSError as _e:
     _BANNER_BYTES = None
     log.warning("⚠ Banner-Bild %s nicht lesbar (%s) — Seite läuft ohne.", _BANNER_PATH, _e)
 
+# Vendorte QR-Code-Bibliothek (siehe qrcode.js) statt CDN-Einbindung: das
+# Web-Interface läuft laut CLAUDE.md nur im eigenen VPN, ein Client dort
+# hat nicht zwangsläufig Internetzugriff für ein <script src="cdn...">.
+_QRCODE_JS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qrcode.js")
+try:
+    with open(_QRCODE_JS_PATH, "rb") as _f:
+        _QRCODE_JS_BYTES = _f.read()
+except OSError as _e:
+    _QRCODE_JS_BYTES = None
+    log.warning("⚠ %s nicht lesbar (%s) — QR-Code-Button bleibt ohne Wirkung.", _QRCODE_JS_PATH, _e)
+
 
 class SwitcherState:
     """Thread-sicherer geteilter Zustand zwischen Hauptloop und Webserver.
@@ -72,9 +84,14 @@ class SwitcherState:
         self._filter_toggle_requested = False
         self._prebuffer_seconds = settings_store.DEFAULTS["prebuffer_seconds"]
         self._prebuffer_count = settings_store.DEFAULTS["prebuffer_count"]
+        self._stream_url = settings_store.DEFAULTS["stream_url"]
+        self._tls_enabled = settings_store.DEFAULTS["tls_enabled"]
         self._news_break_cfg = dict(settings_store.DEFAULTS["news_break"])
         self._news_break_active = False
         self._news_break_file = None
+        self._stt_filter_cfg = dict(settings_store.DEFAULTS["stt_filter"])
+        self._stt_status = {"engine": None, "available": False, "error": None}
+        self._speech_probability = 0.0
         self.reload()
 
     def reload(self):
@@ -91,7 +108,10 @@ class SwitcherState:
                 self._current_id = active[0]["id"]
             self._prebuffer_seconds = settings["prebuffer_seconds"]
             self._prebuffer_count = settings["prebuffer_count"]
+            self._stream_url = settings["stream_url"]
+            self._tls_enabled = settings["tls_enabled"]
             self._news_break_cfg = settings["news_break"]
+            self._stt_filter_cfg = settings["stt_filter"]
 
     @property
     def prebuffer_seconds(self) -> float:
@@ -104,9 +124,31 @@ class SwitcherState:
             return self._prebuffer_count
 
     @property
+    def stream_url(self) -> str:
+        with self._lock:
+            return self._stream_url
+
+    @property
+    def tls_enabled(self) -> bool:
+        """Nur zum Auslesen BEIM START (siehe radiozapper.py/main()) --
+        anders als die anderen Settings hier wirkt eine Änderung nicht
+        sofort, weil der ThreadingHTTPServer sein Socket nicht im
+        laufenden Betrieb neu in TLS einwickeln kann. Ein späteres
+        reload() aktualisiert diesen Wert zwar (z.B. nach einer Änderung
+        über /config), das hat aber erst nach einem Neustart des
+        Containers eine sichtbare Wirkung."""
+        with self._lock:
+            return self._tls_enabled
+
+    @property
     def news_break_cfg(self) -> dict:
         with self._lock:
             return dict(self._news_break_cfg)
+
+    @property
+    def stt_filter_cfg(self) -> dict:
+        with self._lock:
+            return dict(self._stt_filter_cfg)
 
     @property
     def active_stations(self) -> list:
@@ -195,7 +237,7 @@ class SwitcherState:
             return flag
 
     def request_skip(self):
-        """"Gesabbel!"-Knopf: Nutzer hat selbst erkannt, dass gerade
+        """"ZAPPEN!"-Knopf: Nutzer hat selbst erkannt, dass gerade
         geredet wird, auch wenn VAD/Heuristik (noch) nicht angeschlagen
         haben — sofort weg vom aktuellen Sender, wie ein Auto-Switch."""
         with self._lock:
@@ -227,12 +269,44 @@ class SwitcherState:
             self._last_fingerprint_clip = None
             return clip
 
+    def set_stt_status(self, engine: str, available: bool, error: str = None):
+        """Vom Hauptloop nach jedem (Neu-)Laden der STT-Filter-Engine
+        aufgerufen (siehe stt_filter.SttFilter.status()), damit die
+        Config-Seite den tatsächlichen Zustand zeigen kann ("✅ Vosk
+        aktiv" bzw. "⚠ Deaktiviert: <Fehlermeldung>") statt stillschweigend
+        nichts zu tun, falls das Modell nicht ladbar war."""
+        with self._lock:
+            self._stt_status = {"engine": engine, "available": available, "error": error}
+
+    @property
+    def stt_status(self) -> dict:
+        with self._lock:
+            return dict(self._stt_status)
+
+    def set_speech_probability(self, value: float):
+        """Vom Hauptloop nach jeder Klassifikation eines Analysefensters
+        aufgerufen (VAD-Wahrscheinlichkeit, oder bei Heuristik-Fallback
+        die Voting-Quote als grobe Näherung) -- Rohwert VOR der STT-
+        Verknüpfung, fürs "Bullshitometer" im Web-Interface. Bleibt
+        unverändert, solange die Nachrichten-Pause läuft oder der
+        Sabbelfilter aus ist (der Hauptloop ruft classify() dann gar nicht
+        auf) -- das Frontend erkennt diesen Zustand an `news_break_active`/
+        `filter_enabled` und blendet den Wert entsprechend aus, statt ihn
+        auf 0 zu erzwingen."""
+        with self._lock:
+            self._speech_probability = value
+
+    @property
+    def speech_probability(self) -> float:
+        with self._lock:
+            return self._speech_probability
+
     @property
     def filter_enabled(self) -> bool:
         """Ob die automatische Sprache-Erkennung (VAD/Heuristik/
         Fingerprint) gerade aktiv ist. Bei False spielt der Hauptloop
         einfach weiter, ohne auf Sprache zu reagieren — manuelles
-        Umschalten, "Gesabbel!" und "Zapping-Fehler" funktionieren
+        Umschalten, "ZAPPEN!" und "Zapping-Fehler" funktionieren
         trotzdem weiter, das sind explizite Nutzer-Aktionen."""
         with self._lock:
             return self._filter_enabled
@@ -483,9 +557,13 @@ def _build_status(state: SwitcherState, icecast_cfg: dict) -> dict:
         "stations": [{"id": s["id"], "name": s["name"]} for s in active],
         "listeners": listeners,
         "stream_port": icecast_cfg.get("public_port"),
+        "stream_ssl_port": icecast_cfg.get("public_ssl_port"),
         "stream_mount": icecast_cfg.get("mount"),
+        "stream_url": state.stream_url,
         "filter_enabled": state.filter_enabled,
         "news_break_active": state.news_break_active,
+        "stt_status": state.stt_status,
+        "speech_probability": state.speech_probability,
     }
 
 
@@ -512,11 +590,66 @@ _PAGE_HTML = """<!doctype html>
     background: #eee; color: #555; min-height: 1.1em;
   }
   #now-playing:empty { display: none; }
+  #stream-url {
+    font-size: .8rem; color: #1abc9c; text-decoration: underline;
+    margin-top: .4rem; line-height: 1.4; cursor: pointer;
+  }
+  #stream-url:empty { display: none; }
+  #stream-url-row { display: flex; align-items: flex-start; gap: .5rem; }
+  #stream-url-row #stream-url { flex: 1; }
+  #btn-qrcode {
+    flex-shrink: 0; padding: .3rem .6rem; font-size: .9rem; border-radius: .4rem;
+    border: 1px solid #999; background: none; color: inherit; cursor: pointer;
+  }
+  #btn-qrcode[hidden] { display: none; }
   @media (prefers-color-scheme: dark) {
     #current, #now-playing { background: #2a2a2a; }
     #now-playing { color: #aaa; }
   }
+  .modal-overlay {
+    position: fixed; inset: 0; background: #0009; display: flex;
+    align-items: center; justify-content: center; padding: 1rem; z-index: 10;
+  }
+  .modal-overlay[hidden] { display: none; }
+  .modal-box {
+    background: #fff; color: #111; border-radius: .6rem; padding: 1.2rem;
+    max-width: 320px; width: 100%; text-align: center; position: relative;
+  }
+  @media (prefers-color-scheme: dark) {
+    .modal-box { background: #222; color: #eee; }
+  }
+  .modal-box h2 { margin: 0 0 .8rem 0; font-size: 1.05rem; }
+  .modal-close {
+    position: absolute; top: .5rem; right: .6rem; background: none; border: none;
+    font-size: 1.1rem; cursor: pointer; color: inherit; opacity: .7;
+  }
+  .modal-close:hover { opacity: 1; }
+  #qr-code-container {
+    background: #fff; padding: .75rem; border-radius: .4rem; display: inline-block;
+  }
+  #qr-code-container svg { width: 100%; height: auto; display: block; max-width: 260px; }
+  #qr-modal-url {
+    font-size: .8rem; color: #888; margin-top: .8rem; word-break: break-all;
+  }
+  #qr-modal-copy {
+    margin-top: .8rem; padding: .5rem 1rem; font-size: .9rem; border-radius: .4rem;
+    border: 1px solid #999; background: none; color: inherit; cursor: pointer;
+  }
   #player { width: 100%; margin-top: 1rem; }
+  #bs-meter-wrap { margin-top: 1rem; }
+  #bs-meter-label {
+    display: flex; justify-content: space-between; font-size: .8rem; color: #888;
+    margin-bottom: .3rem;
+  }
+  #bs-meter-track {
+    height: 1rem; border-radius: .6rem; background: #8882; overflow: hidden;
+    border: 1px solid #8884;
+  }
+  #bs-meter-fill {
+    height: 100%; width: 0%; background: #2ecc71;
+    transition: width .5s ease, background-color .5s ease, opacity .3s ease;
+  }
+  #bs-meter-wrap.paused #bs-meter-fill { opacity: .3; }
   ul#stations { list-style: none; padding: 0; display: grid; gap: .5rem; }
   ul#stations li button {
     width: 100%; text-align: left; padding: .6rem .8rem; font-size: 1rem;
@@ -554,16 +687,40 @@ _PAGE_HTML = """<!doctype html>
 <h1 class="sr-only">RadioZapper</h1>
 <div id="current">Lade …</div>
 <div id="now-playing"></div>
+<div id="stream-url-row">
+  <div id="stream-url"></div>
+  <button id="btn-qrcode" hidden title="QR-Code für Stream-URL anzeigen">📱 QR-Code</button>
+</div>
 <audio id="player" controls preload="none"></audio>
+
+<div id="qr-modal" class="modal-overlay" hidden>
+  <div class="modal-box">
+    <button id="qr-modal-close" class="modal-close" aria-label="Schließen">✕</button>
+    <h2>📱 Stream-URL zum Scannen</h2>
+    <div id="qr-code-container"></div>
+    <div id="qr-modal-url"></div>
+    <button id="qr-modal-copy">📋 Adresse kopieren</button>
+  </div>
+</div>
 
 <div class="action-buttons">
   <button id="btn-zapping-error" title="Letzten fälschlich erkannten Werbe-Clip aus der Datenbank löschen">🛑 Zapping-Fehler</button>
-  <button id="btn-gesabbel" title="Sofort weiterschalten, weil hier gerade geredet wird">🗣️ Gesabbel!</button>
+  <button id="btn-gesabbel" title="Sofort weiterschalten, weil hier gerade geredet wird">⚡ ZAPPEN!</button>
 </div>
 <div class="filter-toggle-row">
   <button id="btn-filter-toggle" title="Automatische Sprache-Erkennung komplett pausieren/wieder anschalten">Sabbelfilter deaktivieren</button>
 </div>
 <div id="action-msg"></div>
+
+<div id="bs-meter-wrap">
+  <div id="bs-meter-label">
+    <span>🤥 Bullshitometer</span>
+    <span id="bs-meter-pct">–</span>
+  </div>
+  <div id="bs-meter-track">
+    <div id="bs-meter-fill"></div>
+  </div>
+</div>
 
 <h2>Sender</h2>
 <ul id="stations"></ul>
@@ -574,6 +731,7 @@ _PAGE_HTML = """<!doctype html>
 <div id="meta"></div>
 <a class="config-link" href="/config">⚙ Sender verwalten</a>
 
+<script src="/qrcode.js"></script>
 <script>
 function esc(s) {
   const d = document.createElement('div');
@@ -583,6 +741,28 @@ function esc(s) {
 
 let switching = false;
 let playerSrcSet = false;
+let currentStreamUrl = '';
+
+// navigator.clipboard.writeText() braucht einen "secure context" (HTTPS
+// oder localhost) -- dieses Web-Interface läuft typischerweise per
+// Tailscale-Hostname über schlichtes HTTP, dort ist navigator.clipboard
+// entweder undefined oder verweigert den Zugriff. Fallback über eine
+// unsichtbare Textarea + execCommand('copy'), das funktioniert auch dort.
+async function copyToClipboard(text) {
+  if (window.isSecureContext && navigator.clipboard) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  document.execCommand('copy');
+  document.body.removeChild(ta);
+}
 
 async function refresh() {
   let data;
@@ -607,12 +787,64 @@ async function refresh() {
     filterBtn.classList.remove('disabled-state');
   }
 
+  // Bullshitometer: Rohwert der VAD/Heuristik-Klassifikation (VOR der
+  // STT-Verknüpfung, siehe radiozapper.py/classify()) als Balken grün
+  // (Musik) -> rot (Sprache/"Bullshit"). Während Nachrichten-Pause oder
+  // deaktiviertem Sabbelfilter klassifiziert der Hauptloop gar nicht erst
+  // -- Balken bleibt dann grau/eingefroren statt einen veralteten Wert
+  // als aktuell auszugeben.
+  const bsWrap = document.getElementById('bs-meter-wrap');
+  const bsFill = document.getElementById('bs-meter-fill');
+  const bsPct = document.getElementById('bs-meter-pct');
+  if (data.news_break_active) {
+    bsPct.textContent = '📰 Pause';
+    bsWrap.classList.add('paused');
+  } else if (data.filter_enabled === false) {
+    bsPct.textContent = 'Filter aus';
+    bsWrap.classList.add('paused');
+  } else {
+    const pct = Math.round((data.speech_probability || 0) * 100);
+    bsPct.textContent = pct + '%';
+    bsFill.style.width = pct + '%';
+    // Grün (Hue 120) bei 0% bis Rot (Hue 0) bei 100%, linear.
+    const hue = Math.max(0, 120 - pct * 1.2);
+    bsFill.style.backgroundColor = `hsl(${hue}, 70%, 45%)`;
+    bsWrap.classList.remove('paused');
+  }
+
   // Player-Quelle nur einmal setzen, nicht bei jedem Poll -> sonst würde
-  // die Wiedergabe alle 5s neu starten/stottern
+  // die Wiedergabe alle 5s neu starten/stottern. Die Stream-Adresse ändert
+  // sich ebenso wenig -> gleich mit erledigen.
   if (!playerSrcSet && data.stream_port && data.stream_mount) {
+    // Eingebetteter Player nutzt IMMER die Adresse, über die der Browser
+    // diese Seite selbst erreicht -- die ist garantiert erreichbar. Die
+    // konfigurierbare stream_url (siehe /config) ist nur für die Anzeige/
+    // zum Kopieren gedacht (z.B. eine andere öffentliche Adresse für VLC)
+    // und könnte falsch/nicht erreichbar sein, ohne dass das den Player
+    // hier mitreißen soll.
+    //
+    // Icecast hört HTTP und HTTPS auf ZWEI VERSCHIEDENEN Ports (siehe
+    // ICECAST_PORT/ICECAST_SSL_PORT) -- location.protocol einfach mit dem
+    // immer gleichen stream_port zu kombinieren ergäbe bei https://-Aufruf
+    // dieser Seite ein ungültiges "https://host:8000/...", das niemand
+    // beantwortet (Icecasts Port 8000 spricht kein TLS). Deshalb Schema
+    // und Port als PAAR wählen: nur wenn die Seite selbst per HTTPS läuft
+    // UND ein SSL-Port bekannt ist, beide zusammen nehmen -- sonst bleibt
+    // es bei HTTP auf dem normalen Port, auch wenn die Seite selbst https
+    // ist (ein http://-Stream in einem https://-eingebetteten Player kann
+    // der Browser als "mixed content" blocken, aber ein sicher falscher
+    // Port wäre garantiert kaputt, das hier nur möglicherweise).
+    const pageIsHttps = location.protocol === 'https:';
+    const useSsl = pageIsHttps && data.stream_ssl_port;
+    const streamScheme = useSsl ? 'https:' : 'http:';
+    const streamPort = useSsl ? data.stream_ssl_port : data.stream_port;
+    const autoUrl = streamScheme + '//' + location.hostname + ':' + streamPort + data.stream_mount;
     const player = document.getElementById('player');
-    player.src = location.protocol + '//' + location.hostname + ':' + data.stream_port + data.stream_mount;
+    player.src = autoUrl;
     playerSrcSet = true;
+    currentStreamUrl = data.stream_url || autoUrl;
+    document.getElementById('stream-url').innerHTML = 'Streaming via VLC<br>' + esc(currentStreamUrl);
+    document.getElementById('btn-qrcode').hidden = false;
   }
 
   const list = document.getElementById('stations');
@@ -667,6 +899,50 @@ function setActionMsg(text) {
   el.textContent = text;
   setTimeout(() => { if (el.textContent === text) el.textContent = ''; }, 5000);
 }
+
+document.getElementById('stream-url').addEventListener('click', async () => {
+  if (!currentStreamUrl) return;
+  try {
+    await copyToClipboard(currentStreamUrl);
+    setActionMsg('📋 Adresse kopiert.');
+  } catch (e) {
+    setActionMsg('Kopieren fehlgeschlagen: ' + e.message);
+  }
+});
+
+// Nur EIN Icecast-Mount für die gesamte Rotation (siehe CLAUDE.md,
+// "IcecastOutput besteht über Senderwechsel hinweg") -- der QR-Code
+// kodiert also immer dieselbe currentStreamUrl, unabhängig davon, welcher
+// Sender gerade läuft. Kein Bezug zur Senderliste nötig.
+function closeQrModal() {
+  document.getElementById('qr-modal').hidden = true;
+}
+
+document.getElementById('btn-qrcode').addEventListener('click', () => {
+  if (!currentStreamUrl || typeof qrcode !== 'function') return;
+  const qr = qrcode(0, 'M');
+  qr.addData(currentStreamUrl);
+  qr.make();
+  document.getElementById('qr-code-container').innerHTML = qr.createSvgTag({cellSize: 5, margin: 4});
+  document.getElementById('qr-modal-url').textContent = currentStreamUrl;
+  document.getElementById('qr-modal').hidden = false;
+});
+
+document.getElementById('qr-modal-close').addEventListener('click', closeQrModal);
+document.getElementById('qr-modal').addEventListener('click', (ev) => {
+  if (ev.target.id === 'qr-modal') closeQrModal();
+});
+document.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape') closeQrModal();
+});
+document.getElementById('qr-modal-copy').addEventListener('click', async () => {
+  try {
+    await copyToClipboard(currentStreamUrl);
+    setActionMsg('📋 Adresse kopiert.');
+  } catch (e) {
+    setActionMsg('Kopieren fehlgeschlagen: ' + e.message);
+  }
+});
 
 document.getElementById('btn-zapping-error').addEventListener('click', async () => {
   try {
@@ -778,6 +1054,25 @@ _CONFIG_PAGE_HTML = """<!doctype html>
   }
   form#settings-form button { padding: .6rem; font-size: 1rem; cursor: pointer; }
   form#settings-form .hint { font-size: .8rem; color: #888; margin: 0; }
+  form#news-break-form, form#stt-form {
+    margin-top: 1.5rem; padding: 1rem; border: 1px solid #8884; border-radius: .5rem;
+    display: grid; gap: .6rem;
+  }
+  form#news-break-form label, form#stt-form label { display: grid; gap: .25rem; font-size: .9rem; }
+  form#news-break-form label.checkbox, form#stt-form label.checkbox {
+    display: flex; flex-direction: row; align-items: center; gap: .4rem;
+  }
+  form#news-break-form input, form#stt-form input, form#stt-form select {
+    padding: .5rem; font-size: 1rem; width: 100%; box-sizing: border-box;
+  }
+  form#news-break-form input[type=checkbox], form#stt-form input[type=checkbox] {
+    width: auto; padding: 0;
+  }
+  form#news-break-form .hours-row { display: flex; gap: .6rem; align-items: flex-end; }
+  form#news-break-form .hours-row label { flex: 1; }
+  form#news-break-form button, form#stt-form button { padding: .6rem; font-size: 1rem; cursor: pointer; }
+  form#news-break-form .hint, form#stt-form .hint { font-size: .8rem; color: #888; margin: 0; }
+  #stt-status-line { font-size: .85rem; font-weight: 600; }
   form#import-form {
     margin-top: 1.5rem; padding: 1rem; border: 1px solid #8884; border-radius: .5rem;
     display: grid; gap: .6rem;
@@ -789,6 +1084,18 @@ _CONFIG_PAGE_HTML = """<!doctype html>
   form#import-form button { padding: .6rem; font-size: 1rem; cursor: pointer; }
   form#import-form .hint { font-size: .8rem; color: #888; margin: 0; }
   #import-progress { font-size: .9rem; margin-top: .5rem; min-height: 1.2em; }
+  form#stream-url-form, form#tls-form {
+    margin-top: 1.5rem; padding: 1rem; border: 1px solid #8884; border-radius: .5rem;
+    display: grid; gap: .6rem;
+  }
+  form#stream-url-form label, form#tls-form label { display: grid; gap: .25rem; font-size: .9rem; }
+  form#tls-form label.checkbox { display: flex; flex-direction: row; align-items: center; gap: .4rem; }
+  form#stream-url-form input {
+    padding: .5rem; font-size: 1rem; width: 100%; box-sizing: border-box;
+  }
+  form#tls-form input[type=checkbox] { width: auto; padding: 0; }
+  form#stream-url-form button, form#tls-form button { padding: .6rem; font-size: 1rem; cursor: pointer; }
+  form#stream-url-form .hint, form#tls-form .hint { font-size: .8rem; color: #888; margin: 0; }
   section#fingerprint-section {
     margin-top: 1.5rem; padding: 1rem; border: 1px solid #8884; border-radius: .5rem;
   }
@@ -805,6 +1112,39 @@ _CONFIG_PAGE_HTML = """<!doctype html>
 <img class="banner" src="/radiozapper.webp" alt="RadioZapper">
 <a class="back" href="/">← zurück zum Player</a>
 <h1>⚙ Sender verwalten</h1>
+
+<h2>📰 Nachrichten-Pause</h2>
+<form id="news-break-form">
+  <p class="hint">Spielt zur vollen/halben Stunde statt eines Radiosenders
+    eine zufällige lokale MP3 ab. Der MP3-Ordner unten ist ein
+    <strong>Container-interner Pfad</strong> — der eigentliche Host-Ordner
+    (z.B. ein SMB-Mount) wird über <code>NEWS_MP3_FOLDER</code> in
+    <code>.env</code> nach <code>/app/news_mp3</code> gemountet und braucht
+    dafür einen Neustart des Containers, kein Feld hier.</p>
+  <label class="checkbox">
+    <input type="checkbox" id="nb-enabled"> aktiv
+  </label>
+  <label>MP3-Ordner (Container-Pfad)
+    <input type="text" id="nb-mp3-folder" placeholder="/app/news_mp3" required>
+  </label>
+  <p class="hint" id="nb-mp3-folder-host"></p>
+  <label>Zeitfenster (Minuten)
+    <input type="number" id="nb-window" min="0.1" max="15" step="0.1" required>
+  </label>
+  <label class="checkbox">
+    <input type="checkbox" id="nb-hours-enabled"> nur zu bestimmten Stunden aktiv
+  </label>
+  <div class="hours-row">
+    <label>von Stunde
+      <input type="number" id="nb-hour-start" min="0" max="24" step="1">
+    </label>
+    <label>bis Stunde
+      <input type="number" id="nb-hour-end" min="0" max="24" step="1">
+    </label>
+  </div>
+  <button type="submit">Speichern</button>
+</form>
+
 <div id="categories">Lade …</div>
 
 <h2>Neuer Sender</h2>
@@ -831,6 +1171,39 @@ _CONFIG_PAGE_HTML = """<!doctype html>
 </form>
 <div id="import-progress"></div>
 
+<h2>🔗 Streaming-Adresse</h2>
+<form id="stream-url-form">
+  <p class="hint">Adresse, die auf der Startseite unter "Streaming via VLC"
+    angezeigt wird (zum Eintragen in einen externen Player). Leer lassen,
+    um sie automatisch aus der Adresse zu bilden, über die die Startseite
+    gerade im Browser aufgerufen wird.</p>
+  <label>Stream-URL
+    <input type="url" id="stream-url-input"
+           placeholder="http://dockfish.icefish-ghost.ts.net:8000/radiozapper.mp3">
+  </label>
+  <button type="submit">Speichern</button>
+</form>
+
+<h2>🔒 HTTPS</h2>
+<form id="tls-form">
+  <p class="hint">Verschlüsselt den Zugriff aufs Web-Interface (Player-
+    Seite und diese Config-Seite) per TLS. Braucht ein Zertifikat unter
+    <code>TLS_CERT_FILE</code>/<code>TLS_KEY_FILE</code> in <code>.env</code>
+    (Host-Pfade zu PEM-Dateien, z.B. per <code>tailscale cert</code>
+    erzeugt) — ohne die bleibt der Haken hier wirkungslos, das
+    Web-Interface läuft dann weiter über HTTP. <strong>Wirkt erst nach
+    einem Neustart des Containers</strong> (<code>docker compose up -d
+    --build radiozapper</code>), nicht sofort wie die meisten anderen
+    Einstellungen hier. Der Icecast-Stream selbst bekommt unabhängig davon
+    automatisch einen zusätzlichen HTTPS-Port, sobald dieselben
+    Zertifikate in <code>.env</code> eingetragen sind — dafür gibt es
+    keinen eigenen Schalter.</p>
+  <label class="checkbox">
+    <input type="checkbox" id="tls-enabled"> HTTPS fürs Web-Interface aktiv
+  </label>
+  <button type="submit">Speichern</button>
+</form>
+
 <h2>⏱ Puffer-Einstellungen</h2>
 <form id="settings-form">
   <p class="hint">Die nächsten Sender in Rotationsreihenfolge laufen im
@@ -841,6 +1214,49 @@ _CONFIG_PAGE_HTML = """<!doctype html>
   </label>
   <label>Anzahl vorausgepufferter Sender
     <input type="number" id="settings-count" min="0" max="20" step="1" required>
+  </label>
+  <button type="submit">Speichern</button>
+</form>
+
+<h2>🗣 STT-Sprachfilter</h2>
+<form id="stt-form">
+  <p class="hint">Zusätzliches Signal per Speech-to-Text: erkennt, ob
+    gerade zusammenhängender deutscher Text zu hören ist (echte
+    Moderation) oder nicht (auch deutsch gesungene Musik zählt dann als
+    "keine Sprache") — ergänzt VAD/Heuristik, die reinen Gesang oft
+    fälschlich als Sprache werten. <strong>Vosk</strong> ist leichtgewichtig
+    und Pi-tauglich, <strong>Whisper</strong> genauer, aber deutlich
+    ressourcenhungriger. Modellpfad/-größe sind Container-interne Werte
+    (siehe README) — braucht ggf. einen Neustart des Containers, falls
+    das Modell erstmals gemountet wird.</p>
+  <p id="stt-status-line" class="hint">Lade Status …</p>
+  <label class="checkbox">
+    <input type="checkbox" id="stt-enabled"> aktiv
+  </label>
+  <label>Engine
+    <select id="stt-engine">
+      <option value="vosk">Vosk (leichtgewicht, Pi-tauglich)</option>
+      <option value="whisper">Whisper (genauer, ressourcenhungriger)</option>
+    </select>
+  </label>
+  <label>Vosk-Modellpfad (Container-Pfad)
+    <input type="text" id="stt-vosk-path" placeholder="/app/vosk-model-de">
+  </label>
+  <p class="hint" id="stt-vosk-path-host"></p>
+  <label>Whisper-Modellgröße
+    <input type="text" id="stt-whisper-size" placeholder="tiny">
+  </label>
+  <label>Sample-Intervall (Sekunden)
+    <input type="number" id="stt-interval" min="2" max="60" step="0.5" required>
+  </label>
+  <label>Konfidenz-Schwelle (0–1)
+    <input type="number" id="stt-threshold" min="0" max="1" step="0.05" required>
+  </label>
+  <label>Verknüpfung mit VAD/Heuristik
+    <select id="stt-combine">
+      <option value="and">UND — beide müssen "Sprache" sagen (empfohlen)</option>
+      <option value="or">ODER — eines reicht</option>
+    </select>
   </label>
   <button type="submit">Speichern</button>
 </form>
@@ -1084,8 +1500,56 @@ async function loadSettings() {
     document.getElementById('settings-seconds').value = settings.prebuffer_seconds;
     document.getElementById('settings-count').value = settings.prebuffer_count;
     document.getElementById('import-url').value = settings.import_url;
+    document.getElementById('stream-url-input').value = settings.stream_url || '';
+    document.getElementById('tls-enabled').checked = !!settings.tls_enabled;
+
+    const hostPaths = settings._host_paths || {};
+    function hostPathHint(hostPath, envVar) {
+      return hostPath
+        ? `📁 Aktuell gemountet von Host-Pfad: ${hostPath} (ändern über ${envVar} in .env + Neustart des Containers)`
+        : `Host-Pfad unbekannt (Container lief noch nicht mit dieser Anzeige -- ` +
+          `docker compose up -d --build radiozapper zeigt ihn danach an).`;
+    }
+
+    const nb = settings.news_break || {};
+    document.getElementById('nb-enabled').checked = !!nb.enabled;
+    document.getElementById('nb-mp3-folder').value = nb.mp3_folder || '';
+    document.getElementById('nb-mp3-folder-host').textContent =
+      hostPathHint(hostPaths.news_break_mp3_folder, 'NEWS_MP3_FOLDER');
+    document.getElementById('nb-window').value = nb.window_minutes;
+    const hours = nb.enabled_hours;
+    document.getElementById('nb-hours-enabled').checked = !!hours;
+    document.getElementById('nb-hour-start').value = hours ? hours[0] : '';
+    document.getElementById('nb-hour-end').value = hours ? hours[1] : '';
+
+    const stt = settings.stt_filter || {};
+    document.getElementById('stt-enabled').checked = !!stt.enabled;
+    document.getElementById('stt-engine').value = stt.engine || 'vosk';
+    document.getElementById('stt-vosk-path').value = stt.vosk_model_path || '';
+    document.getElementById('stt-vosk-path-host').textContent =
+      hostPathHint(hostPaths.stt_filter_vosk_model_path, 'VOSK_MODEL_FOLDER');
+    document.getElementById('stt-whisper-size').value = stt.whisper_model_size || '';
+    document.getElementById('stt-interval').value = stt.sample_interval_seconds;
+    document.getElementById('stt-threshold').value = stt.confidence_threshold;
+    document.getElementById('stt-combine').value = stt.combine_mode || 'and';
   } catch (e) {
     showMsg('Konnte Einstellungen nicht laden: ' + e.message, true);
+  }
+
+  try {
+    const status = await api('/api/status');
+    const stt = status.stt_status || {};
+    const line = document.getElementById('stt-status-line');
+    if (!stt.engine) {
+      line.textContent = 'Status: deaktiviert.';
+    } else if (stt.available) {
+      line.textContent = `Status: ✅ ${stt.engine} aktiv.`;
+    } else {
+      line.textContent = `Status: ⚠ deaktiviert (${stt.error || 'Modell nicht ladbar'}).`;
+    }
+  } catch (e) {
+    // Statuszeile ist rein informativ -- ein Fehlschlag hier soll das
+    // Laden der übrigen Einstellungen (oben) nicht als Fehler melden.
   }
 }
 
@@ -1100,6 +1564,89 @@ document.getElementById('settings-form').addEventListener('submit', async (ev) =
       body: JSON.stringify({prebuffer_seconds, prebuffer_count}),
     });
     showMsg('Puffer-Einstellungen gespeichert.', false);
+  } catch (e) {
+    showMsg('Fehler: ' + e.message, true);
+  }
+});
+
+document.getElementById('stream-url-form').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const stream_url = document.getElementById('stream-url-input').value;
+  try {
+    await api('/api/config/settings', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({stream_url}),
+    });
+    showMsg('Streaming-Adresse gespeichert.', false);
+  } catch (e) {
+    showMsg('Fehler: ' + e.message, true);
+  }
+});
+
+document.getElementById('tls-form').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const tls_enabled = document.getElementById('tls-enabled').checked;
+  try {
+    await api('/api/config/settings', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({tls_enabled}),
+    });
+    showMsg('HTTPS-Einstellung gespeichert — wirkt erst nach Neustart des Containers.', false);
+  } catch (e) {
+    showMsg('Fehler: ' + e.message, true);
+  }
+});
+
+document.getElementById('news-break-form').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const news_break_enabled = document.getElementById('nb-enabled').checked;
+  const news_break_mp3_folder = document.getElementById('nb-mp3-folder').value;
+  const news_break_window_minutes = parseFloat(document.getElementById('nb-window').value);
+  const hoursEnabled = document.getElementById('nb-hours-enabled').checked;
+  let news_break_enabled_hours = null;
+  if (hoursEnabled) {
+    const start = parseInt(document.getElementById('nb-hour-start').value, 10);
+    const end = parseInt(document.getElementById('nb-hour-end').value, 10);
+    news_break_enabled_hours = [start, end];
+  }
+  try {
+    await api('/api/config/settings', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        news_break_enabled, news_break_mp3_folder, news_break_window_minutes,
+        news_break_enabled_hours,
+      }),
+    });
+    showMsg('Nachrichten-Pause gespeichert.', false);
+  } catch (e) {
+    showMsg('Fehler: ' + e.message, true);
+  }
+});
+
+document.getElementById('stt-form').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const stt_filter_enabled = document.getElementById('stt-enabled').checked;
+  const stt_filter_engine = document.getElementById('stt-engine').value;
+  const stt_filter_vosk_model_path = document.getElementById('stt-vosk-path').value;
+  const stt_filter_whisper_model_size = document.getElementById('stt-whisper-size').value;
+  const stt_filter_sample_interval_seconds = parseFloat(document.getElementById('stt-interval').value);
+  const stt_filter_confidence_threshold = parseFloat(document.getElementById('stt-threshold').value);
+  const stt_filter_combine_mode = document.getElementById('stt-combine').value;
+  try {
+    await api('/api/config/settings', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        stt_filter_enabled, stt_filter_engine, stt_filter_vosk_model_path,
+        stt_filter_whisper_model_size, stt_filter_sample_interval_seconds,
+        stt_filter_confidence_threshold, stt_filter_combine_mode,
+      }),
+    });
+    showMsg('STT-Sprachfilter gespeichert.', false);
+    loadSettings();
   } catch (e) {
     showMsg('Fehler: ' + e.message, true);
   }
@@ -1197,9 +1744,18 @@ loadSettings();
 """
 
 
-def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: str):
+def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: str,
+                  host_paths: dict = None):
     """Baut eine BaseHTTPRequestHandler-Subklasse mit state/icecast_cfg im
-    Closure — so bleibt der Handler selbst zustandslos und threadsicher."""
+    Closure — so bleibt der Handler selbst zustandslos und threadsicher.
+
+    host_paths: rein informative Host-Pfade (NEWS_MP3_FOLDER/
+    VOSK_MODEL_FOLDER aus .env), NUR fürs Anzeigen auf der Config-Seite --
+    der Container selbst kennt nur seine eigenen Pfade (/app/news_mp3 o.ä.),
+    dorthin gemountet wird schon vor dem Start in docker-compose.yml. Ohne
+    diesen expliziten Durchreich-Weg hätte der laufende Prozess keine
+    Möglichkeit, den echten Host-Pfad überhaupt zu kennen (siehe CLAUDE.md)."""
+    host_paths = host_paths or {}
 
     import_state = ImportState()
 
@@ -1244,6 +1800,16 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                     self.send_header("Cache-Control", "public, max-age=86400")
                     self.end_headers()
                     self.wfile.write(_BANNER_BYTES)
+            elif self.path == "/qrcode.js":
+                if _QRCODE_JS_BYTES is None:
+                    self.send_error(404)
+                else:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/javascript; charset=utf-8")
+                    self.send_header("Content-Length", str(len(_QRCODE_JS_BYTES)))
+                    self.send_header("Cache-Control", "public, max-age=86400")
+                    self.end_headers()
+                    self.wfile.write(_QRCODE_JS_BYTES)
             elif self.path == "/api/status":
                 self._send_json(_build_status(state, icecast_cfg))
             elif self.path == "/api/config/stations":
@@ -1256,7 +1822,15 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                     "categories": stations_store.CATEGORIES,
                 })
             elif self.path == "/api/config/settings":
-                self._send_json(settings_store.load())
+                data = settings_store.load()
+                # Rein informativ, kein Settings-Feld -- siehe make_handler()-
+                # Docstring. Die Config-Seite zeigt das read-only neben den
+                # jeweiligen Container-Pfad-Feldern an.
+                data["_host_paths"] = {
+                    "news_break_mp3_folder": host_paths.get("news_mp3_folder"),
+                    "stt_filter_vosk_model_path": host_paths.get("vosk_model_folder"),
+                }
+                self._send_json(data)
             elif self.path == "/api/config/import/status":
                 self._send_json(import_state.snapshot())
             else:
@@ -1313,6 +1887,8 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                     prebuffer_seconds=payload.get("prebuffer_seconds"),
                     prebuffer_count=payload.get("prebuffer_count"),
                     import_url=payload.get("import_url"),
+                    stream_url=payload.get("stream_url"),
+                    tls_enabled=payload.get("tls_enabled"),
                     news_break_enabled=payload.get("news_break_enabled"),
                     news_break_mp3_folder=payload.get("news_break_mp3_folder"),
                     news_break_window_minutes=payload.get("news_break_window_minutes"),
@@ -1326,6 +1902,13 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                         if "news_break_enabled_hours" in payload
                         else settings_store.UNSET
                     ),
+                    stt_filter_enabled=payload.get("stt_filter_enabled"),
+                    stt_filter_engine=payload.get("stt_filter_engine"),
+                    stt_filter_vosk_model_path=payload.get("stt_filter_vosk_model_path"),
+                    stt_filter_whisper_model_size=payload.get("stt_filter_whisper_model_size"),
+                    stt_filter_sample_interval_seconds=payload.get("stt_filter_sample_interval_seconds"),
+                    stt_filter_confidence_threshold=payload.get("stt_filter_confidence_threshold"),
+                    stt_filter_combine_mode=payload.get("stt_filter_combine_mode"),
                 )
                 state.request_reload()
                 self._send_json({"ok": True, "settings": settings})
@@ -1376,10 +1959,10 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
             self._send_json({"ok": True})
 
         def _handle_skip(self):
-            # "Gesabbel!"-Knopf: Nutzer hat selbst Sprache erkannt, auch
+            # "ZAPPEN!"-Knopf: Nutzer hat selbst Sprache erkannt, auch
             # wenn VAD/Heuristik (noch) nicht angeschlagen haben -> sofort
             # weiterschalten, ohne auf die automatische Erkennung zu warten.
-            log.info("🎛  Web-Interface: '🗣️ Gesabbel!' gedrückt.")
+            log.info("🎛  Web-Interface: '⚡ ZAPPEN!' gedrückt.")
             state.request_skip()
             self._send_json({"ok": True})
 
@@ -1494,10 +2077,28 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
 
 
 def start_server(port: int, state: SwitcherState, icecast_cfg: dict,
-                  fingerprint_db_path: str) -> ThreadingHTTPServer:
-    httpd = ThreadingHTTPServer(("0.0.0.0", port), make_handler(state, icecast_cfg, fingerprint_db_path))
+                  fingerprint_db_path: str, tls_cert_file: str = None,
+                  tls_key_file: str = None, host_paths: dict = None) -> ThreadingHTTPServer:
+    httpd = ThreadingHTTPServer(("0.0.0.0", port),
+                                 make_handler(state, icecast_cfg, fingerprint_db_path, host_paths))
+    scheme = "http"
+    if tls_cert_file and tls_key_file:
+        try:
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ctx.load_cert_chain(certfile=tls_cert_file, keyfile=tls_key_file)
+            httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
+            scheme = "https"
+        except (ssl.SSLError, OSError) as e:
+            # tls_enabled ist an, aber TLS_CERT_FILE/TLS_KEY_FILE sind in
+            # .env nicht (oder falsch) gesetzt -- Docker mountet dann
+            # /dev/null an die erwarteten Pfade (siehe docker-compose.yml),
+            # load_cert_chain() scheitert daran. Lieber mit Klartext-HTTP
+            # weiterlaufen als den ganzen Container abstürzen zu lassen.
+            log.warning("⚠ TLS-Zertifikat (%s) nicht nutzbar (%s) — "
+                        "Web-Interface läuft nur über HTTP.", tls_cert_file, e)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True, name="webui")
     thread.start()
+    log.info("🌐 Web-Interface läuft auf Port %d (%s)", port, scheme)
     log.debug("Webserver-Thread gestartet (Port %d, Icecast-Admin: %s)",
               port, icecast_cfg.get("admin_url") or "nicht konfiguriert")
     return httpd

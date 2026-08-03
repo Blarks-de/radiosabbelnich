@@ -12,18 +12,44 @@ services:
     image: perl19/icecast2
     container_name: icecast-radiozapper
     restart: unless-stopped
+    # Nötig, damit Icecast beim Start das TLS-Zertifikat lesen kann (unten,
+    # 0600/root, wie von `tailscale cert` erzeugt) -- das Image läuft per
+    # Default direkt als unprivilegierter User "icecast2" (uid 101), der
+    # käme an eine root-only-Datei gar nicht ran. Icecast selbst droppt
+    # root-Rechte danach intern wieder über <changeowner> in icecast.xml
+    # (siehe die sed-Korrektur unten) -- der Server läuft also nicht
+    # dauerhaft als root, nur der Start braucht es kurz. Ohne echtes
+    # Zertifikat (TLS_CERT_FILE/TLS_KEY_FILE leer -> /dev/null gemountet)
+    # ist dieser Root-Start wirkungslos, aber auch nicht schädlich.
+    user: "0:0"
     ports:
       - "${ICECAST_PORT:-8000}:8000"
+      - "${ICECAST_SSL_PORT:-8443}:8443"
     environment:
       - IC_AUTH_ADMIN=${ICECAST_ADMIN_USER}
       - IC_AUTH_ADMIN_PASS=${ICECAST_ADMIN_PASSWORD}
       - IC_SOURCE_PASS=${ICECAST_SOURCE_PASSWORD}
       - IC_HOSTNAME=${ICECAST_HOSTNAME}
       - IC_PORT=8000
+      # Container-intern IMMER 8443 (muss zur rechten Seite des
+      # Port-Mappings oben passen) -- ICECAST_SSL_PORT in .env ändert nur,
+      # unter welchem HOST-Port das erreichbar ist, genau wie ICECAST_PORT
+      # das für den Klartext-Port schon tut.
+      - IC_SSL_PORT=8443
       - IC_LIMITS_CLIENTS=50
       - IC_LIMITS_SOURCES=5
       - IC_LOCATION=${ICECAST_LOCATION}
       - IC_ADMIN_EMAIL=${ICECAST_ADMIN_EMAIL}
+    volumes:
+      # Host-Pfade zu Cert/Key aus .env (TLS_CERT_FILE/TLS_KEY_FILE, z.B.
+      # per `tailscale cert` erzeugt), Default /dev/null -- IMMER ein
+      # gültiges Bind-Mount-Ziel (anders als ein leerer String), liefert
+      # aber 0 Byte, siehe "-s"-Test im Entrypoint unten. So funktioniert
+      # `docker compose up` weiterhin ohne konfiguriertes Zertifikat, ganz
+      # ohne Platzhalterdatei im Repo (analog zum NEWS_MP3_FOLDER-Muster
+      # unten, nur ohne Verzeichnis).
+      - ${TLS_CERT_FILE:-/dev/null}:/run/tls-cert.pem:ro
+      - ${TLS_KEY_FILE:-/dev/null}:/run/tls-key.pem:ro
     # Das Basis-Image generiert icecast.xml über ein "icegen"-Tool, das
     # <location>/<admin> (Server-Info-Felder, nicht die Admin-Login-Daten)
     # gar nicht kennt -> die Tags fehlen im generierten XML komplett, Icecast
@@ -35,6 +61,18 @@ services:
     # überschreibt eine vorhandene icecast.xml nicht, sondern hängt eine
     # zweite Kopie an -> bei jedem Neustart des Containers sonst ungültiges
     # XML (zwei Root-Elemente) und Absturzschleife.
+    #
+    # Die <changeowner>-Korrektur (icecast2 -> icecast) ist KEIN TLS-Detail,
+    # sondern ein Bug im icegen-Template: es trägt dort fälschlich den
+    # User-Namen statt des tatsächlichen Gruppennamens ein (im Image heißt
+    # User "icecast2", seine Gruppe aber "icecast", uid/gid beide 101).
+    # Bisher nie aufgefallen, weil der Container ohne "user: root" oben nie
+    # tatsächlich als root startete und <changeowner> darum nie griff.
+    # Jetzt, wo der Container IMMER als root hochkommt, MUSS die Korrektur
+    # laufen, sonst verweigert Icecast mit "You should not run icecast2 as
+    # root" den Start komplett -- unabhängig davon, ob überhaupt ein
+    # Zertifikat konfiguriert ist. Live gegen einen isolierten Testcontainer
+    # verifiziert (siehe SESSION.md).
     entrypoint: ["/bin/bash", "-c"]
     command:
       - |
@@ -51,6 +89,27 @@ services:
         sed -i "/<icecast>/a\\
             <location>$$IC_LOCATION</location>\\
             <admin>$$IC_ADMIN_EMAIL</admin>" icecast.xml
+        sed -i "s#<group>icecast2</group>#<group>icecast</group>#" icecast.xml
+        if [ -s /run/tls-cert.pem ] && [ -s /run/tls-key.pem ]; then
+          # Icecast will Cert+Key in EINER Datei (erst Zertifikat, dann
+          # privater Schlüssel) -- Kopie statt der read-only gemounteten
+          # Originale, weil sie zusätzlich icecast2:icecast gehören muss:
+          # Icecast selbst liest die Datei erst NACH dem intern via
+          # <changeowner> gedroppten Root, nicht mehr davor.
+          cat /run/tls-cert.pem /run/tls-key.pem > icecast-tls.pem
+          chown icecast2:icecast icecast-tls.pem
+          chmod 600 icecast-tls.pem
+          sed -i "/<hostname>/a\\
+              <listen-socket>\\
+                  <port>$$IC_SSL_PORT</port>\\
+                  <ssl>1</ssl>\\
+              </listen-socket>" icecast.xml
+          sed -i "/<paths>/a\\
+              <ssl-certificate>/app/icecast-tls.pem</ssl-certificate>" icecast.xml
+          echo "TLS aktiviert: zusätzlicher HTTPS-Port $$IC_SSL_PORT"
+        else
+          echo "Kein TLS-Zertifikat konfiguriert (TLS_CERT_FILE/TLS_KEY_FILE in .env) -- nur HTTP auf Port $$IC_PORT."
+        fi
         exec icecast2 -c icecast.xml
 
   radiozapper:
@@ -70,11 +129,41 @@ services:
       # damit das Web-Interface einen Player einbetten kann, der vom
       # Browser aus direkt auf den öffentlichen Icecast-Port zeigt
       - ICECAST_PUBLIC_PORT=${ICECAST_PORT:-8000}
+      # dieselbe Variable wie beim icecast-Service oben (Host-Port für
+      # Icecasts HTTPS-Listener) -- webui.py braucht sie, um bei einer per
+      # HTTPS aufgerufenen Player-Seite die Stream-Adresse mit dem
+      # richtigen (SSL-)Port statt dem Klartext-Port 8000 zu bauen, siehe
+      # dortiger Kommentar zu autoUrl. Ohne konfiguriertes Icecast-TLS
+      # zeigt das schlicht auf einen Port, an dem niemand lauscht -- kein
+      # neuer Fehlerzustand, nur nicht hilfreich.
+      - ICECAST_PUBLIC_SSL_PORT=${ICECAST_SSL_PORT:-8443}
+      # Container-interne, feste Pfade (siehe Volumes unten) -- der
+      # Dockerfile-Entrypoint reicht sie als --tls-cert-file/--tls-key-file
+      # an radiozapper.py durch. Ob sie tatsächlich genutzt werden,
+      # entscheidet "tls_enabled" in settings.json (per /config), nicht
+      # allein ihre Anwesenheit hier.
+      - TLS_CERT_PATH=/app/certs/cert.pem
+      - TLS_KEY_PATH=/app/certs/key.pem
+      # Rein informativ fürs Web-Interface (Config-Seite zeigt den echten
+      # Host-Pfad neben dem Container-Pfad an, siehe webui.py) -- dieselben
+      # .env-Werte wie bei den Volumes unten, hier zusätzlich als
+      # Klartext-Variable durchgereicht. KEIN Mount, ändert nichts an der
+      # eigentlichen Bind-Mount-Logik.
+      - NEWS_MP3_FOLDER_HOST=${NEWS_MP3_FOLDER:-./news_mp3}
+      - VOSK_MODEL_FOLDER_HOST=${VOSK_MODEL_FOLDER:-./vosk-model-de}
     ports:
       - "${WEBUI_PORT:-5000}:5000"
     volumes:
       - ./stations.json:/app/stations.json
       - ./settings.json:/app/settings.json
+      # Läuft als root im Container (siehe Dockerfile, kein USER gesetzt) --
+      # kann die root-only-Originaldatei (0600, z.B. von `tailscale cert`)
+      # direkt lesen, anders als der Icecast-Service oben braucht es hier
+      # also keine Kopie/kein chown. Default /dev/null wie dort: immer ein
+      # gültiges Mount-Ziel, liefert aber 0 Byte -> webui.start_server()
+      # erkennt das und bleibt bei HTTP (siehe dortiger try/except).
+      - ${TLS_CERT_FILE:-/dev/null}:/app/certs/cert.pem:ro
+      - ${TLS_KEY_FILE:-/dev/null}:/app/certs/key.pem:ro
       # Muss auf dem Host als DATEI existieren, bevor der Container startet
       # (sonst legt Docker ein Verzeichnis an und SQLite kann sie nicht
       # öffnen): einmalig `touch fingerprints.db`, siehe README-Setup.
@@ -93,3 +182,14 @@ services:
       # settings.json deaktiviert ist) -- ein leerer/fehlender Ordner wird
       # zur Laufzeit einfach übersprungen, siehe README.
       - ${NEWS_MP3_FOLDER:-./news_mp3}:/app/news_mp3:ro
+      # STT-Sprachfilter (stt_filter.py): entpacktes deutsches Vosk-Modell,
+      # NICHT ins Image gebacken (zu groß, siehe README für Download-Link).
+      # settings.json' "stt_filter.vosk_model_path" zeigt auf den
+      # Container-internen Pfad rechts vom Doppelpunkt, genau wie beim
+      # NEWS_MP3_FOLDER-Muster oben. Nur relevant, wenn engine="vosk".
+      - ${VOSK_MODEL_FOLDER:-./vosk-model-de}:/app/vosk-model-de:ro
+      # faster-whisper lädt Modelle beim ersten Gebrauch selbst von
+      # HuggingFace nach -- beschreibbar (kein :ro) und dauerhaft, damit
+      # der Download nicht bei jedem Container-Neustart wiederholt wird.
+      # Nur relevant, wenn engine="whisper".
+      - ./whisper_cache:/app/whisper_cache

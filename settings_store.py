@@ -26,6 +26,17 @@ DEFAULTS = {
     "prebuffer_seconds": 10.0,
     "prebuffer_count": 5,
     "import_url": "http://bit.ly/kn-kodi-radio",
+    # Leer = automatisch aus der Adresse gebildet, über die der Browser das
+    # Web-Interface gerade aufruft (siehe webui.py/_PAGE_HTML). Nur setzen,
+    # wenn die tatsächliche öffentliche Adresse davon abweicht.
+    "stream_url": "",
+    # Ob webui.py sein Server-Socket in TLS einwickelt (siehe
+    # webui.start_server()). Wirkungslos ohne TLS_CERT_FILE/TLS_KEY_FILE in
+    # .env (siehe docker-compose.yml) UND wirkt erst nach einem Neustart
+    # des Containers -- anders als die meisten anderen Einstellungen hier
+    # kann ein laufender ThreadingHTTPServer sein Socket nicht im laufenden
+    # Betrieb neu einwickeln.
+    "tls_enabled": False,
     "news_break": {
         "enabled": False,
         # Container-interner Pfad — siehe docker-compose.yml
@@ -33,6 +44,24 @@ DEFAULTS = {
         "mp3_folder": "/app/news_mp3",
         "window_minutes": 2.0,
         "enabled_hours": None,  # None = rund um die Uhr, sonst [start, end), z.B. [6, 22]
+    },
+    "stt_filter": {
+        "enabled": False,
+        "engine": "vosk",              # "vosk" | "whisper"
+        # Container-interner Pfad — siehe docker-compose.yml
+        # (VOSK_MODEL_FOLDER-Bind-Mount) und README. NICHT der Host-Pfad.
+        "vosk_model_path": "/app/vosk-model-de",
+        "whisper_model_size": "tiny",  # "tiny" | "base" (o.ä., siehe faster-whisper)
+        "sample_interval_seconds": 8.0,
+        # Empirisch aus echten Sendern hergeleitet (siehe SESSION.md):
+        # Deutschlandfunk-Sprache lag in 10 Clips nie unter 0.83, Schlager-
+        # Gesang (ndr-schlager/radio-paloma/schlagerparadies) im Schnitt
+        # bei 0.38 -- 0.75 liegt mit Marge unter dem Sprache-Minimum, damit
+        # reale Moderation sicher erkannt wird, filtert aber den Großteil
+        # des gesungenen Schlagers heraus (bei 0.6 wären es nur ~60%
+        # gewesen statt ~80% bei 0.75).
+        "confidence_threshold": 0.75,
+        "combine_mode": "and",          # "and" | "or" — siehe stt_filter.combine_label()
     },
 }
 
@@ -42,7 +71,12 @@ LIMITS = {
     "prebuffer_seconds": (0.0, 60.0),
     "prebuffer_count": (0, 20),
     "news_break_window_minutes": (0.1, 15.0),
+    "stt_sample_interval_seconds": (2.0, 60.0),
+    "stt_confidence_threshold": (0.0, 1.0),
 }
+
+STT_ENGINES = {"vosk", "whisper"}
+STT_COMBINE_MODES = {"and", "or"}
 
 _lock = threading.Lock()
 
@@ -54,10 +88,11 @@ UNSET = object()
 
 
 def _defaults_copy() -> dict:
-    """dict(DEFAULTS) reicht nicht — "news_break" ist selbst ein dict,
-    ein flacher copy() würde ihn mit dem Modul-weiten DEFAULTS-Objekt
-    teilen statt kopieren."""
-    return {**DEFAULTS, "news_break": dict(DEFAULTS["news_break"])}
+    """dict(DEFAULTS) reicht nicht — "news_break"/"stt_filter" sind selbst
+    dicts, ein flacher copy() würde sie mit dem Modul-weiten DEFAULTS-
+    Objekt teilen statt kopieren."""
+    return {**DEFAULTS, "news_break": dict(DEFAULTS["news_break"]),
+            "stt_filter": dict(DEFAULTS["stt_filter"])}
 
 
 def _read_raw() -> dict:
@@ -78,6 +113,13 @@ def _read_raw() -> dict:
             merged["news_break"].update(
                 {kk: vv for kk, vv in v.items() if kk in DEFAULTS["news_break"]}
             )
+        elif k == "stt_filter" and isinstance(v, dict):
+            # Gleiches Muster wie "news_break" direkt oben: ein
+            # settings.json von vor diesem Feature funktioniert dadurch
+            # unverändert weiter.
+            merged["stt_filter"].update(
+                {kk: vv for kk, vv in v.items() if kk in DEFAULTS["stt_filter"]}
+            )
         else:
             merged[k] = v
     return merged
@@ -94,10 +136,21 @@ def load() -> dict:
 
 
 def update(prebuffer_seconds=None, prebuffer_count=None, import_url=None,
+           stream_url=None, tls_enabled=None,
            news_break_enabled=None, news_break_mp3_folder=None,
-           news_break_window_minutes=None, news_break_enabled_hours=UNSET) -> dict:
+           news_break_window_minutes=None, news_break_enabled_hours=UNSET,
+           stt_filter_enabled=None, stt_filter_engine=None,
+           stt_filter_vosk_model_path=None, stt_filter_whisper_model_size=None,
+           stt_filter_sample_interval_seconds=None, stt_filter_confidence_threshold=None,
+           stt_filter_combine_mode=None) -> dict:
     """Aktualisiert nur die übergebenen Felder (None = unverändert lassen),
     validiert. Wirft ValueError bei ungültigen Werten.
+
+    stream_url folgt NICHT der None-Konvention der anderen String-Felder:
+    ein leerer String ist hier ein gültiger Fachwert ("automatisch
+    ermitteln", siehe DEFAULTS) und wird deshalb, anders als bei
+    import_url, akzeptiert statt verworfen — nur None (Feld weggelassen)
+    lässt den gespeicherten Wert unangetastet.
 
     news_break_enabled_hours ist eine Ausnahme von der None-Konvention:
     hier bedeutet None explizit "auf 'rund um die Uhr' zurücksetzen" (der
@@ -110,7 +163,13 @@ def update(prebuffer_seconds=None, prebuffer_count=None, import_url=None,
     news_break_mp3_folder wird bewusst NICHT auf Existenz/Lesbarkeit
     geprüft — das ist typischerweise ein SMB-Mount, der beim Speichern der
     Einstellung noch nicht verfügbar sein kann. Die eigentliche Prüfung
-    passiert erst zur Laufzeit in news_break.pick_random_mp3()."""
+    passiert erst zur Laufzeit in news_break.pick_random_mp3().
+
+    stt_filter_vosk_model_path/stt_filter_whisper_model_size werden aus
+    demselben Grund NICHT auf Existenz geprüft — die eigentliche Prüfung
+    (Modell ladbar?) passiert erst beim Laden in stt_filter.py, das sich
+    bei einem ungültigen Pfad selbst deaktiviert statt hier schon einen
+    Fehler zu werfen."""
     with _lock:
         data = _read_raw()
         if prebuffer_seconds is not None:
@@ -138,6 +197,14 @@ def update(prebuffer_seconds=None, prebuffer_count=None, import_url=None,
             if not (import_url.startswith("http://") or import_url.startswith("https://")):
                 raise ValueError("import_url muss mit http:// oder https:// beginnen.")
             data["import_url"] = import_url
+        if stream_url is not None:
+            stream_url = str(stream_url).strip()
+            if stream_url and not (stream_url.startswith("http://") or stream_url.startswith("https://")):
+                raise ValueError("stream_url muss leer sein (automatisch) oder mit "
+                                  "http:// bzw. https:// beginnen.")
+            data["stream_url"] = stream_url
+        if tls_enabled is not None:
+            data["tls_enabled"] = bool(tls_enabled)
 
         nb = data["news_break"]
         if news_break_enabled is not None:
@@ -166,6 +233,42 @@ def update(prebuffer_seconds=None, prebuffer_count=None, import_url=None,
                     raise ValueError("news_break_enabled_hours muss 0 <= start < end <= 24 erfüllen "
                                       "(Übernacht-Fenster wie 22-6 werden nicht unterstützt).")
                 nb["enabled_hours"] = [start, end]
+
+        stt = data["stt_filter"]
+        if stt_filter_enabled is not None:
+            stt["enabled"] = bool(stt_filter_enabled)
+        if stt_filter_engine is not None:
+            stt_filter_engine = str(stt_filter_engine).strip()
+            if stt_filter_engine not in STT_ENGINES:
+                raise ValueError(f"stt_filter_engine muss eine von {sorted(STT_ENGINES)} sein.")
+            stt["engine"] = stt_filter_engine
+        if stt_filter_vosk_model_path is not None:
+            stt["vosk_model_path"] = str(stt_filter_vosk_model_path).strip()
+        if stt_filter_whisper_model_size is not None:
+            stt["whisper_model_size"] = str(stt_filter_whisper_model_size).strip()
+        if stt_filter_sample_interval_seconds is not None:
+            lo, hi = LIMITS["stt_sample_interval_seconds"]
+            try:
+                stt_filter_sample_interval_seconds = float(stt_filter_sample_interval_seconds)
+            except (TypeError, ValueError):
+                raise ValueError("stt_filter_sample_interval_seconds muss eine Zahl sein.")
+            if not (lo <= stt_filter_sample_interval_seconds <= hi):
+                raise ValueError(f"stt_filter_sample_interval_seconds muss zwischen {lo} und {hi} liegen.")
+            stt["sample_interval_seconds"] = stt_filter_sample_interval_seconds
+        if stt_filter_confidence_threshold is not None:
+            lo, hi = LIMITS["stt_confidence_threshold"]
+            try:
+                stt_filter_confidence_threshold = float(stt_filter_confidence_threshold)
+            except (TypeError, ValueError):
+                raise ValueError("stt_filter_confidence_threshold muss eine Zahl sein.")
+            if not (lo <= stt_filter_confidence_threshold <= hi):
+                raise ValueError(f"stt_filter_confidence_threshold muss zwischen {lo} und {hi} liegen.")
+            stt["confidence_threshold"] = stt_filter_confidence_threshold
+        if stt_filter_combine_mode is not None:
+            stt_filter_combine_mode = str(stt_filter_combine_mode).strip()
+            if stt_filter_combine_mode not in STT_COMBINE_MODES:
+                raise ValueError(f"stt_filter_combine_mode muss eine von {sorted(STT_COMBINE_MODES)} sein.")
+            stt["combine_mode"] = stt_filter_combine_mode
 
         _write(data)
         log.info("⚙ Einstellungen gespeichert: %s", data)

@@ -108,9 +108,9 @@ eine zufällige MP3 aus einem lokalen Ordner abspielen (z.B. eigene
 Jingles/Musikstücke von einem SMB-Mount) — danach geht's automatisch
 mit dem pausierten Sender weiter, ganz normal.
 
-Konfiguriert wird das über den `news_break`-Block in `settings.json`
-(aktuell nur über die API setzbar, siehe unten — keine eigene
-Formular-Sektion auf der Config-Seite):
+Konfiguriert wird das über den `news_break`-Block in `settings.json`,
+einstellbar über die Formular-Sektion "📰 Nachrichten-Pause" oberhalb der
+Senderliste auf der Config-Seite (`/config`) oder direkt per API:
 
 ```json
 "news_break": {
@@ -122,17 +122,23 @@ Formular-Sektion auf der Config-Seite):
 ```
 
 - **`enabled`** — Feature an/aus.
-- **`mp3_folder`** — Container-interner Pfad (nicht der Host-Pfad!). Der
-  Ordner wird über `NEWS_MP3_FOLDER` in `.env` von außen reingemountet
-  (siehe `docker-compose.yml`), typischerweise ein SMB-Mount. Ordner
-  fehlt/ist leer/nicht lesbar → Feature wird für dieses Zeitfenster
-  einfach übersprungen, mit Logeintrag, kein Fehler.
+- **`mp3_folder`** — Container-interner Pfad (nicht der Host-Pfad!), im
+  Formular normalerweise unverändert auf `/app/news_mp3` lassen. Der
+  eigentliche Host-Ordner wird über `NEWS_MP3_FOLDER` in `.env` von außen
+  reingemountet (siehe `docker-compose.yml`), typischerweise ein
+  SMB-Mount — dafür braucht es einen Container-Neustart, kein Feld auf der
+  Config-Seite. Ordner fehlt/ist leer/nicht lesbar → Feature wird für
+  dieses Zeitfenster einfach übersprungen, mit Logeintrag, kein Fehler.
+  Unter dem Feld zeigt die Config-Seite zur Orientierung read-only den
+  echten Host-Pfad an (aus `NEWS_MP3_FOLDER` durchgereicht) — der
+  Container kennt ihn sonst grundsätzlich nicht, Docker übersetzt
+  Host→Container-Pfad nur einmalig beim Start.
 - **`window_minutes`** — wie viele Minuten vor/nach :00 und :30 aktiv.
 - **`enabled_hours`** — optional `[start, end]`, z.B. `[6, 22]` für "nur
   6–22 Uhr"; `null` = rund um die Uhr. Kein Übernacht-Wraparound (22–6
   wird nicht unterstützt).
 
-Setzen per API:
+Alternativ direkt per API setzen (z.B. für Skripte):
 ```bash
 curl -X POST http://<host>:5000/api/config/settings \
      -H 'Content-Type: application/json' \
@@ -148,6 +154,83 @@ automatische Sprache-Erkennung (VAD/Heuristik/Fingerprint) — die MP3
 selbst enthält u.U. Sprache, das soll nicht als "Moderation" auf dem
 eigentlichen Sender fehlgedeutet werden.
 
+## STT-Sprachfilter
+
+Silero VAD/die Signal-Heuristik erkennen "ist hier eine menschliche
+Stimme" — auch deutsch gesungene Musik zählt da oft fälschlich mit. Der
+STT-Sprachfilter (`stt_filter.py`) hört stattdessen per Speech-to-Text
+mit, ob gerade *zusammenhängender deutscher Text* zu erkennen ist, und
+liefert das als zusätzliches Signal für die Switch-Entscheidung.
+
+Zwei austauschbare Engines, nie gleichzeitig geladen:
+
+- **Vosk** — kleines deutsches Kaldi-Modell, leichtgewichtig und auch auf
+  einem Raspberry Pi gut nutzbar.
+- **Whisper** (über `faster-whisper`) — genauer, aber deutlich
+  ressourcenhungriger, selbst als "tiny"-Modell.
+
+Konfiguriert wird das über den `stt_filter`-Block in `settings.json`,
+einstellbar über die Formular-Sektion "🗣 STT-Sprachfilter" auf der
+Config-Seite (`/config`) oder direkt per API:
+
+```json
+"stt_filter": {
+  "enabled": false,
+  "engine": "vosk",
+  "vosk_model_path": "/app/vosk-model-de",
+  "whisper_model_size": "tiny",
+  "sample_interval_seconds": 8.0,
+  "confidence_threshold": 0.75,
+  "combine_mode": "and"
+}
+```
+
+- **`enabled`** — Feature an/aus.
+- **`engine`** — `"vosk"` oder `"whisper"`.
+- **`vosk_model_path`** — Container-interner Pfad (nicht der Host-Pfad!)
+  zu einem entpackten deutschen Vosk-Modell. Der eigentliche Host-Ordner
+  wird über `VOSK_MODEL_FOLDER` in `.env` reingemountet (siehe
+  `docker-compose.yml`). Ein deutsches Modell gibt es unter
+  [alphacephei.com/vosk/models](https://alphacephei.com/vosk/models) —
+  `vosk-model-small-de-0.15` (~45 MB) für schwache Hardware/Pi,
+  `vosk-model-de-0.21` (~1 GB) für mehr Genauigkeit. Entpackt in den
+  Ordner legen, auf den `VOSK_MODEL_FOLDER` zeigt. Die Config-Seite zeigt
+  unter dem Feld read-only den echten Host-Pfad an (analog zum
+  MP3-Ordner der Nachrichten-Pause, siehe oben).
+- **`whisper_model_size`** — z.B. `"tiny"`, `"base"` (siehe
+  faster-whisper-Dokumentation für weitere Größen). Modelle werden beim
+  ersten Gebrauch automatisch von HuggingFace geladen und in einem
+  dauerhaften Volume zwischengespeichert (kein manueller Download nötig,
+  braucht aber beim ersten Aktivieren Internetzugriff und etwas Zeit).
+- **`sample_interval_seconds`** — wie oft ein kurzer Clip (ca. 3s) zur
+  Analyse genommen wird. Läuft kontinuierlich im Hintergrund, unabhängig
+  vom aktuellen VAD-Ergebnis (blockiert den Hauptloop nie).
+- **`confidence_threshold`** — ab welcher (Best-Effort-)Konfidenz ein
+  Sample als "zusammenhängender deutscher Text" gilt. Der Default (0.75)
+  ist **empirisch gemessen**, nicht geraten: 10 Live-Clips von
+  Deutschlandfunk (Sprache) lagen nie unter 0.83 Konfidenz, 30 Live-Clips
+  von drei Schlager-Sendern (gesungene deutsche Musik) im Schnitt bei
+  0.38 — 0.75 liegt mit Sicherheitsabstand unter dem Sprache-Minimum.
+  Erkannte Texte/Konfidenzwerte landen zum Nachjustieren in
+  `logs/radiozapper.log`.
+- **`combine_mode`** — wie das STT-Ergebnis mit VAD/Heuristik verknüpft
+  wird: `"and"` (Default) verlangt, dass beide "Sprache" sagen — das
+  lässt einen Großteil deutsch gesungener Musik (VAD ja, STT erkennt
+  meist keinen zusammenhängenden Text) korrekt als Musik durchgehen.
+  **Kein Allheilmittel**: bei klar/langsam gesungenem Schlager erkennt
+  Vosk gelegentlich kurze, grammatisch plausible Wortfetzen mit hoher
+  Konfidenz (bei obigem Test ~20% der Schlager-Clips trotz Schwelle 0.75)
+  — UND reduziert Fehl-Switches auf gesungene Musik deutlich, verhindert
+  sie aber nicht zu 100%. `"or"` reicht, wenn eines der beiden Signale
+  "Sprache" sagt — fängt mehr echte Moderation, aber wieder anfälliger
+  für denselben Gesangs-Fall.
+
+Modell nicht gefunden oder Ladefehler → das Feature deaktiviert sich
+selbst (Log-Meldung, Status auch auf der Config-Seite sichtbar),
+RadioZapper läuft normal ohne STT-Filter weiter. Ein Absturz der Engine
+bei einem einzelnen Sample überspringt nur diesen einen Sample, nicht den
+Hauptprozess.
+
 ## Web-Interface
 
 Erreichbar unter `http://<host>:5000/`:
@@ -156,8 +239,21 @@ Erreichbar unter `http://<host>:5000/`:
   Sender ICY-Metadaten oder eine bekannte Alternativ-Quelle liefert
 - **Eingebetteter Player** — direkt im Browser mithören, ohne extra
   App/Client
+- **Streaming-Adresse für VLC & Co.** — unter der "Läuft gerade"-Box steht
+  die volle Stream-URL zum Eintragen in einen externen Player (türkis,
+  unterstrichen — Klick kopiert sie in die Zwischenablage). Standardmäßig
+  automatisch aus der Adresse gebildet, über die die Seite gerade
+  aufgerufen wird; auf der Config-Seite unter "🔗 Streaming-Adresse"
+  fest hinterlegbar, falls die tatsächliche öffentliche Adresse davon
+  abweicht.
+- **📱 QR-Code** — Knopf neben der Streaming-Adresse öffnet ein Popup mit
+  QR-Code + Klartext-URL zum Abfotografieren, z.B. um den Stream mit VLC
+  auf dem Handy zu öffnen, ohne die Adresse abzutippen. Wird rein
+  clientseitig aus derselben Adresse erzeugt, die auch daneben als Text
+  steht (kein zusätzlicher Request, keine externe Bibliothek — die
+  QR-Erzeugung läuft komplett offline im Browser).
 - **Sender-Liste** zum manuellen Umschalten
-- **🗣️ Gesabbel!** — hast du selbst erkannt, dass gerade geredet wird
+- **⚡ ZAPPEN!** — hast du selbst erkannt, dass gerade geredet wird
   (die Automatik aber noch nicht reagiert hat)? Schaltet sofort weiter.
 - **🛑 Zapping-Fehler** — hat die Fingerprint-Erkennung fälschlich
   umgeschaltet (z.B. ein kurzer Sender-übergreifender Sting über einem
@@ -168,6 +264,11 @@ Erreichbar unter `http://<host>:5000/`:
   automatische Erkennung für eine Weile aus (z.B. für ein Hörspiel/
   Feature auf einem sonst Musik-Sender), ohne dass RadioZapper
   dazwischenfunkt. Aktueller Zustand direkt am Button erkennbar.
+- **🤥 Bullshitometer** — grüner-zu-roter Balken, zeigt den aktuell
+  gemessenen Sprache-Wert (VAD-Wahrscheinlichkeit bzw. Heuristik-Votum)
+  live in Prozent, aktualisiert alle 5s. Rein informativ (nicht klickbar)
+  — friert grau ein, während Nachrichten-Pause läuft oder der
+  Sabbelfilter aus ist, weil dann gar nicht klassifiziert wird.
 - **Hörer-Übersicht** — wer gerade zuhört (IP/Client/Verbindungsdauer)
 - **⚙ Sender verwalten** (`/config`) — Sender hinzufügen, bearbeiten,
   löschen, per Haken (de)aktivieren, gruppiert nach Kategorie
@@ -188,6 +289,10 @@ Erreichbar unter `http://<host>:5000/`:
   Trigger, kein Auto-Import.
 - **🗑 Clip-DB leeren** (auf der Config-Seite) — löscht alle gelernten
   Fingerprint-Clips (nicht die Senderliste), mit Sicherheitsabfrage.
+- **📰 Nachrichten-Pause** (auf der Config-Seite, oberhalb der Senderliste)
+  — siehe eigener Abschnitt oben.
+- **🗣 STT-Sprachfilter** (auf der Config-Seite) — siehe eigener Abschnitt
+  oben.
 
 Der rohe Icecast-Stream bleibt parallel unter `http://<host>:8000/radiozapper.mp3`
 erreichbar (z.B. für VLC).
@@ -205,6 +310,8 @@ erreichbar (z.B. für VLC).
 | `webui.py` | Eingebettetes Web-Interface (Player-Seite + Config-Seite) |
 | `logging_setup.py` | Zentrale Logging-Konfiguration (Konsole + rotierende Logdatei) |
 | `news_break.py` | Nachrichten-Pause: Zeitfenster-Logik + zufällige MP3-Auswahl |
+| `stt_filter.py` | STT-Sprachfilter: Vosk/Whisper-Engines, austauschbar, Zusatzsignal für die Switch-Entscheidung |
+| `qrcode.js` | Vendorte QR-Code-Bibliothek (MIT, kazuhikoarase/qrcode-generator) fürs "📱 QR-Code"-Popup |
 | `stations.json` | Senderliste (Name, URL, Kategorie, aktiv/inaktiv) |
 | `docker-compose.yml` | Icecast + RadioZapper als zwei Services |
 
@@ -245,6 +352,33 @@ Datei oder bequemer über `http://<host>:5000/config`.
 | `ICECAST_PORT` | Host-Port für den rohen Icecast-Stream (Default 8000) |
 | `ICECAST_LOCATION`/`ICECAST_ADMIN_EMAIL` | Server-Info-Felder in Icecasts `icecast.xml` |
 | `WEBUI_PORT` | Host-Port für das Web-Interface (Default 5000) |
+| `TLS_CERT_FILE`/`TLS_KEY_FILE` | Host-Pfade zu PEM-Dateien für HTTPS (optional, siehe unten) |
+| `ICECAST_SSL_PORT` | Host-Port für den Icecast-Stream per HTTPS (Default 8443) |
+| `VOSK_MODEL_FOLDER` | Host-Ordner mit einem entpackten deutschen Vosk-Modell für den STT-Sprachfilter (optional, siehe eigener Abschnitt) |
+
+### HTTPS/TLS (optional)
+
+Ohne `TLS_CERT_FILE`/`TLS_KEY_FILE` laufen Web-Interface und Icecast-Stream
+wie bisher nur über HTTP — kein Pflichtschritt.
+
+Mit einem Zertifikat (z.B. per `tailscale cert <hostname>` erzeugt, ein
+`.crt`+`.key`-Paar):
+
+1. Beide Host-Pfade in `.env` eintragen (`TLS_CERT_FILE`/`TLS_KEY_FILE`).
+2. `docker compose up -d --build` — der **Icecast-Stream** bekommt dann
+   automatisch einen zusätzlichen HTTPS-Port (`ICECAST_SSL_PORT`, Default
+   8443) *neben* dem bisherigen HTTP-Port 8000, der unverändert
+   weiterläuft — bestehende Hörerverbindungen sind also nie betroffen.
+3. Fürs **Web-Interface** zusätzlich unter `/config` → "🔒 HTTPS" den Haken
+   setzen (oder `tls_enabled` in `settings.json`) und den Container einmal
+   neu starten. **Wichtig:** anders als beim Stream gibt es hier keinen
+   Parallelbetrieb — sobald aktiv, ist das Web-Interface nur noch über
+   `https://` erreichbar, alte `http://`-Lesezeichen auf Port 5000 laufen
+   dann ins Leere.
+
+Icecast selbst muss dafür kurz mit Root-Rechten starten (um die
+0600-Zertifikatsdatei lesen zu können) und gibt sie danach intern wieder
+ab — Details dazu in `CLAUDE.md`.
 
 ## Deploy-Befehle
 

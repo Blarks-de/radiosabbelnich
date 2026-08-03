@@ -51,6 +51,7 @@ import numpy as np
 import fingerprint
 import logging_setup
 import news_break
+import stt_filter
 import webui
 from speech_detector import SpeechDetector
 
@@ -168,8 +169,13 @@ def bass_energy_ratio(samples: np.ndarray, sr: int, cutoff_hz: float) -> float:
     return float(bass / total)
 
 
-def classify_window(pcm_int16: np.ndarray, sr: int) -> str:
-    """Liefert 'speech' oder 'music' für ein Analysefenster."""
+def classify_window(pcm_int16: np.ndarray, sr: int) -> tuple:
+    """Liefert ('speech'|'music', score) für ein Analysefenster. `score`
+    (0..1) ist grob votes/3 -- KEINE kalibrierte Wahrscheinlichkeit wie
+    beim VAD, nur zur groben Anzeige gedacht (Web-Interface-
+    "Bullshitometer", siehe webui.py). Bei Bass-Veto auf 0 gesetzt, damit
+    die Anzeige mit der tatsächlichen Entscheidung übereinstimmt, statt
+    trotz "music"-Label einen hohen Wert zu zeigen."""
     samples = pcm_int16.astype(np.float64) / 32768.0
 
     zcr = zero_crossing_rate(samples)
@@ -185,15 +191,17 @@ def classify_window(pcm_int16: np.ndarray, sr: int) -> str:
     if energy_var > ENERGY_VAR_SPEECH_MIN:
         votes += 1
 
-    is_speech = votes >= VOTES_NEEDED and bass_ratio < BASS_RATIO_MUSIC_VETO
+    veto = votes >= VOTES_NEEDED and bass_ratio >= BASS_RATIO_MUSIC_VETO
+    is_speech = votes >= VOTES_NEEDED and not veto
+    score = 0.0 if veto else votes / 3.0
 
     if log.isEnabledFor(logging.DEBUG):
-        veto = " [BASS-VETO]" if votes >= VOTES_NEEDED and bass_ratio >= BASS_RATIO_MUSIC_VETO else ""
+        veto_marker = " [BASS-VETO]" if veto else ""
         log.debug("[feat] zcr=%.3f flat=%.3f evar=%.3f bass=%.3f votes=%d/3%s -> %s",
-                  zcr, flat, energy_var, bass_ratio, votes, veto,
+                  zcr, flat, energy_var, bass_ratio, votes, veto_marker,
                   "SPEECH" if is_speech else "music")
 
-    return "speech" if is_speech else "music"
+    return ("speech" if is_speech else "music"), score
 
 
 def save_fingerprint_debug_clip(pcm_int16: np.ndarray, sr: int, filename: str):
@@ -615,6 +623,26 @@ def main():
     parser.add_argument("--icecast-public-port", default=None,
                          help="Port, unter dem der Browser den Icecast-Stream selbst erreicht "
                               "(für den eingebetteten Player im Web-Interface), z.B. 8000")
+    parser.add_argument("--icecast-public-ssl-port", default=None,
+                         help="Port, unter dem der Icecast-Stream per HTTPS erreichbar ist "
+                              "(nur relevant, wenn Icecast per TLS_CERT_FILE/TLS_KEY_FILE in "
+                              ".env TLS anbietet), z.B. 8443. Webui nutzt das nur, wenn die "
+                              "Player-Seite selbst per HTTPS aufgerufen wird -- siehe dortiger "
+                              "Kommentar zu autoUrl, sonst Mismatch mit Icecasts Klartext-Port.")
+    parser.add_argument("--tls-cert-file", default=None,
+                         help="Pfad zum TLS-Zertifikat fürs Web-Interface (PEM). Nur wirksam, "
+                              "wenn settings.json 'tls_enabled' gesetzt ist und die Datei "
+                              "lesbar ist -- siehe settings_store.py/webui.start_server().")
+    parser.add_argument("--tls-key-file", default=None,
+                         help="Pfad zum privaten TLS-Schlüssel fürs Web-Interface (PEM).")
+    parser.add_argument("--news-mp3-folder-host", default=None,
+                         help="Host-Pfad von NEWS_MP3_FOLDER (.env), rein informativ -- der "
+                              "Container kennt sonst nur seinen eigenen Mount-Pfad "
+                              "(/app/news_mp3), nicht wovon der stammt. Nur fürs Anzeigen auf "
+                              "der Config-Seite, siehe webui.py/make_handler().")
+    parser.add_argument("--vosk-model-folder-host", default=None,
+                         help="Host-Pfad von VOSK_MODEL_FOLDER (.env), analog zu "
+                              "--news-mp3-folder-host.")
     args = parser.parse_args()
 
     log_path = logging_setup.setup(args.log_file, verbose=args.verbose)
@@ -641,10 +669,18 @@ def main():
         log.info("🗣  Sprache-Erkennung: Signal-Heuristik (Fallback)")
 
     def classify(pcm: np.ndarray) -> str:
-        label, _ = detector.classify(pcm)
+        label, prob = detector.classify(pcm)
         if label is None:
-            return classify_window(pcm, SAMPLE_RATE)  # Heuristik-Fallback
-        return label
+            label, prob = classify_window(pcm, SAMPLE_RATE)  # Heuristik-Fallback
+        # Rohwert VOR der STT-Verknüpfung fürs Web-Interface-
+        # "Bullshitometer" -- bewusst der reine VAD/Heuristik-Wert, nicht
+        # das kombinierte Ergebnis: STT sampelt viel seltener (Sekunden
+        # statt ~1x/Fenster), ein kombinierter Wert würde sprunghaft
+        # wirken statt sich flüssig zu bewegen.
+        state.set_speech_probability(prob)
+        # Einzige Kopplungsstelle mit stt_filter.py -- ohne (frischen) STT-
+        # Befund ist das ein No-Op, siehe combine_label()-Docstring.
+        return stt_filter.combine_label(label, stt.last_verdict(), state.stt_filter_cfg)
 
     state = webui.SwitcherState()
     active = state.active_stations
@@ -652,6 +688,14 @@ def main():
         log.error("Keine aktivierten Sender in stations.json — bitte über die "
                   "Config-Seite (/config) mindestens einen aktivieren.")
         sys.exit(1)
+
+    stt = stt_filter.SttFilter(state.stt_filter_cfg)
+    state.set_stt_status(*stt.status())
+    # STT sammelt in diesem Ringpuffer die letzten CLIP_SECONDS Sekunden
+    # Mono-PCM (unabhängig vom aktuellen VAD-Label, siehe CLAUDE.md) und
+    # sampelt daraus alle sample_interval_seconds -- siehe Hauptloop unten.
+    stt_ring = collections.deque(maxlen=max(1, round(stt_filter.CLIP_SECONDS / WINDOW_SECONDS)))
+    last_stt_sample_at = 0.0
 
     httpd = None
     if args.webui_port:
@@ -661,9 +705,23 @@ def main():
             "password": args.icecast_admin_password,
             "mount": args.icecast_mount,
             "public_port": args.icecast_public_port,
+            "public_ssl_port": args.icecast_public_ssl_port,
         }
-        httpd = webui.start_server(args.webui_port, state, icecast_cfg, args.fingerprint_db)
-        log.info("🌐 Web-Interface läuft auf Port %d", args.webui_port)
+        # tls_enabled ist der explizite Nutzer-Schalter (settings.json,
+        # per /config setzbar); die Zertifikatspfade selbst kommen aus
+        # .env/docker-compose.yml (TLS_CERT_FILE/TLS_KEY_FILE) -- ohne
+        # gesetzten Schalter bleiben sie ungenutzt, auch wenn die Dateien
+        # gemountet sind. start_server() fällt bei fehlenden/ungültigen
+        # Dateien selbst auf HTTP zurück statt abzustürzen.
+        tls_cert = args.tls_cert_file if state.tls_enabled else None
+        tls_key = args.tls_key_file if state.tls_enabled else None
+        host_paths = {
+            "news_mp3_folder": args.news_mp3_folder_host,
+            "vosk_model_folder": args.vosk_model_folder_host,
+        }
+        httpd = webui.start_server(args.webui_port, state, icecast_cfg, args.fingerprint_db,
+                                    tls_cert_file=tls_cert, tls_key_file=tls_key,
+                                    host_paths=host_paths)
 
     source = StreamSource(SAMPLE_RATE)
     current = active[0]  # aktuell gespielter Sender (dict: id/name/url/category/enabled)
@@ -791,7 +849,7 @@ def main():
     news_break_served_slot = None  # welcher Slot (siehe news_break.active_slot) schon dran war
 
     def note_news_break_interrupted():
-        """Eine explizite Nutzer-Aktion (manueller Switch, 'Gesabbel!')
+        """Eine explizite Nutzer-Aktion (manueller Switch, 'ZAPPEN!')
         während einer laufenden Nachrichten-Pause beendet die Pause sofort
         — eigene Entscheidung schlägt Automatik, wie überall sonst auch in
         diesem Programm. Markiert den Slot als bedient, damit die Pause
@@ -959,7 +1017,18 @@ def main():
                 # Sender oder Puffer-Einstellungen wurden über die
                 # Config-Seite geändert -> beides neu laden
                 prev_prebuffer_settings = (state.prebuffer_seconds, state.prebuffer_count)
+                prev_stt_cfg = state.stt_filter_cfg
                 state.reload()
+                new_stt_cfg = state.stt_filter_cfg
+                # Nur bei Änderung an Engine-relevanten Feldern tatsächlich
+                # neu laden (Modell laden ist teuer) -- Schwellwert/
+                # Intervall/Verknüpfung liest combine_label() ohnehin bei
+                # jedem Aufruf frisch aus state.stt_filter_cfg, dafür ist
+                # kein Reload nötig.
+                if any(prev_stt_cfg.get(f) != new_stt_cfg.get(f)
+                       for f in ("enabled", "engine", "vosk_model_path", "whisper_model_size")):
+                    stt.reload(new_stt_cfg)
+                    state.set_stt_status(*stt.status())
                 if (state.prebuffer_seconds, state.prebuffer_count) != prev_prebuffer_settings:
                     # PrebufferedSource-Instanzen haben ihre Puffergröße
                     # fest einkompiliert (deque(maxlen=...) bei der
@@ -1029,13 +1098,13 @@ def main():
                 continue
 
             if state.pop_skip_request():
-                # "Gesabbel!"-Knopf: Nutzer hat selbst Sprache erkannt,
+                # "ZAPPEN!"-Knopf: Nutzer hat selbst Sprache erkannt,
                 # auch wenn VAD/Heuristik (noch) nicht angeschlagen haben
                 note_news_break_interrupted()
                 speech_streak = 0
                 speech_buffer = []
                 fp_checked_this_run = False
-                do_switch("Nutzer meldete Gesabbel")
+                do_switch("Nutzer meldete Gesabbel (ZAPPEN!-Knopf)")
                 continue
 
             if state.pop_filter_toggle_request():
@@ -1143,6 +1212,16 @@ def main():
                 # automatische Erkennung/Umschaltung
                 continue
 
+            # STT sampelt kontinuierlich (unabhängig vom VAD-Label, siehe
+            # CLAUDE.md), aber nur alle sample_interval_seconds und nur
+            # solange oben weder Nachrichten-Pause noch Sabbelfilter-Aus
+            # gegriffen haben -- sonst wäre es verschwendete Rechenzeit.
+            stt_ring.append(pcm)
+            now_stt = time.monotonic()
+            if now_stt - last_stt_sample_at >= state.stt_filter_cfg["sample_interval_seconds"]:
+                last_stt_sample_at = now_stt
+                stt.sample_async(np.concatenate(stt_ring), SAMPLE_RATE)
+
             label = classify(pcm)
             now = time.time()
 
@@ -1206,6 +1285,7 @@ def main():
         output.close()
         if fp_db:
             fp_db.close()
+        stt.close()
         if httpd:
             httpd.shutdown()
 

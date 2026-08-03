@@ -6,3 +6,5 @@ fingerprints.db
 fingerprint_clips/
 logs/
 news_mp3/
+vosk-model-de/
+whisper_cache/

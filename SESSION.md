@@ -1686,3 +1686,805 @@ Normalfall für echte Radio-URLs), der Nachrichten-Pause-Eintritt ruft
   falls später ein Formular gewünscht wird.
 - Kein Übernacht-`enabled_hours`-Wraparound (z.B. 22–6 Uhr) — nur
   `0 <= start < end <= 24`.
+
+## 2026-08-03 (Fortsetzung) — Nachrichten-Pause: Formular-Sektion auf der Config-Seite
+
+Auslöser: Nutzer wollte den MP3-Ordner-Pfad eintragen, fand aber keine
+Nachrichten-Pause-Einstellung auf `/config` — das war im vorigen Eintrag
+bewusst weggelassen worden ("war nicht Teil der Anfrage"), jetzt aber
+nachgefordert, Position "oberhalb der Radiosender".
+
+### Umsetzung
+Neue Sektion `<h2>📰 Nachrichten-Pause</h2>` + `<form id="news-break-form">`
+in `_CONFIG_PAGE_HTML` (`webui.py`), platziert zwischen `<h1>` und
+`<div id="categories">` (also vor der Senderliste). Felder: Checkbox
+`enabled`, Text `mp3_folder` (mit Hinweistext, dass das der
+Container-Pfad ist und der Host-Ordner über `NEWS_MP3_FOLDER` in `.env` +
+Neustart läuft — kein Feld dafür), Zahl `window_minutes`, Checkbox
+"nur zu bestimmten Stunden aktiv" + zwei Zahlenfelder Start/Ende.
+
+Kein neuer Backend-Code nötig — `settings_store.update()` und der
+`POST /api/config/settings`-Handler unterstützten alle vier
+`news_break_*`-Parameter bereits (aus dem vorigen Durchgang). Einzige
+Feinheit im Frontend: die Checkbox "nur zu bestimmten Stunden aktiv"
+steuert, ob `news_break_enabled_hours` als `[start, end]` oder explizit
+als `null` gesendet wird — beides sind "Feld gesetzt" aus Sicht von
+`settings_store.UNSET`, nicht "Feld weggelassen", trifft also genau die
+vom Backend vorgesehene Unterscheidung (siehe `update()`-Docstring).
+
+`loadSettings()` (bereits vorhanden für Puffer-Einstellungen) um das
+Befüllen der neuen Felder aus `settings.news_break` erweitert statt einer
+zweiten Fetch-Funktion — ein API-Call liefert beide Blöcke ohnehin.
+
+### Verifiziert
+- `python3 -c "import ast; ast.parse(open('webui.py').read())"` — kein
+  Syntaxfehler.
+- Eingebettetes JS aus `_CONFIG_PAGE_HTML` extrahiert und mit
+  `node --check` geprüft — kein Fehler.
+- Isoliertes Testverzeichnis (siehe CLAUDE.md-Testmuster): `webui.py`
+  mit `SwitcherState()` + `start_server()` gegen eine Ein-Sender-
+  `stations.json` gestartet. `GET /config` → 200. `GET
+  /api/config/settings` liefert den `news_break`-Block mit Defaults.
+  `POST /api/config/settings` mit allen vier `news_break_*`-Feldern
+  (inkl. `enabled_hours: [6, 22]`) → gespeichert, per erneutem GET
+  bestätigt. Danach `enabled_hours: null` gesendet → im Folge-GET korrekt
+  wieder `null` (bestätigt die UNSET-vs-null-Unterscheidung end-to-end,
+  nicht nur im Store-Unittest aus dem vorigen Durchgang).
+
+### Bewusst NICHT gemacht
+- Keine Validierung von `mp3_folder` im Frontend (Existenz/Erreichbarkeit)
+  — der Ordner ist typischerweise ein SMB-Mount, der beim Speichern noch
+  nicht verfügbar sein kann (siehe `settings_store.update()`-Docstring,
+  unverändert vom vorigen Durchgang).
+- README.md entsprechend nachgezogen: Abschnitt "Nachrichten-Pause"
+  verweist jetzt primär auf die Formular-Sektion, API-Beispiel bleibt als
+  Alternative für Skripte.
+
+## 2026-08-03 (Fortsetzung 2) — Nachrichten-Pause spielte nie: mp3_folder zeigte auf Host-Pfad
+
+Auslöser: Nutzer meldet, zur vollen Stunde läuft keine MP3 statt der
+Nachrichten. Log (`docker compose logs radiozapper | grep -i nachrichten`)
+zeigte seit 08:26 bei jedem Slot dieselbe Warnung: "Nachrichten-Pause:
+Ordner /mnt/eimer/data/Audio/Musik/+_Blarks_Favoriten/Fav_Queen/ nicht
+lesbar ([Errno 2] No such file or directory) — übersprungen."
+
+### Ursache
+`mp3_folder` in `settings.json` war über das neue Formular auf `/config`
+(siehe vorigen Eintrag) mit dem **Host**-Pfad des SMB-Mounts befüllt
+worden, nicht mit dem Container-internen `/app/news_mp3` — genau die
+Verwechslung, vor der `docker-compose.yml` und `settings_store.py` per
+Kommentar warnen. Zusätzlich hatte `.env` gar kein `NEWS_MP3_FOLDER`
+gesetzt, lief also auf den leeren Default `./news_mp3` — selbst ein
+korrekter Container-Pfad in `settings.json` hätte also ebenfalls ins
+Leere gezeigt.
+
+### Umsetzung
+- `.env`: `NEWS_MP3_FOLDER=/mnt/eimer/data/Audio/Musik/+_Blarks_Favoriten/Fav_Queen/`
+  ergänzt (Host-Pfad, wird read-only nach `/app/news_mp3` gemountet).
+- `settings.json`: `news_break.mp3_folder` auf `/app/news_mp3` korrigiert.
+- `docker compose up -d radiozapper` (kein Rebuild nötig, nur der Mount
+  ändert sich — Bind-Mounts wirken erst nach Neuerstellen des Containers,
+  nicht durch bloßes Ändern von `.env`).
+
+### Verifiziert
+- `docker compose exec radiozapper ls /app/news_mp3` zeigt die MP3s
+  (u.a. "01-We will Rock you.mp3") — vorher leer.
+- Neustart-Log zeigt normalen Start ohne Fehler, Player läuft weiter
+  ("▶ Spiele: 1LIVE").
+- Nächster Slot (volle/halbe Stunde) noch nicht abgewartet — Fehlerursache
+  ist per Log-Historie eindeutig (jeder Slot seit Feature-Aktivierung
+  betroffen, immer derselbe Pfad-Fehler), Fix behebt exakt diesen Pfad.
+
+### Für die Zukunft
+Die Formular-Sektion auf `/config` (voriger Eintrag) macht diesen Fehler
+leicht: das Feld heißt einfach "MP3-Ordner", auch wenn der Hinweistext
+"Container-interner Pfad" sagt. Denkbare Härtung (nicht in diesem
+Durchgang umgesetzt): Server-seitige Prüfung, ob `mp3_folder` beim
+Speichern via `os.listdir()` erreichbar ist, und eine Warnung statt
+stillem Erfolg, falls nicht — siehe "Bewusst NICHT gemacht" im vorigen
+Eintrag, wo genau das aus anderem Grund (SMB evtl. noch nicht verbunden)
+zurückgestellt wurde. Eine Warnung statt eines harten Fehlers würde beide
+Fälle abdecken.
+
+## 2026-08-03 (Fortsetzung 3) — "Gesabbel!" → "ZAPPEN!", Streaming-Adresse fürs Hauptfenster
+
+Auslöser: Nutzerwunsch, den Knopf umzubenennen (⚡ ZAPPEN! statt 🗣️
+Gesabbel!) und unter der "Läuft gerade"-Box die volle Icecast-Stream-URL
+anzuzeigen, damit man sie leicht in VLC o.ä. eintragen kann.
+
+### Umsetzung
+- `webui.py`: Button-Text/Emoji geändert (`btn-gesabbel`-ID unverändert
+  gelassen, nur das sichtbare Label betrifft die Nutzeranfrage). Log-
+  Meldung und Docstrings, die den Knopfnamen wörtlich zitieren
+  (`request_skip()`, `filter_enabled`-Property, `_handle_skip()`),
+  entsprechend nachgezogen — sonst stimmt der Log-Text nicht mehr mit dem
+  Knopf überein, den der Nutzer tatsächlich sieht.
+- Neues `<div id="stream-url">` zwischen `#now-playing` und `<audio>`.
+  Wird im selben `if (!playerSrcSet && ...)`-Block in `refresh()` befüllt
+  wie `player.src` — dieselbe Adresse, dieselbe Bedingung ("nur einmal
+  setzen, ändert sich eh nicht"), kein zweiter Codepfad nötig. Aufbau
+  identisch zum bestehenden Player-Src-Muster:
+  `location.protocol + '//' + location.hostname + ':' + stream_port +
+  stream_mount` — bewusst NICHT der feste `ICECAST_HOSTNAME` aus `.env`,
+  damit die angezeigte Adresse immer zu dem Host passt, über den der
+  Nutzer die Seite gerade tatsächlich erreicht (Tailscale-Name, IP,
+  localhost, …), genau wie beim eingebetteten Player, der nach demselben
+  Prinzip schon lief.
+- `radiozapper.py`: Kommentare, die "Gesabbel!" als Knopfnamen zitieren,
+  auf "ZAPPEN!" aktualisiert. Der interne `do_switch()`-Grund
+  ("Nutzer meldete Gesabbel (ZAPPEN!-Knopf)") bleibt inhaltlich (Nutzer
+  hat Gesabbel gemeldet), ergänzt nur den neuen Knopfnamen in Klammern —
+  reine Log-Kosmetik, keine Verhaltensänderung.
+- `README.md`: Abschnitt "Web-Interface" auf neuen Knopfnamen aktualisiert,
+  neuer Punkt für die Streaming-Adresse ergänzt.
+
+### Verifiziert
+- `python3 -c "import ast; ast.parse(...)"` für `webui.py` und
+  `radiozapper.py` — kein Syntaxfehler.
+- Eingebettetes `<script>` der Hauptseite extrahiert, `node --check` —
+  kein Fehler.
+- `docker compose up -d --build radiozapper`: sauberer Neustart, Log zeigt
+  normalen Start und einen echten Sender-Switch danach (unbeeinflusst).
+  `curl /` zeigt `⚡ ZAPPEN!` und `id="stream-url"` im HTML, `curl
+  /api/status` liefert `stream_port`/`stream_mount` wie erwartet — die
+  clientseitige URL-Zusammensetzung selbst lief nicht im Browser, sondern
+  wurde nur per `node --check` auf Syntaxfehler geprüft (kein Headless-
+  Browser zur Hand).
+
+## 2026-08-03 (Fortsetzung 4) — Streaming-Adresse konfigurierbar, türkis/unterstrichen, Klick kopiert
+
+Auslöser: Nutzerwunsch, die im vorigen Eintrag ergänzte Stream-Adressen-
+Anzeige (1) über die Einstellungen fest überschreibbar zu machen statt
+sie stur aus `location.hostname` abzuleiten, und (2) optisch als Link
+(türkis, unterstrichen) mit Klick-zum-Kopieren aufzuwerten.
+
+### Umsetzung
+- `settings_store.py`: neues Top-Level-Feld `stream_url` (Default `""`).
+  Anders als `import_url` ist bei diesem Feld ein leerer String ein
+  gültiger Fachwert ("automatisch ermitteln"), nicht "ungültig" — Docstring
+  von `update()` weist explizit darauf hin, damit das nicht versehentlich
+  der `import_url`-Validierung angeglichen wird. Nicht-leerer Wert muss
+  wie bei `import_url` mit `http(s)://` beginnen.
+- `webui.py`/`SwitcherState`: `stream_url` analog zu `prebuffer_seconds`
+  gecacht (`_stream_url`, in `reload()` aus `settings_store.load()`
+  nachgezogen, eigene Property). `_build_status()` liefert es im
+  `/api/status`-JSON mit.
+- Neue Sektion "🔗 Streaming-Adresse" auf `/config`, zwischen Import- und
+  Puffer-Formular — ein Textfeld, leer = automatisch. Gleiches
+  Request/Response-Muster wie die anderen Settings-Formulare
+  (`POST /api/config/settings` mit nur dem einen Feld).
+- Hauptseite (`_PAGE_HTML`): `#stream-url` jetzt türkis (`#1abc9c`),
+  unterstrichen, `cursor: pointer`. Klick kopiert die angezeigte Adresse
+  in die Zwischenablage. **Wichtig:** der eingebettete `<audio>`-Player
+  nutzt WEITERHIN ausschließlich die aus `location.hostname` abgeleitete
+  Adresse, nicht `stream_url` — die ist garantiert erreichbar (der
+  Browser lädt diese Seite gerade genau darüber), während `stream_url`
+  eine vom Nutzer frei eingetragene Anzeige-/Kopier-Adresse ist, die
+  falsch oder aus dem Player-Netz heraus nicht erreichbar sein könnte.
+  Nur die Textanzeige/Kopierfunktion nutzt `data.stream_url || autoUrl`.
+- `copyToClipboard()`-Helper mit Fallback: `navigator.clipboard.writeText()`
+  verlangt einen "secure context" (HTTPS oder localhost) — dieses
+  Interface läuft aber typischerweise über einen Tailscale-Hostnamen per
+  schlichtem HTTP (siehe `ICECAST_HOSTNAME` in `.env`), dort ist die API
+  entweder `undefined` oder verweigert. Fallback über eine unsichtbare
+  Textarea + `execCommand('copy')`, das funktioniert auch dort. Ohne
+  diesen Fallback hätte der Klick auf dem eigentlichen Deployment
+  schlicht nichts getan.
+
+### Verifiziert
+- `python3 -c "import ast; ast.parse(...)"` für `webui.py` und
+  `settings_store.py` — kein Syntaxfehler. Beide `<script>`-Blöcke aus
+  `_PAGE_HTML`/`_CONFIG_PAGE_HTML` extrahiert, `node --check` — kein
+  Fehler.
+- `docker compose up -d --build radiozapper`: sauberer Neustart, Log
+  zeigt normalen Start (und nebenbei bestätigt: der News-Break-Fix aus
+  dem vorigen Eintrag greift jetzt tatsächlich — "📰 Nachrichten-Pause:
+  spiele 'It's a Hard Life.mp3'" direkt beim Start).
+- `curl /api/status` zeigt `"stream_url": ""` im Default-Zustand.
+- `curl -X POST /api/config/settings -d '{"stream_url": "http://dockfish...:8000/radiozapper.mp3"}'`
+  → gespeichert, per Folge-GET bestätigt.
+- `curl -X POST ... -d '{"stream_url": "nicht-eine-url"}'` → `400` mit
+  der erwarteten Fehlermeldung (Validierung greift).
+  `curl -X POST ... -d '{"stream_url": ""}'` → zurückgesetzt auf
+  automatisch, per Folge-GET bestätigt — Feld am Ende wieder im
+  Auslieferungszustand hinterlassen.
+- Kein Headless-Browser zur Hand: Klick-Kopieren selbst (inkl.
+  `execCommand`-Fallback) nur per Code-Nachvollzug geprüft, nicht per
+  echtem Klick im Browser verifiziert.
+
+## 2026-08-03 (Fortsetzung 5) — HTTPS: Web-Interface + Icecast-Stream per TLS
+
+Auslöser: Nutzer hat unter `/certs` ein Tailscale-Zertifikat
+(`dockfish.icefish-ghost.ts.net.crt`/`.key`, gültig bis 2026-09-08) liegen
+und wollte es einbinden, mit Eintrag in den Settings und Zertifikatspfaden
+in `.env`. Rückfrage per AskUserQuestion, ob Web-Interface, Icecast-Stream
+oder beides — Antwort: beides.
+
+### Umsetzung
+- `settings_store.py`: neues Top-Level-Feld `tls_enabled` (Default
+  `False`) — steuert NUR das Web-Interface (siehe unten, warum Icecast
+  getrennt läuft). Wie `stream_url` ein normales None-=-unverändert-Feld
+  in `update()`.
+- `webui.py`: `import ssl`. `SwitcherState.tls_enabled` analog zu
+  `stream_url` gecacht, mit explizitem Docstring-Hinweis, dass eine
+  Änderung erst nach Neustart wirkt (kein Hot-Reload möglich — ein
+  laufendes `ThreadingHTTPServer`-Socket lässt sich nicht nachträglich in
+  TLS einwickeln). `start_server()` bekommt `tls_cert_file`/`tls_key_file`,
+  wrappt bei beidem vorhanden das Socket per `ssl.SSLContext`, fängt
+  `ssl.SSLError`/`OSError` ab und bleibt bei Klartext-HTTP statt
+  abzustürzen (greift z.B. wenn `tls_enabled=true`, aber die gemountete
+  Datei in Wirklichkeit `/dev/null` ist). Loggt jetzt selbst "🌐
+  Web-Interface läuft auf Port N (http|https)" statt wie vorher extern in
+  `radiozapper.py` — dort die alte Zeile entfernt, sonst zwei
+  widersprüchliche Log-Zeilen.
+- Neue Sektion "🔒 HTTPS" auf `/config` (Checkbox `tls_enabled`, Hinweis
+  auf `.env`-Abhängigkeit und Neustart-Pflicht). **Nebenbei behoben:**
+  die im vorigen Eintrag neu hinzugefügte `stream-url-form` hatte gar
+  keine CSS-Regeln bekommen (unstyled) — beim Anlegen der `tls-form`-Regeln
+  aufgefallen und mitkorrigiert (`form#stream-url-form, form#tls-form`
+  jetzt gemeinsam gestylt wie die anderen Config-Formulare).
+- `radiozapper.py`: `--tls-cert-file`/`--tls-key-file`-Argumente. In
+  `main()` werden sie nur an `webui.start_server()` durchgereicht, wenn
+  `state.tls_enabled` true ist — der Schalter lebt in `settings.json`,
+  die Pfade selbst kommen aus `.env`/Docker-Env, beides zusammen ergibt
+  erst "TLS aktiv".
+- `Dockerfile`: `ENTRYPOINT` reicht `TLS_CERT_PATH`/`TLS_KEY_PATH`
+  (Container-interne feste Pfade, siehe `docker-compose.yml`) als
+  `--tls-cert-file`/`--tls-key-file` durch.
+- `docker-compose.yml` (radiozapper-Service): zwei neue Bind-Mounts
+  (`TLS_CERT_FILE`/`TLS_KEY_FILE` aus `.env`, Default `/dev/null` statt
+  einer Repo-Platzhalterdatei — `/dev/null` ist immer ein gültiges
+  Mount-Ziel und liefert 0 Byte) nach `/app/certs/cert.pem`/`key.pem`.
+  Läuft als root (kein `USER` im Dockerfile) und kann die
+  root-only-0600-Originaldatei direkt lesen — anders als beim
+  Icecast-Service unten keine Kopie/kein chown nötig.
+- `docker-compose.yml` (icecast-Service), der aufwändigere Teil:
+  - `user: "0:0"` (Image-Default ist der unprivilegierte User `icecast2`,
+    kann eine 0600-root-Datei gar nicht öffnen).
+  - Zwei read-only-Mounts nach `/run/tls-cert.pem`/`tls-key.pem`, gleiches
+    `/dev/null`-Default-Muster wie oben.
+  - `command:`-Skript um drei Dinge erweitert: (1) **immer** einen
+    `sed`-Fix für `<group>icecast2</group>` → `<group>icecast</group>` in
+    der generierten `icecast.xml` — Bug im `icegen`-Template, bislang nie
+    aufgefallen, weil der Container ohne `user: root` nie tatsächlich als
+    root startete und `<changeowner>` darum nie griff; jetzt zwingend,
+    sonst verweigert Icecast als root generell den Start. (2) bei
+    vorhandenem Zertifikat (`-s`-Test auf beide gemounteten Dateien):
+    Cert+Key zu einer PEM zusammengefügt (`cat`), auf `icecast2:icecast`
+    gechownt (siehe Verifikation unten, warum das nötig ist, nicht nur
+    0600-root), zweiter `<listen-socket>` mit `<ssl>1</ssl>` und
+    `<ssl-certificate>` per `sed` nach `<hostname>` bzw. `<paths>`
+    eingefügt — bewusst NICHT nach `<listen-socket>`, weil dieser String
+    auch in einem auskommentierten Beispielblock vorkommt und ein
+    naives `sed -i "/<listen-socket>/i..."` dort ein zweites Mal
+    zugeschlagen hätte. (3) ohne Zertifikat: Log-Zeile, sonst
+    unverändertes Verhalten.
+  - `ports`: zusätzlich `${ICECAST_SSL_PORT:-8443}:8443` — links der
+    Host-Port (konfigurierbar), rechts der Container-Port (fix, muss zu
+    `IC_SSL_PORT` in der `environment:`-Sektion passen). **Fehler beim
+    ersten Versuch:** `IC_SSL_PORT` zunächst versehentlich auch auf
+    `${ICECAST_SSL_PORT:-8443}` gesetzt statt hart auf `8443` — dadurch
+    hätte Icecast intern auf einem anderen Port gelauscht als dem, auf
+    den Docker das Host-Mapping tatsächlich zeigt, sobald `ICECAST_SSL_PORT`
+    vom Default abweicht (wie hier: 8444 statt 8443, siehe unten). Nach
+    dem Muster von `IC_PORT`/`ICECAST_PORT` (dort schon immer getrennt)
+    korrigiert, bevor es scharf lief.
+- `.env`/`env.example`: `TLS_CERT_FILE`, `TLS_KEY_FILE`, `ICECAST_SSL_PORT`
+  (Default in `env.example`: 8443, leer/leer). In der echten `.env` dieses
+  Hosts: die beiden `/certs/...`-Pfade, `ICECAST_SSL_PORT=8444` — 8443 war
+  hier bereits von einem fremden Container (`npm`, Nginx Proxy Manager)
+  belegt, siehe Verifikation.
+- `README.md`: neue `.env`-Tabellenzeilen + Abschnitt "HTTPS/TLS
+  (optional)" mit Schritt-für-Schritt-Anleitung und der Warnung, dass das
+  Web-Interface bei aktivem TLS NICHT mehr parallel über Klartext-HTTP
+  erreichbar ist (anders als der Icecast-Stream, der beide Ports parallel
+  bedient). `CLAUDE.md` um einen Architektur-Abschnitt "TLS/HTTPS"
+  ergänzt (Docker-Besonderheiten) — u.a. der icegen-Gruppennamen-Bug und
+  der Grund fürs Chown statt reinem 0600, damit das nicht beim nächsten
+  Anfassen erneut mühsam nachvollzogen werden muss.
+
+### Verifiziert
+- **Isoliert VOR jeder Änderung am Live-Deployment**: Icecast-TLS in einem
+  komplett separaten Testcontainer (eigener Name, eigene Ports 18000/18443,
+  `--entrypoint /bin/bash` explizit gesetzt — sonst überschreibt `docker
+  run <image> <cmd>` nur die CMD-Args, nicht das im Image gesetzte
+  `ENTRYPOINT ["/bin/bash","start.sh"]`, und der Test hätte unbemerkt immer
+  das Original-`start.sh` laufen lassen) mit selbstsigniertem Test-Zertifikat
+  durchgespielt: erst das eigentliche `<group>icecast2</group>`-Problem
+  gefunden (Icecast verweigert als root generell den Start, unabhängig von
+  TLS), dann das Cert-Lesbarkeits-Problem (root-only 0600 vom Host reicht
+  NICHT, weil Icecast die Cert-Datei nachweislich erst nach dem
+  `<changeowner>`-Drop liest — bestätigt durch Log-Reihenfolge
+  "server started" → "Invalid cert file" NACH dem erfolgreichen
+  Privilegien-Drop). Erst mit beiden Fixes: `HTTPS-Status: 200`,
+  `openssl s_client` zeigt das erwartete Test-Zertifikat, Klartext-HTTP
+  bleibt parallel `200`.
+- **Danach am echten Deployment** (mit dem echten Tailscale-Zertifikat):
+  `docker compose config -q` sauber, `docker compose up -d --build` ohne
+  Fehler NACH Korrektur des Port-Konflikts (8443 war durch `npm` belegt,
+  auf 8444 ausgewichen) und NACH Korrektur des `IC_SSL_PORT`-Bugs.
+  Icecast-Log: "TLS aktiviert: zusätzlicher HTTPS-Port 8443" (Container-
+  intern). `curl https://localhost:8444/status.xsl` → `200`,
+  `curl http://localhost:8000/status.xsl` weiterhin `200`
+  (Hörer unbetroffen), `openssl s_client` zeigt das echte
+  Let's-Encrypt/Tailscale-Zertifikat, Stream-Mount selbst
+  (`/radiozapper.mp3`) per HTTPS ebenfalls `200`.
+  `POST /api/config/settings {"tls_enabled": true}` + `docker compose
+  restart radiozapper` → Log zeigt "🌐 Web-Interface läuft auf Port 5000
+  (https)", `curl -k https://localhost:5000/`, `/api/status` und `/config`
+  alle `200` mit dem echten Zertifikat, `curl http://localhost:5000/`
+  (Klartext) währenddessen `000` (kein Parallelbetrieb, wie dokumentiert
+  — bewusst so gelassen, nicht als Bug behandelt).
+  Fallback-Pfad separat per `python3 -c` verifiziert:
+  `ssl.SSLContext().load_cert_chain('/dev/null', '/dev/null')` wirft
+  exakt den `ssl.SSLError`, den `start_server()` abfängt.
+- `python3 -c "import ast; ast.parse(...)"` für alle geänderten `.py`,
+  beide `<script>`-Blöcke per `node --check`, `docker compose config -q`
+  — alle ohne Fehler.
+
+### Bewusst NICHT gemacht
+- Kein automatischer HTTP→HTTPS-Redirect fürs Web-Interface — wer TLS
+  aktiviert, merkt es am nicht mehr erreichbaren `http://`-Link ohnehin
+  sofort, ein Redirect wäre zusätzlicher Code für einen Fall, der sich
+  selbst erklärt.
+- Kein eigener `tls_enabled`-Schalter für Icecast in `settings.json` —
+  Icecast liest `settings.json` grundsätzlich nicht (eigener Container,
+  kein Python), ein Schalter dort hätte ohne einen neuen
+  Cross-Container-Mechanismus keine Wirkung. Dort entscheidet allein die
+  Anwesenheit von `TLS_CERT_FILE`/`TLS_KEY_FILE` in `.env` — konsistent
+  mit dem bereits bestehenden `NEWS_MP3_FOLDER`-Muster ("leer = Feature
+  übersprungen").
+- Zertifikat am Ende `tls_enabled=true` belassen (nicht zurückgesetzt) —
+  war der erkennbare Zweck der Anfrage und lief im Test sauber durch;
+  Nutzer kann jederzeit einen Haken in `/config` wieder entfernen.
+
+## 2026-08-03 (Fortsetzung 6) — Bugfix: Stream-Adresse auf der HTTPS-Seite zeigte auf den falschen Port
+
+Auslöser: Nutzer meldet, nach Aktivieren von HTTPS fürs Web-Interface
+spiele die angezeigte/kopierte Stream-Adresse in VLC nicht mehr ("auf der
+https Seite kommt jetzt keine Musik mehr, auch nicht via VLC. per http
+spielt VLC noch").
+
+### Ursache
+`autoUrl` in `_PAGE_HTML`s `refresh()` kombinierte `location.protocol`
+(also `https:`, sobald die Player-Seite selbst per HTTPS aufgerufen wird)
+einfach mit `data.stream_port` — das ist aber IMMER der Klartext-Port
+8000 (`ICECAST_PUBLIC_PORT`, kennt gar kein TLS). Ergebnis:
+`https://host:8000/radiozapper.mp3` — eine Kombination, die niemand
+beantwortet, weil Icecasts Port 8000 kein TLS spricht (das eigentliche
+HTTPS läuft auf einem GANZ ANDEREN Port, 8444 auf diesem Host). Curl mit
+explizitem `http://` traf weiterhin den richtigen Port und lief deshalb
+unauffällig weiter — genau das Symptom aus der Meldung.
+
+### Umsetzung
+- `webui.py`/`_build_status()`: neues Feld `stream_ssl_port` im
+  `/api/status`-JSON, aus `icecast_cfg.get("public_ssl_port")`.
+- `radiozapper.py`: neues CLI-Argument `--icecast-public-ssl-port`, landet
+  in `icecast_cfg["public_ssl_port"]`.
+- `Dockerfile`: `ENTRYPOINT` reicht `ICECAST_PUBLIC_SSL_PORT` durch.
+- `docker-compose.yml` (radiozapper-Service): `ICECAST_PUBLIC_SSL_PORT=${ICECAST_SSL_PORT:-8443}`
+  — dieselbe `.env`-Variable, die auch das Host-Port-Mapping des
+  icecast-Service steuert, damit beide immer zueinander passen (auf
+  diesem Host: 8444, siehe letzter Eintrag).
+- `_PAGE_HTML`-JS: `autoUrl`-Konstruktion baut Schema+Port jetzt als PAAR
+  statt unabhängig: nur wenn die Seite selbst per HTTPS läuft UND ein
+  `stream_ssl_port` bekannt ist, werden `https:` + SSL-Port zusammen
+  verwendet — sonst bleibt es bei `http:` + normalem Port, auch auf einer
+  https-aufgerufenen Seite (bewusst in Kauf genommen: ein `http://`-Stream
+  in einem `https://`-eingebetteten `<audio>` kann der Browser als "mixed
+  content" blocken, das ist aber nur *möglicherweise* kaputt, ein falscher
+  Port war *garantiert* kaputt). Betrifft sowohl den eingebetteten Player
+  als auch den Kopier-/Anzeige-Text, beide nutzen `autoUrl` als Basis.
+
+### Verifiziert
+- `docker compose up -d --build radiozapper`, Log zeigt weiterhin "🌐
+  Web-Interface läuft auf Port 5000 (https)".
+- `curl -k https://localhost:5000/api/status` → `"stream_port": "8000",
+  "stream_ssl_port": "8444"`.
+- `curl -k https://localhost:8444/radiozapper.mp3` → `200`, tatsächlich
+  Audio-Bytes (vorher schon in einem separaten Test per `ffprobe` als
+  valides MP3 bestätigt, siehe letzter Eintrag) — das ist exakt die
+  Adresse, die die Seite jetzt bei HTTPS-Aufruf anzeigt/kopiert
+  (`https://dockfish.icefish-ghost.ts.net:8444/radiozapper.mp3`), manuell
+  gegen den vom JS erzeugten String abgeglichen.
+- `python3 -c "import ast; ast.parse(...)"` für `webui.py`/`radiozapper.py`,
+  `node --check` fürs extrahierte `<script>`, `docker compose config -q`
+  — alle ohne Fehler.
+
+## 2026-08-03 (Fortsetzung 7) — Portabilitäts-Check auf Nutzeranfrage
+
+Auslöser: Nutzer fragt, ob das Setup ohne die eigene `.env` (also frisch
+auf einem anderen Host) problemlos läuft. Reine Bestandsaufnahme, keine
+Code-Änderung.
+
+### Befund
+- `.env` ist gitignored und wird nirgends im getrackten Code hart
+  referenziert (`git ls-files | grep '^\.env$'` → leer) — alle
+  host-spezifischen Werte (Passwörter, Hostname, Ports, `NEWS_MP3_FOLDER`,
+  jetzt auch `TLS_CERT_FILE`/`TLS_KEY_FILE`/`ICECAST_SSL_PORT`) laufen
+  über `env.example` als Vorlage, exakt das bereits etablierte Muster.
+- **Die Zertifikate selbst sind NICHT portabel** — `dockfish.icefish-ghost.ts.net.crt`/`.key`
+  gelten nur für genau diesen Tailscale-Hostnamen (CN im Zertifikat). Auf
+  einem anderen Host mit anderem Hostnamen braucht es ein eigenes, dort
+  frisch erzeugtes Zertifikat (z.B. wieder per `tailscale cert
+  <hostname>`) — das ist eine inhärente Eigenschaft von TLS-Zertifikaten,
+  kein Code-Portabilitätsproblem.
+- `ICECAST_SSL_PORT`-Default (8443 in `env.example`) kann auf einem
+  anderen Host mit einem dortigen Fremd-Dienst kollidieren, genau wie
+  `ICECAST_PORT`/`WEBUI_PORT` das theoretisch auch schon konnten — keine
+  neue Fehlerklasse, nur dieselbe wie immer.
+- `settings.json`/`stations.json` sind (wie schon vor diesem Feature)
+  bewusst mit im Repo — ein frischer Clone erbt also den aktuellen
+  `tls_enabled`-Stand. Ohne passende `.env`/Zertifikate auf dem neuen Host
+  fällt das dank des Fallbacks in `webui.start_server()` einfach auf HTTP
+  zurück (Warnung im Log), kein Absturz.
+- Sonst nichts host-spezifisches Neues gegenüber dem bereits bestehenden
+  Docker-Compose-Aufbau gefunden.
+
+## 2026-08-03 (Fortsetzung 8) — Neues Feature: STT-Sprachfilter (Vosk/Whisper)
+
+Auslöser: Nutzerwunsch nach einem zusätzlichen Sprache-Signal per
+Speech-to-Text, das VAD/Heuristik ergänzt — Ziel: deutsch gesungene
+Musik (VAD/Heuristik werten Gesang oft fälschlich als Sprache) korrekt
+als Musik erkennen, ohne echte Moderation zu verpassen.
+
+### Umsetzung
+- Neues Modul `stt_filter.py`: `_VoskEngine`/`_WhisperEngine` (lazy
+  Import wie `speech_detector.py`, fehlendes Paket führt zu
+  "Engine nicht verfügbar", nicht zum Crash), `SttFilter` (lädt genau
+  eine Engine gemäß Config, Hintergrund-Thread pro Sample mit Busy-Guard,
+  Verdict-Cache mit Timestamp), `combine_label()` als reine Funktion —
+  einzige Kopplungsstelle mit der bestehenden Switch-Logik.
+- `settings_store.py`: neuer `stt_filter`-Block (`enabled`, `engine`,
+  `vosk_model_path`, `whisper_model_size`, `sample_interval_seconds`,
+  `confidence_threshold`, `combine_mode`), Merge-Sonderfall analog
+  `news_break`, Validierung in `update()`.
+- `webui.py`: `SwitcherState.stt_filter_cfg`/`stt_status`/
+  `set_stt_status()`, `_handle_update_settings()` um die neuen Felder
+  erweitert, `/api/status` liefert jetzt `stt_status`, Config-Seite
+  bekommt eine neue Formular-Sektion "🗣 STT-Sprachfilter" (Engine-Wahl,
+  Modellpfad/-größe, Intervall, Schwelle, Verknüpfungsmodus, Live-
+  Statusanzeige).
+- `radiozapper.py`: `stt = stt_filter.SttFilter(state.stt_filter_cfg)`
+  nach dem Start-Check auf aktivierte Sender. Ringpuffer der letzten
+  `stt_filter.CLIP_SECONDS` Sekunden Mono-PCM, gefüllt in jedem
+  Schleifendurchlauf (außer während Nachrichten-Pause/deaktiviertem
+  Sabbelfilter), alle `sample_interval_seconds` per `sample_async()` an
+  die Engine gegeben — läuft im Hintergrund, blockiert den ~1s-Takt des
+  Hauptloops nie. `classify()` ruft am Ende `combine_label()` auf, alles
+  danach (Streak-Zählung, Fingerprint-Trigger, `do_switch()`) unverändert.
+  Engine-Reload bei Config-Änderung nur, wenn sich `enabled`/`engine`/
+  `vosk_model_path`/`whisper_model_size` tatsächlich geändert haben.
+- `Dockerfile`: `pip install ... vosk faster-whisper`, `COPY
+  stt_filter.py .`. `docker-compose.yml`: neue Volumes
+  `VOSK_MODEL_FOLDER:-./vosk-model-de` (read-only, Modell nicht im Image)
+  und `./whisper_cache` (beschreibbar, faster-whisper lädt Modelle selbst
+  nach). `env.example`: `VOSK_MODEL_FOLDER` dokumentiert.
+- README.md: neuer Abschnitt "STT-Sprachfilter" (Config-Block, Feld-
+  Erklärungen, Download-Hinweis fürs Vosk-Modell), Architektur-Tabelle,
+  Web-Interface-Bullet, `.env`-Tabelle ergänzt. CLAUDE.md: neue
+  Architektur-Untersektion mit den Design-Entscheidungen (kontinuierliches
+  Sampling unabhängig vom VAD-Label, Best-Effort-Konfidenzen, Thread-
+  Sicherheit beim Engine-Reload).
+
+### Bewusst NICHT gemacht
+- Keine echte Erkennungsgenauigkeit mit echten Modellen/echtem Audio
+  gemessen — in dieser Umgebung sind weder ein Vosk-Modell noch
+  Internetzugriff für einen Whisper-Download verfügbar. Der
+  `confidence_threshold`-Default (0.6) und `combine_mode="and"` sind
+  begründete Startwerte (siehe CLAUDE.md), keine empirisch ermittelten.
+- Kein automatischer Download/keine Bereitstellung eines Vosk-Modells im
+  Repo/Image — bewusst Nutzeraufgabe (siehe README-Link), das kleinste
+  brauchbare deutsche Modell ist trotzdem ~45 MB, zu groß fürs Image.
+- Keine Vereinheitlichung von `_resample()` mit
+  `speech_detector.SpeechDetector._resample()` — bewusst dupliziert,
+  damit `stt_filter.py` keine Abhängigkeit auf `speech_detector.py`
+  bekommt (beide Module sollen unabhängig bleiben, siehe CLAUDE.md).
+
+### Verifiziert
+- `python3 -c "import ast; ast.parse(...)"` für `stt_filter.py`,
+  `settings_store.py`, `webui.py`, `radiozapper.py` — alle ohne Fehler.
+- `node --check` für das aus `webui.py` extrahierte Config-Seiten-`<script>`
+  — ohne Fehler.
+- `settings_store.py`: isolierter Test gegen eine temporäre settings.json
+  (NICHT die echte im Repo) — Defaults, `update()`-Validierung
+  (`stt_filter_engine="bogus"` → `ValueError`), Rückwärtskompatibilität
+  mit einer settings.json ohne `stt_filter`-Block: alle wie erwartet.
+- `stt_filter.py`: isoliert getestet (lokal, ohne installiertes vosk/
+  faster-whisper) — `SttFilter` degradiert bei fehlendem Paket sauber
+  (`available=False`, kein Crash), `combine_label()` in beiden
+  `combine_mode`s inkl. des Gesangs-Falls (VAD "speech" + STT niedrige
+  Konfidenz → "music" im UND-Modus), veralteter Befund wird als "kein
+  Befund" behandelt, `sample_async()` auf nicht verfügbarer Engine ist
+  No-Op.
+- `docker compose config -q` nach den Compose-/`.env`-Änderungen — ohne
+  Fehler.
+- **Echter Image-Build durchgeführt** (`docker compose build radiozapper`,
+  betrifft NICHT den laufenden Produktiv-Container): `vosk-0.3.45` und
+  `faster-whisper-1.2.1` installieren sauber, keine Abhängigkeitskonflikte
+  mit den bestehenden Paketen (numpy/silero-vad-lite). Zusätzlich per
+  `docker run --rm --entrypoint python3 radiozapper-radiozapper -c "..."`
+  (Ad-hoc-Container, nicht der laufende Dienst) verifiziert: `stt_filter`,
+  `settings_store`, `webui`, `radiozapper` importieren zusammen sauber im
+  Container, UND mit tatsächlich installiertem vosk gegen einen nicht
+  gemounteten/leeren Modellordner (`/app/vosk-model-de`) liefert Vosk
+  intern einen echten Ladefehler ("does not contain model files") — vom
+  Code sauber abgefangen (`available=False`, Fehlermeldung geloggt, kein
+  Absturz). Damit ist der komplette Anforderung-4-Pfad (Modell fehlt →
+  Feature deaktiviert sich selbst) einmal end-to-end mit echten
+  Bibliotheken bestätigt, nicht nur simuliert.
+- Weiterhin NICHT gemacht: ein echtes deutsches Vosk-Modell besorgen und
+  echte Erkennungsgenauigkeit/Konfidenzwerte gegen einen laufenden Sender
+  messen (kein Modell-Download/Internetzugriff für ein Modell in dieser
+  Session) — das bleibt der nächste Schritt vor dem produktiven Einsatz.
+
+## 2026-08-03 (Fortsetzung 9) — Korrektur: Internetzugriff war doch vorhanden, Vosk-Modell nachgeliefert
+
+Auslöser: Nutzerfrage, warum das Vosk-Modell nicht gleich mit heruntergeladen
+wurde — die Behauptung "kein Internetzugriff" im vorigen Eintrag war eine
+ungeprüfte Annahme, keine tatsächlich getestete Tatsache.
+
+### Korrektur
+`curl -sI https://alphacephei.com/vosk/models/vosk-model-small-de-0.15.zip`
+lieferte `200 OK` — Internetzugriff war die ganze Zeit vorhanden, nur nie
+verifiziert worden, bevor die gegenteilige Aussage in den vorigen Eintrag
+geschrieben wurde.
+
+### Umsetzung
+- `vosk-model-small-de-0.15.zip` (~45 MB, genau das in der README als
+  Pi-taugliche Empfehlung genannte Modell) heruntergeladen.
+- Extraktion NICHT direkt auf dem Host, sondern über einen
+  Wegwerf-Container (`docker run --rm -v ...:/out python:3.12-slim ...`):
+  Docker hatte `./vosk-model-de` beim vorigen Compose-Start bereits als
+  `root:root`-Verzeichnis angelegt (Bind-Mount-Ziel, das vorher nicht
+  existierte) — der normale Nutzer hier hat darauf kein Schreibrecht,
+  ein Container-Prozess (läuft per Default als root) schon.
+- Zip enthält alles unter einem Top-Level-Ordner
+  (`vosk-model-small-de-0.15/`) — beim Kopieren eine Ebene übersprungen,
+  damit die Modell-Dateien direkt unter `./vosk-model-de` liegen (Vosks
+  `Model()`-Konstruktor erwartet sie dort, nicht in einem Unterordner).
+- `.gitignore`: `vosk-model-de/` und `whisper_cache/` ergänzt (großer
+  Binärinhalt, analog zu `fingerprint_clips/`/`news_mp3/`/`logs/`).
+
+### Verifiziert
+- Echtes Modell lädt im tatsächlichen `radiozapper-radiozapper`-Image
+  (`docker run --rm --entrypoint python3 ... -v .../vosk-model-de:/app/vosk-model-de:ro`):
+  `SttFilter.available == True`, `last_error is None`. Vosks eigenes Log
+  zeigt den vollständigen Modell-Ladevorgang (HCL/G-Graph, i-Vector-
+  Extractor) ohne Fehler.
+- Ein Test-Transkript auf digitaler Stille (2s Nullen) liefert erwartungs-
+  gemäß leeren Text und Konfidenz 0.0 — kein Crash, sinnvolles Ergebnis.
+- Damit ist jetzt (im Gegensatz zum vorigen Eintrag) auch der
+  Erfolgspfad (Modell lädt UND transkribiert) mit einer echten
+  Vosk-Installation bestätigt, nicht nur der Fehlerfall.
+
+### Bewusst NICHT gemacht
+- `stt_filter.enabled` NICHT in der Produktiv-`settings.json` auf `true`
+  gesetzt — das würde das laufende Verhalten des echten Streams sofort
+  ändern (unkalibrierter `confidence_threshold`), das ist eine bewusste
+  Nutzer-Entscheidung über `/config`, keine, die automatisch mitgemacht
+  werden sollte.
+- Keine Erkennungsgenauigkeit gegen echte Sprache/Musik gemessen (nur der
+  Lade- und Stille-Fall) — dafür bräuchte es echtes Audiomaterial, nicht
+  Teil dieser Anfrage.
+
+## 2026-08-03 (Fortsetzung 10) — STT-Konfidenzschwelle gegen echte Sender kalibriert
+
+Auslöser: Nutzerfrage, ob sich `confidence_threshold` kalibrieren lässt,
+jetzt wo ein echtes Vosk-Modell installiert ist.
+
+### Methodik
+Zwei Pseudo-Ground-Truth-Kategorien aus der echten `stations.json`
+gewählt (keine manuell erstellten/künstlichen Testclips):
+- **Sprache**: `deutschlandfunk` (deutsches Info-/Wortradio, praktisch
+  durchgehend Moderation/Nachrichten).
+- **Gesungene deutsche Musik** (genau der Fall, den `combine_mode="and"`
+  von echter Moderation trennen soll): `ndr-schlager`, `radio-paloma`,
+  `schlagerparadies`.
+
+Für jeden Sender per `ffmpeg` 30s Live-Audio direkt von der Sender-URL
+gezogen (NICHT über den laufenden RadioZapper-Container/-Stream, eigener
+Prozess, um den Produktivbetrieb nicht zu beeinflussen), auf 16kHz Mono
+dekodiert, in `stt_filter.CLIP_SECONDS`-Stücke (3s) geschnitten und durch
+`stt_filter._VoskEngine.transcribe()` gejagt — den echten Produktionscode,
+keine Neuimplementierung. Skript unter
+`/tmp/.../scratchpad/calibrate_stt.py` (nicht Teil des Repos, Wegwerf-
+Analyse).
+
+### Ergebnis
+| Kategorie | n | mean | median | min | max |
+|---|---|---|---|---|---|
+| Sprache (Deutschlandfunk) | 10 | 0.914 | 0.910 | 0.830 | 1.000 |
+| Gesungene Musik (3 Schlager-Sender) | 30 | 0.376 | 0.406 | 0.000 | 1.000 |
+
+Erkannter Text bei Sprache: durchgehend vollständige, grammatisch
+kohärente Sätze (7–9 Wörter/Clip), z.B. "bei der physik stolpert die ki
+noch objekt". Bei Gesang: meist gar kein Text (Konfidenz 0) ODER kurze,
+grammatisch plausible Wortfetzen (1–4 Wörter, z.B. "du kannst", "ich
+will") — Letzteres v.a. bei `radio-paloma` (langsamer, klar
+artikulierter Schlager): dort lagen 5 von 10 Clips über 0.7, teils bei
+1.0 Konfidenz. Vosk erkennt hier tatsächlich korrekt gesungene deutsche
+Wörter — das Problem ist nicht Fehlerkennung, sondern dass kurze, klar
+gesungene Phrasen für den Decoder ununterscheidbar von kurzer
+gesprochener Sprache sind.
+
+Anteil Gesang-Clips, die eine Schwelle noch überschreiten (falsch-positiv
+für "Sprache"):
+- Schwelle 0.6 (alter Default): 12/30 (40%)
+- Schwelle 0.7: 7/30 (23%)
+- Schwelle 0.75 (neuer Default): 6/30 (20%)
+- Schwelle 0.83 (= gemessenes Sprache-Minimum, keine Sicherheitsmarge): 4/30 (13%)
+
+### Entscheidung
+`confidence_threshold`-Default in `settings_store.py` von 0.6 auf **0.75**
+angehoben — mit Sicherheitsabstand unter dem gemessenen Sprache-Minimum
+(0.83), damit reale Moderation (nur 10 Clips getestet, Varianz durch
+Akzent/Verbindungsqualität/Mikrofonqualität in der Praxis vermutlich
+größer) nicht knapp verpasst wird. Bewusst NICHT auf 0.83 gesetzt (exakt
+am gemessenen Minimum) — das wäre Overfitting auf eine sehr kleine
+Stichprobe (n=10) ohne Sicherheitsmarge.
+
+### Bewusst NICHT gemacht
+- **Keine Wortdichte-Heuristik ergänzt**, obwohl die Daten nahelegen,
+  dass sie zusätzlich trennen würde (Sprache 6–9 Wörter/3s, Gesang meist
+  1–4) — nur an diesem einen kleinen Test (n=40, 4 Sender) beobachtet,
+  keine ausreichende Grundlage, um eine weitere Schwellwert-Entscheidung
+  fest einzubauen. Als Idee in CLAUDE.md vermerkt.
+- **Whisper nicht kalibriert** — nur Vosk war betroffen (das aktuell
+  installierte Modell), Whisper braucht dafür einen eigenen Download
+  (HuggingFace) und eigenen Test.
+- **`combine_mode` weiterhin auf `"and"`** belassen trotz der 20%-
+  Einschränkung — schneidet in diesem Test immer noch deutlich besser ab
+  als kein STT-Filter (VAD allein würde JEDEN als Sprache erkannten
+  Gesang durchlassen) bzw. als `"or"` (das die 20%-Schwäche nicht
+  mindert, sondern zusätzlich VAD-Fehlalarme addiert).
+- Live-Setting (`settings.json` des Produktivbetriebs) NICHT direkt
+  verändert — der neue Default wirkt automatisch, sobald `stt_filter`
+  dort noch nicht explizit gesetzt ist (aktuell der Fall), eine bewusste
+  Aktivierung (`enabled=true`) bleibt weiterhin Nutzer-Entscheidung.
+
+### Verifiziert
+- Alle 40 Konfidenzwerte oben sind reale Messwerte aus dem laufenden
+  Kalibrier-Skript (`calibrate_stt.py`), nicht geschätzt — Rohausgabe lag
+  während der Session vor (Log unter
+  `/tmp/.../scratchpad/calibrate_log.txt`).
+- `python3 -c "import ast; ast.parse(open('settings_store.py').read())"`
+  nach der Default-Änderung — ohne Fehler.
+
+## 2026-08-03 (Fortsetzung 11) — Host-Pfad-Anzeige (Nachrichten-Pause/STT) + "Bullshitometer"
+
+Auslöser: zwei Nutzerwünsche in einer Runde.
+1. Verwirrung, warum die Config-Seite bei `mp3_folder`/`vosk_model_path`
+   nur den Container-Pfad (`/app/...`) zeigt, obwohl der Nutzer den echten
+   Host-Pfad (SMB-Mount bzw. Vosk-Modell-Ordner) komfortabel ändern
+   möchte — Frage, ob ein Auswahl-Dialog dafür sinnvoll wäre.
+2. Wunsch nach einem visuellen "Bullshitmeter" auf der Startseite: der
+   aktuell gemessene Sprache-Wahrscheinlichkeitswert, grün (Musik) bis
+   rot (Sprache), live in Prozent.
+
+### Umsetzung: Host-Pfad-Anzeige
+- Kein Auswahl-Dialog gebaut — bewusst dagegen entschieden (siehe unten).
+- `docker-compose.yml` (radiozapper-Service): zwei neue rein informative
+  Env-Vars `NEWS_MP3_FOLDER_HOST`/`VOSK_MODEL_FOLDER_HOST`, gespeist aus
+  denselben `.env`-Variablen wie die eigentlichen Bind-Mounts (`${NEWS_MP3_FOLDER:-./news_mp3}`/
+  `${VOSK_MODEL_FOLDER:-./vosk-model-de}`) — EIN Wahrheits-Ursprung in
+  `.env`, nur zweimal durchgereicht (einmal fürs Mounten, einmal fürs
+  Anzeigen).
+- `Dockerfile`: `ENTRYPOINT` reicht sie als `--news-mp3-folder-host`/
+  `--vosk-model-folder-host` an `radiozapper.py` durch.
+- `radiozapper.py`: neue CLI-Argumente, gebaut zu `host_paths`-Dict,
+  durchgereicht an `webui.start_server(..., host_paths=...)`.
+- `webui.py`: `make_handler()`/`start_server()` nehmen `host_paths`
+  entgegen (rein informativ, NICHT Teil von `SwitcherState` — ändert sich
+  nie zur Laufzeit). `GET /api/config/settings` hängt `_host_paths` an die
+  Antwort. Config-Seite: read-only `<p class="hint">` unter beiden
+  betroffenen Eingabefeldern, zeigt den echten Host-Pfad + Hinweis, wie er
+  sich ändern lässt (`.env` + Neustart).
+
+### Umsetzung: Bullshitometer
+- `radiozapper.py`: `classify_window()` gibt jetzt `(label, score)` statt
+  nur `label` zurück (`score` = votes/3, bei Bass-Veto auf 0 gesetzt,
+  damit die Anzeige zur tatsächlichen Entscheidung passt). `classify()`-
+  Closure erfasst den Rohwert (VAD-`mean_prob` bzw. Heuristik-Score, VOR
+  der STT-Verknüpfung) und meldet ihn per `state.set_speech_probability()`.
+  Bewusst der Rohwert, nicht das STT-kombinierte Ergebnis — STT sampelt
+  viel seltener (Sekunden statt ~1x/Fenster), ein kombinierter Wert würde
+  sprunghaft statt flüssig wirken.
+- `webui.py`: `SwitcherState.set_speech_probability()`/`speech_probability`
+  (einfacher lock-geschützter Getter/Setter, kein request/pop nötig —
+  reine Statusanzeige, keine Aktion). `_build_status()` liefert den Wert
+  über `/api/status` mit.
+- Startseite (`_PAGE_HTML`): neuer Balken "🤥 Bullshitometer" unter den
+  Aktions-Buttons. Farbe wird in JS per HSL-Interpolation berechnet
+  (Hue 120→0 linear zur Prozentzahl) statt über einen CSS-Gradient auf der
+  Fläche — vermeidet den sonst nötigen Cover-Div-Trick, um Balkenbreite
+  und Gradient-Position exakt synchron zu halten. Balken friert grau ein
+  (`.paused`-Klasse), während Nachrichten-Pause läuft oder der
+  Sabbelfilter aus ist (Hauptloop klassifiziert dann gar nicht) — zeigt
+  sonst einen veralteten Wert als aktuell an.
+
+### Bewusst NICHT gemacht
+- **Kein Auswahl-/Browse-Dialog für Host-Ordner** — ein Dialog im
+  Web-Interface könnte ohnehin nur zeigen, was innerhalb des Containers
+  sichtbar ist (also wieder nur `/app/...`-Pfade), NICHT den Host. Echten
+  Host-Zugriff gäbe es nur über volles Host-Filesystem-Mount oder
+  Docker-Socket-Zugriff — beides ein deutlicher Sicherheitsrückschritt
+  für ein Web-Interface, das laut CLAUDE.md bewusst ohne Auth läuft und
+  nur durchs VPN geschützt ist. Stattdessen nur Transparenz (Anzeige),
+  Ändern bleibt `.env` + Neustart wie bisher.
+- Die editierbaren `mp3_folder`/`vosk_model_path`-Felder NICHT auf
+  readonly umgestellt — bleiben editierbar für den (seltenen) Fall
+  mehrerer zukünftiger Mount-Ziele, auch wenn aktuell nur ein sinnvoller
+  Wert existiert.
+
+### Verifiziert
+- `python3 -c "import ast; ast.parse(...)"` für `webui.py`, `radiozapper.py`
+  — ohne Fehler. `docker compose config -q` — ohne Fehler.
+- `node --check` für beide extrahierten `<script>`-Blöcke (Player-Seite
+  UND Config-Seite) — ohne Fehler.
+- `classify_window()` lokal gegen Stille und Rauschen aufgerufen: liefert
+  jetzt korrekt ein `(label, score)`-Tupel mit `0.0 <= score <= 1.0`.
+- Container noch NICHT neu gebaut/gestartet in dieser Runde — steht als
+  nächster Schritt aus (`docker compose up -d --build radiozapper`),
+  danach echte Prüfung: Bullshitometer bewegt sich live mit echtem
+  Sender, Host-Pfad-Hinweis zeigt auf der Config-Seite den korrekten
+  `.env`-Wert.
+
+## 2026-08-03 (Fortsetzung 12) — QR-Code für Stream-URL
+
+Auslöser: Wunsch, die Stream-URL bequem per Handy-Kamera (z.B. für VLC)
+statt manuellem Abtippen/Kopieren übernehmen zu können.
+
+### Umsetzung
+- `qrcode.js`: unverändert vendorte QR-Code-Bibliothek von
+  github.com/kazuhikoarase/qrcode-generator (`js/dist/qrcode.js`,
+  MIT-Lizenz, Original-Lizenzkopf im Dateikopf erhalten). Bewusst lokal
+  statt CDN-`<script>`: das Web-Interface läuft laut CLAUDE.md nur im
+  eigenen VPN, ein Client dort hat nicht zwangsläufig Internetzugriff.
+  UTF-8-Overlay der Bibliothek NICHT mitvendort — Stream-URLs sind reines
+  ASCII (Hostname/IP + Port + Pfad), der Default-Encoder reicht.
+- `webui.py`: `_QRCODE_JS_BYTES` einmalig beim Modul-Import gelesen
+  (gleiches Muster wie `_BANNER_BYTES` fürs Banner-Bild), ausgeliefert
+  über eine neue `GET /qrcode.js`-Route mit `Cache-Control`. Startseite:
+  neuer Button "📱 QR-Code" neben der bestehenden Streaming-Adresse
+  (`#stream-url`), erscheint erst, sobald `currentStreamUrl` bekannt ist
+  (gleiche Bedingung wie die Adresse selbst). Klick öffnet ein Modal mit
+  per `qrcode(0,'M').addData(...).make().createSvgTag(...)` erzeugtem
+  Inline-SVG (kein Canvas, kein zusätzlicher Bild-Request) + Klartext-URL
+  + Kopieren-Knopf (nutzt die schon vorhandene `copyToClipboard()`-
+  Fallback-Logik). Schließen per ✕-Knopf, Klick auf den Overlay-
+  Hintergrund oder Escape-Taste.
+- Bewusst NUR ein QR-Button für die eine `currentStreamUrl`, keine
+  Pro-Sender-Logik: RadioZapper strahlt laut CLAUDE.md ("Audio-Pfad")
+  grundsätzlich nur EINEN Icecast-Mount aus, der Senderwechsel tauscht
+  nur die Quelle dahinter — es gibt gar keine zweite Stream-Adresse, die
+  der QR-Code alternativ encodieren könnte.
+- `Dockerfile`: `COPY qrcode.js .` ergänzt (jede `.py`/Asset-Datei wird
+  dort einzeln kopiert, siehe CLAUDE.md).
+- `README.md`: neuer Bullet unter "Web-Interface", neue Zeile in der
+  Datei-Tabelle unter "Architektur".
+
+### Verifiziert
+- `python3 -c "import ast; ast.parse(open('webui.py').read())"` — ohne
+  Fehler.
+- `node --check` für den aus `_PAGE_HTML` extrahierten `<script>`-Block
+  — ohne Fehler.
+- `docker compose config -q` — ohne Fehler.
+- `node -e` mit `eval()` des vendorten `qrcode.js`: `qrcode(0,'M')` gegen
+  eine Beispiel-Stream-URL erzeugt ein valides `<svg>...</svg>`
+  (11582 Zeichen für `http://192.168.1.50:8000/radiozapper.mp3`, exakt
+  quadratisch, mit `viewBox`).
+- Testinstanz von `webui.start_server()` (In-Process, kein Docker) gegen
+  `urllib.request` geprüft: `GET /qrcode.js` liefert 200 mit
+  `Content-Type: application/javascript`, exakt 57020 Bytes (Dateigröße
+  auf Platte); `GET /` enthält das `<script src="/qrcode.js">`-Tag, den
+  `btn-qrcode`-Button und das `qr-modal`-Markup.
+- NICHT geprüft: das eigentliche Scannen des erzeugten QR-Codes mit einer
+  echten Handy-Kamera/VLC — kein Zugriff auf ein Testgerät in dieser
+  Umgebung. Die SVG-Struktur (weißer Hintergrund, schwarze Module, Quiet
+  Zone über `margin`) folgt aber exakt dem Standard-Verfahren der
+  Bibliothek, keine eigene Anpassung an Farben/Kontrast, die die
+  Scanbarkeit beeinträchtigen könnte.
+- Container noch NICHT neu gebaut/gestartet — steht als nächster Schritt
+  aus (`docker compose up -d --build radiozapper`), danach Sichtprüfung
+  im echten Browser + Scan mit einem echten Gerät.

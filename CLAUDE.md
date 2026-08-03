@@ -101,6 +101,28 @@ Listenposition. Rotationsreihenfolge = aktivierte Sender alphabetisch nach
 Name. Hinzufügen/Löschen/Deaktivieren darf die laufende Wiedergabe nicht
 durcheinanderbringen.
 
+Nicht jeder Datenfluss zwischen Hauptloop und Webserver ist request/pop —
+reine Status-/Info-Werte, die nur der Hauptloop kennt und die Web-UI nur
+anzeigt (kein Auslösen einer Aktion), laufen als einfache
+Setter/Property auf `SwitcherState` in die andere Richtung: `set_stt_status()`
+(Fingerprint/VAD-Analogon fehlt hier bewusst, siehe stt_filter.py-Abschnitt)
+und `set_speech_probability()` (Rohwert der Klassifikation vor der STT-
+Verknüpfung, fürs "Bullshitometer" auf der Startseite — Web-Interface
+zeigt ihn nur an, ändert nie etwas daran). `host_paths` (Web-Interface-
+Konstruktor-Parameter, NICHT SwitcherState) ist ein dritter, noch
+einfacherer Fall: rein statische Werte aus `.env` (`NEWS_MP3_FOLDER_HOST`/
+`VOSK_MODEL_FOLDER_HOST`), einmalig beim Start durchgereicht (Env-Var →
+CLI-Arg in `radiozapper.py` → `webui.start_server()`), damit die Config-
+Seite den echten Host-Pfad neben dem Container-Pfad anzeigen kann — der
+Container kennt ihn sonst grundsätzlich nicht, Docker übersetzt Host→
+Container-Pfad nur einmalig beim Anlegen des Containers, das ist für den
+laufenden Prozess selbst unsichtbar. Deshalb kein Auswahl-/Browse-Dialog
+dafür: der könnte ohnehin nur zeigen, was im Container selbst sichtbar
+ist (also wieder nur Container-Pfade) — echten Host-Zugriff gäbe es nur
+über volle Host-Filesystem- oder Docker-Socket-Freigabe, beides ein
+Sicherheitsrückschritt angesichts des Auth-losen Web-Interfaces (siehe
+"Kein Auth, nur hinter VPN" unten).
+
 ### Audio-Pfad: ein ffmpeg, zwei Pipes
 
 `StreamSource.start()` startet **einen** ffmpeg-Prozess mit zwei Ausgängen:
@@ -220,6 +242,70 @@ laufende Sender), und ein manueller Klick auf genau diesen pausierten Sender
 braucht `news_break_active or manual_id != current["id"]` statt nur `!=` —
 sonst wird der Klick sonst stillschweigend verschluckt.
 
+### STT-Sprachfilter (stt_filter.py)
+
+Zusätzliches Signal per Speech-to-Text, komplett unabhängig von
+`fingerprint.py`: wo VAD/Heuristik nur "menschliche Stimme" erkennen
+(Gesang zählt da mit), prüft `stt_filter.py` den Inhalt — kommt gerade
+zusammenhängender deutscher Text? Genau wie `news_break.py` kennt dieses
+Modul weder `StreamSource` noch `SwitcherState`. Die **einzige**
+Kopplungsstelle mit der bestehenden Switch-Logik ist
+`stt_filter.combine_label()`, eingehängt in die `classify()`-Closure in
+`radiozapper.py`s `main()` — Streak-Zählung, Fingerprint-Trigger und
+`do_switch()` dahinter bleiben dadurch komplett unverändert, Fingerprint
+merkt von alldem nichts.
+
+- **Sampling läuft kontinuierlich, unabhängig vom aktuellen VAD-Label**
+  (nicht nur während erkannter Sprache) — sonst wäre `combine_mode="or"`
+  wirkungslos: der bräuchte STT-Urteile auch für Fenster, die VAD als
+  "music" einstuft, um überhaupt etwas beizutragen. Pausiert explizit
+  während `news_break_active` (falscher Prüfgegenstand: die MP3, nicht
+  der Sender) und wenn `state.filter_enabled == False` (jede Erkennung
+  wäre dann ohnehin wirkungslos).
+  Läuft in einem Hintergrund-Thread (`SttFilter.sample_async()`) mit
+  Busy-Guard statt Thread-Stapelung — Whisper kann pro Clip mehrere
+  Sekunden brauchen, das darf den ~1s-Analysetakt des Hauptloops nie
+  blockieren.
+- **Kein Befund (Feature aus, Ladefehler, noch kein erstes Sample, oder
+  letzter Befund älter als `2 × sample_interval_seconds`) → `combine_label()`
+  ist ein reines No-Op**, gibt das VAD/Heuristik-Label unverändert zurück.
+  Darüber deaktiviert sich das Feature bei einem Modell-Ladefehler
+  faktisch selbst, ohne dass der Hauptloop das explizit abfragen muss.
+- **Konfidenzwerte sind Best-Effort-Proxys, keine kalibrierten
+  Wahrscheinlichkeiten** — Vosk liefert nur bei manchen Modellen echte
+  Wort-Konfidenzen (sonst Proxy aus Wortanzahl), Whisper liefert gar keine
+  Sprache-Konfidenz, nur `no_speech_prob` pro Segment (`1 - no_speech_prob`
+  als Näherung). `confidence_threshold` ist entsprechend Justiersache pro
+  Sender-Mix, nicht aus der Theorie ableitbar — dafür die DEBUG-Logs mit
+  Text+Konfidenz pro Sample.
+  Der `vosk-model-small-de-0.15`-Default liefert allerdings echte
+  Wort-Konfidenzen (kein Proxy nötig) — Messung gegen echte Sender (siehe
+  SESSION.md): Deutschlandfunk-Sprache nie unter 0.83, Schlager-Gesang
+  (ndr-schlager/radio-paloma/schlagerparadies) im Schnitt 0.38.
+  `confidence_threshold=0.75` (Default) liegt mit Marge unter dem
+  Sprache-Minimum. **Wichtige Grenze**: klar/langsam gesungener Schlager
+  erzeugt gelegentlich kurze, grammatisch plausible Wortfetzen mit hoher
+  Konfidenz (~20% der gemessenen Schlager-Clips lagen trotzdem über
+  0.75) — `combine_mode="and"` reduziert Fehl-Switches auf gesungene
+  Musik deutlich, ist aber KEIN Allheilmittel dagegen. Ein möglicher,
+  bisher nicht umgesetzter Ansatz: Wortdichte pro Clip zusätzlich
+  einbeziehen (Sprache lag im Test bei 6–9 Wörtern/3s, Gesang meist bei
+  1–4) — nicht implementiert, weil die Trennschärfe dafür nur an diesem
+  einen kleinen Test (n=40 Clips, 4 Sender) geprüft wurde, keine
+  ausreichende Grundlage für eine weitere Schwellwert-Entscheidung.
+- **Engine-Reload bei laufendem Sample ist sicher**: `sample_async()`
+  kopiert die Engine-Referenz lokal in den Thread, bevor `reload()`
+  (Config-Änderung, z.B. Vosk→Whisper) `self.engine` austauschen kann —
+  ein bereits laufender Sample läuft auf der alten Engine sauber zu Ende,
+  statt ihm das Objekt unter der laufenden `transcribe()`-Anfrage
+  wegzuziehen.
+- Reload bei Settings-Änderung passiert im bestehenden
+  `state.pop_reload_request()`-Zweig in `main()`: nur bei Änderung von
+  `enabled`/`engine`/`vosk_model_path`/`whisper_model_size` wird die
+  Engine tatsächlich neu geladen (teuer). `sample_interval_seconds`/
+  `confidence_threshold`/`combine_mode` liest `combine_label()` bei jedem
+  Aufruf frisch aus `state.stt_filter_cfg` — dafür ist kein Reload nötig.
+
 ## Docker-Besonderheiten
 
 - `stations.json`, `settings.json` und `fingerprints.db` sind als **einzelne
@@ -238,6 +324,53 @@ sonst wird der Klick sonst stillschweigend verschluckt.
   Pfad (Default `/app/news_mp3`), nicht der Host-SMB-Pfad — letzterer kommt
   über `NEWS_MP3_FOLDER` in `.env` rein (Bind-Mount in `docker-compose.yml`).
 
+### TLS/HTTPS (optional, `TLS_CERT_FILE`/`TLS_KEY_FILE` in `.env`)
+
+Beide Dienste bekommen bei Bedarf HTTPS, aber auf grundverschiedene Art —
+wer hier etwas ändert, muss beide Hälften verstehen:
+
+- **Web-Interface** (`webui.start_server()`): `settings.json`-Feld
+  `tls_enabled` (per `/config` setzbar) entscheidet, ob das Server-Socket
+  in `ssl.SSLContext.wrap_socket()` eingewickelt wird. Nur beim Start
+  gelesen — ein `ThreadingHTTPServer` kann sein Socket nicht im laufenden
+  Betrieb neu einwickeln, die Einstellung wirkt also erst nach einem
+  Container-Neustart. Kein Parallelbetrieb: sobald aktiv, läuft nur noch
+  HTTPS, Klartext-HTTP auf demselben Port antwortet gar nicht mehr. Fehlt
+  das Zertifikat trotz `tls_enabled=true` (leere/ungültige Datei, siehe
+  unten), fängt `start_server()` den `ssl.SSLError` ab und bleibt bei
+  HTTP statt abzustürzen.
+- **Icecast**: kein Python-Code, kein `settings.json`-Bezug — Icecast läuft
+  in einem separaten, drittseitigen Container. Steuerung ausschließlich
+  über `.env`: sind `TLS_CERT_FILE`/`TLS_KEY_FILE` gesetzt, patcht das
+  `command:`-Skript in `docker-compose.yml` einen **zusätzlichen**
+  `<listen-socket>` mit `<ssl>1</ssl>` in die generierte `icecast.xml`
+  (Port `ICECAST_SSL_PORT`, Default 8443) — der bestehende Klartext-Port
+  8000 bleibt unverändert bestehen, Hörer sind nie betroffen. Icecast
+  braucht dafür kurz Root, um die 0600-Zertifikatsdatei zu lesen
+  (`user: "0:0"` in `docker-compose.yml`), gibt die Rechte danach über
+  `<security><changeowner>` in der generierten `icecast.xml` selbst wieder
+  ab. **Der icegen-Generator hat dabei einen Bug**, der bis zu diesem
+  Feature nie auffiel: er trägt `<group>icecast2</group>` ein, tatsächlich
+  heißt im Image die Gruppe `icecast` (nur der User heißt `icecast2`, uid
+  und gid sind zufällig beide 101). Ohne den `sed`-Fix dafür verweigert
+  Icecast als root generell den Start ("You should not run icecast2 as
+  root") — unabhängig davon, ob überhaupt ein Zertifikat konfiguriert ist,
+  weil der Container jetzt IMMER als root hochkommt. Zusätzlich reicht
+  Icecast eine `<ssl-certificate>` mit getrennten Cert-/Key-Dateien nicht:
+  beide werden zu einer PEM-Datei zusammengefügt (`cat cert key >
+  icecast-tls.pem`) und explizit auf `icecast2:icecast` gechownt, weil
+  Icecast diese Datei nachweislich erst **nach** dem internen
+  Privilegien-Drop liest, nicht währenddessen als root (per isoliertem
+  Testcontainer verifiziert, siehe SESSION.md) — root-only 0600 hätte dort
+  also nicht gereicht.
+- Beide Mounts (Web-Interface UND Icecast) fallen ohne gesetzte
+  `TLS_CERT_FILE`/`TLS_KEY_FILE` auf `/dev/null` zurück (`${TLS_CERT_FILE:-/dev/null}`)
+  statt auf eine Repo-Platzhalterdatei wie bei `NEWS_MP3_FOLDER`/`news_mp3`
+  — `/dev/null` ist auf jedem Host immer ein gültiges Bind-Mount-Ziel und
+  liefert 0 Byte, genau das, was die jeweiligen "ist überhaupt ein
+  Zertifikat da?"-Prüfungen (`-s`-Test im Bash-Skript, `ssl.SSLError` im
+  Python-Fallback) erwarten.
+
 ## Kein Auth, nur hinter VPN
 
 Web-Interface und Config-Seite haben keinerlei Authentifizierung, und der
@@ -252,4 +385,10 @@ Durchgang"), u.a.: `sync_prebuffer()`/`pb.stop()` können den Hauptloop
 blockieren, das Web-Interface zeigt keinen Stream-Health-Status,
 `SpeechDetector.leftover` wird beim Senderwechsel nicht zurückgesetzt, die
 Fingerprint-DB wächst ohne Pruning, und die Config-Seite skaliert nicht auf
-mehrere hundert Sender (keine Suche, kein Bulk-Delete).
+mehrere hundert Sender (keine Suche, kein Bulk-Delete). Außerdem: der
+STT-Sprachfilter (`stt_filter.py`) wurde gegen ein kleines, echtes
+Sample (Deutschlandfunk + 3 Schlager-Sender, siehe SESSION.md) kalibriert
+— `confidence_threshold=0.75` ist dadurch besser fundiert als der
+ursprüngliche Startwert, aber klar/langsam gesungener Schlager bleibt
+eine bekannte Schwachstelle (~20% falsch-positive Konfidenz trotz
+Schwelle). Whisper wurde noch gar nicht gegen echtes Audio getestet.
