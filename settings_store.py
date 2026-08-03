@@ -11,8 +11,11 @@ schlägt darüber mit "Device or resource busy" fehl).
 """
 
 import json
+import logging
 import os
 import threading
+
+log = logging.getLogger("settings")
 
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
 
@@ -84,4 +87,5 @@ def update(prebuffer_seconds=None, prebuffer_count=None, import_url=None) -> dic
                 raise ValueError("import_url muss mit http:// oder https:// beginnen.")
             data["import_url"] = import_url
         _write(data)
+        log.info("⚙ Einstellungen gespeichert: %s", data)
         return data

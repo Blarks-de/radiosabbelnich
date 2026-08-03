@@ -75,5 +75,12 @@ services:
     volumes:
       - ./stations.json:/app/stations.json
       - ./settings.json:/app/settings.json
+      # Muss auf dem Host als DATEI existieren, bevor der Container startet
+      # (sonst legt Docker ein Verzeichnis an und SQLite kann sie nicht
+      # öffnen): einmalig `touch fingerprints.db`, siehe README-Setup.
       - ./fingerprints.db:/app/fingerprints.db
       - ./fingerprint_clips:/app/fingerprint_clips
+      # Rotierende Logdatei (immer DEBUG, siehe logging_setup.py) — hier
+      # gemountet, damit man sie ohne `docker exec` direkt vom Host lesen
+      # kann, auch nachdem der Container neugestartet ist.
+      - ./logs:/app/logs

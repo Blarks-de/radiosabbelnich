@@ -17,10 +17,12 @@ durcheinanderbringt.
 """
 
 import json
+import logging
 import os
 import re
-import sys
 import threading
+
+log = logging.getLogger("stations")
 
 STATIONS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stations.json")
 
@@ -88,7 +90,7 @@ def _read_raw() -> list:
         stations = [dict(s) for s in DEFAULT_STATIONS]
         _ensure_ids_and_defaults(stations)
         _write(stations)
-        print(f"ℹ Keine {STATIONS_FILE} gefunden, Beispiel-Datei angelegt.", file=sys.stderr)
+        log.warning("ℹ Keine %s gefunden, Beispiel-Datei angelegt.", STATIONS_FILE)
         return stations
 
     with open(STATIONS_FILE, "r", encoding="utf-8") as f:
@@ -150,6 +152,8 @@ def add(name: str, url: str, category: str, enabled: bool = True) -> dict:
         }
         stations.append(station)
         _write(stations)
+        log.info("➕ Sender angelegt: '%s' (%s, %s, %s)", station["name"], station["id"],
+                 station["category"], "aktiv" if station["enabled"] else "inaktiv")
         return station
 
 
@@ -183,6 +187,7 @@ def bulk_add(entries: list, category: str = DEFAULT_CATEGORY) -> list:
             added.append(station)
         if added:
             _write(stations)
+        log.info("➕ %d Sender per Bulk-Add in '%s' übernommen.", len(added), category)
         return added
 
 
@@ -202,6 +207,8 @@ def update(station_id: str, name: str, url: str, category: str, enabled: bool) -
                 s["category"] = category
                 s["enabled"] = bool(enabled)
                 _write(stations)
+                log.info("✏ Sender geändert: '%s' (%s, %s, %s)", s["name"], s["id"],
+                         s["category"], "aktiv" if s["enabled"] else "inaktiv")
                 return s
         raise KeyError(station_id)
 
@@ -213,6 +220,8 @@ def set_enabled(station_id: str, enabled: bool) -> dict:
             if s["id"] == station_id:
                 s["enabled"] = bool(enabled)
                 _write(stations)
+                log.info("%s Sender '%s' %s.", "☑" if s["enabled"] else "☐", s["name"],
+                         "aktiviert" if s["enabled"] else "deaktiviert")
                 return s
         raise KeyError(station_id)
 
@@ -234,6 +243,8 @@ def set_category_enabled(category: str, enabled: bool) -> int:
                 changed += 1
         if changed:
             _write(stations)
+        log.info("%s %d Sender der Kategorie '%s' %s.", "☑" if enabled else "☐", changed,
+                 category, "aktiviert" if enabled else "deaktiviert")
         return changed
 
 
@@ -246,3 +257,4 @@ def delete(station_id: str) -> None:
         if not remaining:
             raise ValueError("Mindestens ein Sender muss konfiguriert bleiben.")
         _write(remaining)
+        log.info("🗑 Sender gelöscht: %s", station_id)

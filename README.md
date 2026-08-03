@@ -55,6 +55,29 @@ erreichbar machen" keine gute Idee ist.
 Beide Mechanismen sind nicht perfekt — dafür gibt's im Web-Interface
 Korrektur-Knöpfe (siehe unten).
 
+## Umgang mit toten Sendern (Watchdog)
+
+Nicht jede Sender-URL bleibt dauerhaft abspielbar — importierte Listen
+enthalten Karteileichen, und auch ein funktionierender Sender kann mal
+minutenlang nichts liefern. Damit das nicht die ganze Wiedergabe anhält:
+
+- Liefert der **aktuelle** Sender drei Analysefenster in Folge gar nichts,
+  fliegt er für 5 Minuten aus der Rotation und RadioZapper schaltet
+  automatisch weiter (`STREAM_FAILURE_LIMIT`/`STATION_DEAD_COOLDOWN` in
+  `radiozapper.py`).
+- Stirbt ein **Hintergrund-Puffer**, wandert der Sender sofort auf dieselbe
+  Sperrliste, statt im Sekundentakt neu verbunden zu werden.
+- Gesperrte Sender werden beim automatischen Weiterschalten übersprungen
+  und nicht gepuffert. Nach Ablauf der 5 Minuten bekommen sie automatisch
+  wieder eine Chance — ein manueller Klick im Web-Interface hebt die
+  Sperre sofort auf.
+
+Ohne diesen Watchdog konnte ein einziger toter Sender den kompletten
+Player anhalten: real passiert mit einer importierten DASH-URL, die
+ffprobe beim Import korrekt als "hat Audio" durchwinkte, die ffmpeg aber
+nicht dauerhaft abspielen kann — 3569 Reconnect-Versuche über 8,5
+Stunden, Icecast-Mount die ganze Zeit weg.
+
 ## Vorausschauendes Puffern
 
 Damit ein Wechsel nicht erst neu verbinden muss, hält RadioZapper die
@@ -118,6 +141,7 @@ erreichbar (z.B. für VLC).
 | `settings_store.py` | Laufzeit-Einstellungen (Puffer-Parameter, Import-URL, `settings.json`) |
 | `station_import.py` | M3U-Import: laden, parsen, per ffprobe parallel auf Erreichbarkeit prüfen |
 | `webui.py` | Eingebettetes Web-Interface (Player-Seite + Config-Seite) |
+| `logging_setup.py` | Zentrale Logging-Konfiguration (Konsole + rotierende Logdatei) |
 | `stations.json` | Senderliste (Name, URL, Kategorie, aktiv/inaktiv) |
 | `docker-compose.yml` | Icecast + RadioZapper als zwei Services |
 
@@ -134,9 +158,16 @@ einem Mono-Downmix, um Rechenzeit zu sparen.
 ```bash
 git clone <repo-url> RadioZapper
 cd RadioZapper
-cp env.example .env    # Passwörter/Hostname eintragen
+cp env.example .env      # Passwörter/Hostname eintragen
+touch fingerprints.db    # muss als Datei existieren, siehe unten
 docker compose up -d --build
 ```
+
+Das `touch` ist Pflicht, nicht Kosmetik: `fingerprints.db` hängt in
+`docker-compose.yml` als einzelne Datei im Container. Fehlt sie auf dem
+Host, legt Docker an der Stelle ein *Verzeichnis* an — SQLite kann sie
+dann nicht öffnen und der Container landet in einer Neustartschleife.
+(Die DB selbst ist gitignored, ein frischer Clone hat sie also nie.)
 
 Danach `stations.json` nach Belieben anpassen — entweder direkt in der
 Datei oder bequemer über `http://<host>:5000/config`.
@@ -158,12 +189,33 @@ Datei oder bequemer über `http://<host>:5000/config`.
 # Neu bauen + starten
 docker compose up -d --build radiozapper
 
-# Logs live mitlesen (--verbose ist im Image bereits aktiv)
+# Konsole mitlesen (nur die wichtigen Ereignisse)
 docker compose logs -f radiozapper
+
+# Vollständiges Debug-Log (VAD-Werte, Fingerprint-Details, HTTP-Requests)
+tail -f logs/radiozapper.log
 
 # Fingerprint-Mitschnitte anhören (nach einem "Zapping-Fehler"-Verdacht)
 ls fingerprint_clips/
 ```
+
+### Logging
+
+Zwei Ziele mit unterschiedlichem Detailgrad:
+
+- **Konsole** (`docker compose logs`): nur Ereignisse, die man im Alltag
+  sehen will — Senderwechsel, Fingerprint-Treffer, Warnungen, Fehler.
+- **`logs/radiozapper.log`**: *immer* auf DEBUG, unabhängig von der
+  Konsole. Pro Analysefenster die VAD-Wahrscheinlichkeit bzw. die
+  Heuristik-Features, jeder Fingerprint-Vergleich mit Match-Stärke und
+  Abstand zur Schwelle, jeder HTTP-Request des Web-Interfaces, jeder
+  gestartete/gestorbene Hintergrund-Puffer. Rotierend (5 × 10 MB), auf
+  dem Host unter `logs/` gemountet — überlebt also Container-Neustarts.
+
+Der Sinn der Trennung: wenn nachts etwas schiefgeht, will man die Details
+hinterher lesen können, ohne den Container vorher zufällig im richtigen
+Modus gestartet zu haben. `--verbose` schiebt die DEBUG-Zeilen zusätzlich
+auf die Konsole, `--log-file ""` schaltet die Datei ab.
 
 ## Bekannte Einschränkungen
 

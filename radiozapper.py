@@ -3,30 +3,42 @@
 radiozapper.py — Internetradio abspielen, bei Moderation (Sprache) auf
 den nächsten Sender in der Liste umschalten.
 
-Erkennung: einfache Signal-Heuristik pro Analysefenster (~1 Sekunde):
-  - Zero-Crossing-Rate (ZCR): Sprache hat i.d.R. eine höhere & "unruhigere" ZCR
-  - Spektrale Flachheit (Flatness): Musik (v.a. mit Bässen/Harmonien) ist
-    tonaler -> niedrigere Flatness. Sprache ist "geräuschhafter" -> höher.
-  - Energie-Modulation: Sprache hat die typische Silben-Rhythmik (~3-6 Hz),
-    die man grob an der Varianz der Kurzzeit-Energie erkennt.
+Erkennung pro Analysefenster (~1 Sekunde), in dieser Reihenfolge:
+  1. Silero VAD (neuronales Netz, siehe speech_detector.py) — der Normalfall.
+  2. Fällt VAD aus (Modell nicht ladbar o.ä.), springt die Signal-Heuristik
+     weiter unten in dieser Datei ein: Zero-Crossing-Rate, spektrale
+     Flachheit, Energie-Modulation, Bass-Veto. Das ist KEINE ML-
+     Klassifikation, sondern Schwellwert-Heuristik, und liegt entsprechend
+     öfter daneben (A-cappella, Rap, sehr perkussive Musik).
+  3. Parallel Audio-Fingerprinting (fingerprint.py) gegen bereits gehörte
+     Jingles/Werbespots -> Treffer schaltet sofort um.
 
-Das ist KEINE ML-Klassifikation, sondern Schwellwert-Heuristik. Sie wird
-also gelegentlich danebenliegen (z.B. bei A-cappella-Gesang, Rap, sehr
-perkussiver Musik). Über die Parameter unten lässt sich das Verhalten
-tunen.
+Audio läuft intern als Stereo-PCM zum Output (Icecast/Soundkarte); die
+Analyse rechnet auf einem parallel abgegriffenen Mono-Downmix.
+
+Robustheit gegen tote Sender: liefert die aktuelle Quelle mehrfach
+hintereinander kein Audio mehr, wird sie für STATION_DEAD_COOLDOWN
+Sekunden aus der Rotation genommen und automatisch weitergeschaltet
+(siehe Watchdog im Hauptloop) — ein einzelner hängender Stream darf den
+Loop nicht anhalten.
 
 Abhängigkeiten:
     sudo apt install ffmpeg libportaudio2
-    pip install numpy sounddevice --break-system-packages
+    pip install numpy silero-vad-lite sounddevice --break-system-packages
+    (sounddevice nur für die lokale Wiedergabe ohne --icecast-url)
 
 Nutzung:
     python3 radiozapper.py
     (Sender-Liste in stations.json pflegen, oder über die Config-Seite
     des Web-Interfaces unter /config — siehe stations_store.py)
+
+Logging: alles läuft über das logging-Modul (Konsole + rotierende
+Logdatei, siehe logging_setup.py und --log-file/--verbose).
 """
 
 import collections
 import glob
+import logging
 import os
 import select
 import subprocess
@@ -37,8 +49,11 @@ import wave
 import numpy as np
 
 import fingerprint
+import logging_setup
 import webui
 from speech_detector import SpeechDetector
+
+log = logging.getLogger("radiozapper")
 
 # ----------------------------------------------------------------------
 # KONFIGURATION
@@ -55,6 +70,21 @@ CONSECUTIVE_SPEECH_TO_SWITCH = 5   # so viele Sprache-Fenster in Folge -> umscha
 COOLDOWN_AFTER_SWITCH = 8.0  # Sekunden Ruhe nach einem Switch, bevor wieder geschaltet wird
 STREAM_READ_TIMEOUT = 8.0    # max. Wartezeit pro Analysefenster, bevor eine Quelle als tot gilt
                               # (verhindert, dass ein hängender Sender den Loop für immer blockiert)
+
+# Watchdog gegen tote Sender: liefert die aktuelle Quelle STREAM_FAILURE_LIMIT
+# Analysefenster in Folge gar nichts (leerer Read, s.o.), gilt der Sender als
+# tot -> er fliegt für STATION_DEAD_COOLDOWN Sekunden aus der Rotation und der
+# Player schaltet automatisch weiter.
+#
+# Warum das nicht optional ist: ohne Watchdog lief der Hauptloop bei einem
+# toten Sender endlos "leeres Fenster -> neu verbinden -> 1s warten" im Kreis,
+# ohne jemals output.write() aufzurufen. Real beobachtet mit einer aus der
+# Kodinerds-Liste importierten DASH-URL (BBC Radio Scotland): 3569 Reconnect-
+# Versuche über 8,5 Stunden, in denen der Icecast-Mount komplett weg war
+# (Icecast wirft eine Source ohne Daten nach source-timeout=10s raus) — nur
+# ein manueller Eingriff im Web-Interface holte den Player da wieder raus.
+STREAM_FAILURE_LIMIT = 3
+STATION_DEAD_COOLDOWN = 300.0
 
 # Die nächsten PREBUFFER_COUNT Sender in Rotationsreihenfolge (ab dem
 # aktuellen) laufen im Hintergrund bereits mit und halten die letzten
@@ -78,8 +108,6 @@ VOTES_NEEDED = 2  # von 3 möglichen — je höher, desto vorsichtiger (Bass-Vet
 # wird NIE auf "speech" klassifiziert, egal was die anderen Features sagen.
 BASS_CUTOFF_HZ = 300
 BASS_RATIO_MUSIC_VETO = 0.22
-
-VERBOSE = False  # wird ggf. per --verbose Kommandozeilenparameter überschrieben
 
 # Fingerprinting: nach so vielen Sekunden Sprache am Stück wird der Clip
 # gefingerprintet und gegen die DB bekannter Jingles/Ads geprüft. Muss
@@ -158,11 +186,11 @@ def classify_window(pcm_int16: np.ndarray, sr: int) -> str:
 
     is_speech = votes >= VOTES_NEEDED and bass_ratio < BASS_RATIO_MUSIC_VETO
 
-    if VERBOSE:
+    if log.isEnabledFor(logging.DEBUG):
         veto = " [BASS-VETO]" if votes >= VOTES_NEEDED and bass_ratio >= BASS_RATIO_MUSIC_VETO else ""
-        print(f"    [feat] zcr={zcr:.3f} flat={flat:.3f} evar={energy_var:.3f} "
-              f"bass={bass_ratio:.3f} votes={votes}/3{veto} -> "
-              f"{'SPEECH' if is_speech else 'music'}", file=sys.stderr)
+        log.debug("[feat] zcr=%.3f flat=%.3f evar=%.3f bass=%.3f votes=%d/3%s -> %s",
+                  zcr, flat, energy_var, bass_ratio, votes, veto,
+                  "SPEECH" if is_speech else "music")
 
     return "speech" if is_speech else "music"
 
@@ -188,8 +216,9 @@ def save_fingerprint_debug_clip(pcm_int16: np.ndarray, sr: int, filename: str):
         )
         for old_path in existing[:-FINGERPRINT_CLIPS_KEEP]:
             os.remove(old_path)
+        log.debug("Fingerprint-Debug-Clip geschrieben: %s", filename)
     except OSError as e:
-        print(f"⚠ Fingerprint-Debug-Clip konnte nicht geschrieben werden: {e}", file=sys.stderr)
+        log.warning("⚠ Fingerprint-Debug-Clip konnte nicht geschrieben werden: %s", e)
 
 
 # ----------------------------------------------------------------------
@@ -300,8 +329,10 @@ class PrebufferedSource:
     schlimmsten Fall wartet man so ~WINDOW_SECONDS auf die Übergabe,
     deutlich weniger als eine frische Neuverbindung gekostet hätte."""
 
-    def __init__(self, sample_rate: int, url: str, buffer_seconds: float = PREBUFFER_SECONDS):
+    def __init__(self, sample_rate: int, url: str, buffer_seconds: float = PREBUFFER_SECONDS,
+                 name: str = "prebuf"):
         self.url = url
+        self.name = name
         self.source = StreamSource(sample_rate)
         self._buffer_windows = max(1, int(round(buffer_seconds / WINDOW_SECONDS)))
         self._mono_windows = collections.deque(maxlen=self._buffer_windows)
@@ -315,14 +346,18 @@ class PrebufferedSource:
         self.source.start(self.url)
         self.dead = False
         self._stop_event.clear()
-        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread = threading.Thread(target=self._run, daemon=True,
+                                        name=f"pb-{self.name}"[:14])
         self._thread.start()
+        log.debug("Puffer gestartet: %s (%d Fenster à %.1fs)",
+                  self.name, self._buffer_windows, WINDOW_SECONDS)
 
     def _run(self):
         while not self._stop_event.is_set():
             mono, stereo = self.source.read_window(WINDOW_SECONDS)
             if mono.size == 0 and stereo.size == 0:
                 self.dead = True
+                log.debug("Puffer-Quelle liefert nichts mehr, markiere als tot: %s", self.url)
                 return
             with self._lock:
                 self._mono_windows.append(mono)
@@ -332,6 +367,16 @@ class PrebufferedSource:
         self._stop_event.set()
         if self._thread:
             self._thread.join(timeout=STREAM_READ_TIMEOUT + 1)
+            if self._thread.is_alive():
+                # Der Reader hängt noch in read_window(). Die Quelle darf
+                # jetzt NICHT übernommen werden — sonst läsen Hauptloop und
+                # Reader-Thread gleichzeitig aus derselben Pipe und teilen
+                # sich die Bytes auf (zerhacktes Audio). Als tot markieren:
+                # der Aufrufer verwirft die Quelle dann, ihr .stop() beendet
+                # ffmpeg, und der hängende Read läuft dadurch leer aus.
+                self.dead = True
+                log.warning("⚠ Puffer-Thread für %s reagiert nicht — Quelle wird verworfen.",
+                            self.url)
             self._thread = None
 
     def promote(self):
@@ -410,7 +455,7 @@ class IcecastOutput:
             if now - self._last_reconnect_attempt < self.RECONNECT_COOLDOWN:
                 return
             self._last_reconnect_attempt = now
-            print("⚠ Icecast-Verbindung unterbrochen, versuche neu zu verbinden ...", file=sys.stderr)
+            log.warning("⚠ Icecast-Verbindung unterbrochen, versuche neu zu verbinden ...")
             try:
                 self.proc.kill()
                 self.proc.wait(timeout=3)
@@ -418,8 +463,9 @@ class IcecastOutput:
                 pass
             try:
                 self._start_proc()
+                log.info("📡 Icecast-Verbindung wiederhergestellt.")
             except Exception as e:
-                print(f"⚠ Icecast-Reconnect fehlgeschlagen: {e}", file=sys.stderr)
+                log.error("⚠ Icecast-Reconnect fehlgeschlagen: %s", e)
 
     def close(self):
         if self.proc:
@@ -428,6 +474,20 @@ class IcecastOutput:
             except OSError:
                 pass
             self.proc.wait(timeout=5)
+
+
+def alive_stations(active: list, dead_until: dict, keep_id: str = None) -> list:
+    """Filtert Sender raus, die der Watchdog gerade als tot markiert hat
+    (siehe STREAM_FAILURE_LIMIT/STATION_DEAD_COOLDOWN) — Rotationsreihenfolge
+    bleibt sonst unverändert.
+
+    `keep_id` (i.d.R. der aktuell laufende Sender) bleibt immer drin, auch
+    wenn er selbst gerade als tot markiert ist: sonst würde er aus der Liste
+    fallen, an der sich die Puffer-Positionen orientieren, und alle
+    Hintergrund-Puffer würden bei jedem Wechsel unnötig neu aufgebaut."""
+    now = time.time()
+    return [s for s in active
+            if dead_until.get(s["id"], 0.0) <= now or s["id"] == keep_id]
 
 
 def prebuffer_target_ids(current_id: str, active: list, count: int = PREBUFFER_COUNT) -> list:
@@ -444,27 +504,38 @@ def prebuffer_target_ids(current_id: str, active: list, count: int = PREBUFFER_C
 
 
 def sync_prebuffer(prebuffer: dict, current_id: str, active: list, sample_rate: int,
-                    buffer_seconds: float = PREBUFFER_SECONDS, count: int = PREBUFFER_COUNT):
+                    buffer_seconds: float = PREBUFFER_SECONDS, count: int = PREBUFFER_COUNT) -> list:
     """Startet/stoppt Hintergrund-Puffer, damit `prebuffer` genau die
     nächsten `count` Sender (in Rotationsreihenfolge ab dem aktuellen)
-    enthält — nicht mehr, nicht weniger. Ersetzt außerdem Puffer, deren
-    Quelle unterwegs gestorben ist (Netzwerk-Hänger etc.), durch einen
-    frischen Versuch."""
+    enthält — nicht mehr, nicht weniger.
+
+    Gibt die IDs der Sender zurück, deren Puffer-Quelle unterwegs gestorben
+    ist. Der Aufrufer entscheidet, was damit passiert: einfach hier neu
+    starten wäre falsch, denn bei einer dauerhaft toten URL bekäme man einen
+    frischen ffmpeg-Prozess pro Schleifendurchlauf, also im Sekundentakt
+    (live beobachtet). Der Hauptloop setzt sie stattdessen für
+    STATION_DEAD_COOLDOWN auf die Sperrliste — danach kriegen sie
+    automatisch wieder eine Chance."""
     wanted_ids = prebuffer_target_ids(current_id, active, count)
     wanted_set = set(wanted_ids)
 
+    died = []
     for sid in list(prebuffer.keys()):
         if sid not in wanted_set:
             prebuffer.pop(sid).stop()
         elif prebuffer[sid].dead:
             prebuffer.pop(sid).stop()
+            died.append(sid)
 
     stations_by_id = {s["id"]: s for s in active}
     for sid in wanted_ids:
         if sid not in prebuffer and sid in stations_by_id:
-            pb = PrebufferedSource(sample_rate, stations_by_id[sid]["url"], buffer_seconds)
+            pb = PrebufferedSource(sample_rate, stations_by_id[sid]["url"], buffer_seconds,
+                                   name=sid)
             pb.start()
             prebuffer[sid] = pb
+
+    return died
 
 
 # ----------------------------------------------------------------------
@@ -472,12 +543,15 @@ def sync_prebuffer(prebuffer: dict, current_id: str, active: list, sample_rate: 
 # ----------------------------------------------------------------------
 
 def main():
-    global VERBOSE
-
     import argparse
     parser = argparse.ArgumentParser(description="RadioZapper: schaltet bei Moderation um.")
     parser.add_argument("--verbose", action="store_true",
-                         help="Feature-Werte (zcr/flat/evar/bass) und Fingerprint-Infos ausgeben")
+                         help="Feature-Werte (zcr/flat/evar/bass), VAD-Wahrscheinlichkeiten und "
+                              "Fingerprint-Infos auch auf der Konsole ausgeben (in der Logdatei "
+                              "stehen sie ohnehin immer)")
+    parser.add_argument("--log-file", default=logging_setup.DEFAULT_LOG_FILE,
+                         help=f"Pfad der rotierenden Logdatei (leer = keine Datei, "
+                              f"default: {logging_setup.DEFAULT_LOG_FILE})")
     parser.add_argument("--icecast-url", default=None,
                          help="Statt lokaler Wiedergabe auf einen Icecast-Mountpoint pushen, "
                               "z.B. icecast://source:PASSWORT@dockfish.icefish-ghost.ts.net:8000/mix.mp3")
@@ -500,27 +574,32 @@ def main():
                          help="Port, unter dem der Browser den Icecast-Stream selbst erreicht "
                               "(für den eingebetteten Player im Web-Interface), z.B. 8000")
     args = parser.parse_args()
-    VERBOSE = args.verbose
+
+    log_path = logging_setup.setup(args.log_file, verbose=args.verbose)
+    log.info("🎬 RadioZapper startet.")
+    if log_path:
+        log.info("📝 Logdatei: %s (immer DEBUG, rotierend: %d × %d MB)",
+                 log_path, logging_setup.BACKUP_COUNT, logging_setup.MAX_BYTES // (1024 * 1024))
 
     if args.icecast_url:
         output = IcecastOutput(SAMPLE_RATE, args.icecast_url, args.bitrate)
-        print(f"📡 Restream läuft auf: {args.icecast_url.split('@')[-1]}")
+        log.info("📡 Restream läuft auf: %s (%s)", args.icecast_url.split("@")[-1], args.bitrate)
     else:
         output = LocalOutput(SAMPLE_RATE)
 
     fp_db = None
     if not args.no_fingerprint:
         fp_db = fingerprint.FingerprintDB(args.fingerprint_db)
-        print(f"🔎 Fingerprint-DB: {args.fingerprint_db}")
+        log.info("🔎 Fingerprint-DB: %s", args.fingerprint_db)
 
     detector = SpeechDetector(SAMPLE_RATE)
     if detector.available:
-        print("🗣  Sprache-Erkennung: Silero VAD")
+        log.info("🗣  Sprache-Erkennung: Silero VAD")
     else:
-        print("🗣  Sprache-Erkennung: Signal-Heuristik (Fallback)")
+        log.info("🗣  Sprache-Erkennung: Signal-Heuristik (Fallback)")
 
     def classify(pcm: np.ndarray) -> str:
-        label, _ = detector.classify(pcm, verbose=VERBOSE)
+        label, _ = detector.classify(pcm)
         if label is None:
             return classify_window(pcm, SAMPLE_RATE)  # Heuristik-Fallback
         return label
@@ -528,8 +607,8 @@ def main():
     state = webui.SwitcherState()
     active = state.active_stations
     if not active:
-        print("Keine aktivierten Sender in stations.json — bitte über die "
-              "Config-Seite (/config) mindestens einen aktivieren.", file=sys.stderr)
+        log.error("Keine aktivierten Sender in stations.json — bitte über die "
+                  "Config-Seite (/config) mindestens einen aktivieren.")
         sys.exit(1)
 
     httpd = None
@@ -542,13 +621,17 @@ def main():
             "public_port": args.icecast_public_port,
         }
         httpd = webui.start_server(args.webui_port, state, icecast_cfg, args.fingerprint_db)
-        print(f"🌐 Web-Interface läuft auf Port {args.webui_port}")
+        log.info("🌐 Web-Interface läuft auf Port %d", args.webui_port)
 
     source = StreamSource(SAMPLE_RATE)
     current = active[0]  # aktuell gespielter Sender (dict: id/name/url/category/enabled)
     source.start(current["url"])
     state.set_current(current["id"])
-    print(f"▶ Spiele: {current['name']}")
+    log.info("▶ Spiele: %s", current["name"])
+
+    # Sender, die der Watchdog gerade als tot markiert hat: id -> Zeitpunkt,
+    # ab dem sie wieder mitspielen dürfen (siehe alive_stations()).
+    dead_until = {}
 
     # Nächste Sender in Rotationsreihenfolge laufen im Hintergrund bereits
     # mit (siehe PrebufferedSource/sync_prebuffer weiter oben) -> Wechsel
@@ -558,8 +641,8 @@ def main():
     prebuffer = {}
     sync_prebuffer(prebuffer, current["id"], active, SAMPLE_RATE,
                    state.prebuffer_seconds, state.prebuffer_count)
-    print(f"⏱  Puffere die nächsten {len(prebuffer)} Sender "
-          f"{state.prebuffer_seconds:.0f}s im Voraus.")
+    log.info("⏱  Puffere die nächsten %d Sender %.0fs im Voraus.",
+             len(prebuffer), state.prebuffer_seconds)
 
     def quick_forward(seconds: float = 0.3):
         """Nach einem direkten Sender-Wechsel (manuell oder erzwungen durch
@@ -580,18 +663,30 @@ def main():
         Puffer falls vorhanden (sofortiger Übergang inkl. Burst der
         letzten PREBUFFER_SECONDS Sekunden gepufferten Audios), sonst
         frischer Connect + quick_forward(). Aktualisiert `source`, gibt
-        aber KEIN state.set_current()/print() aus — das bleibt Sache der
+        aber KEIN state.set_current()/Logmeldung aus — das bleibt Sache der
         Aufrufer, die je nach Situation unterschiedliche Meldungen
-        ausgeben. Gibt zurück, ob der Puffer genutzt werden konnte."""
-        nonlocal source
+        ausgeben. Gibt zurück, ob der Puffer genutzt werden konnte.
+
+        Eine Puffer-Quelle, die unterwegs gestorben ist (`pb.dead`), wird
+        NICHT übernommen — sonst schaltet man sehenden Auges auf eine
+        Quelle, die schon nichts mehr liefert, und der Watchdog im
+        Hauptloop müsste den Sender gleich wieder abräumen. Stattdessen
+        ganz normal frisch verbinden: vielleicht war es nur ein Hänger."""
+        nonlocal source, stream_failures
+        stream_failures = 0
         pb = prebuffer.pop(station["id"], None)
         if pb is not None:
             mono, stereo, adopted_source = pb.promote()
-            source.stop()
-            source = adopted_source
-            if stereo.size:
-                output.write(stereo)
-            return "prebuffered" if mono.size else "prebuffered-empty"
+            if pb.dead:
+                adopted_source.stop()
+                log.warning("⚠ Puffer von '%s' war tot — verbinde stattdessen frisch.",
+                            station["name"])
+            else:
+                source.stop()
+                source = adopted_source
+                if stereo.size:
+                    output.write(stereo)
+                return "prebuffered" if mono.size else "prebuffered-empty"
         source.start(station["url"])
         quick_forward()
         return "fresh"
@@ -600,6 +695,7 @@ def main():
     last_switch_time = 0.0
     speech_buffer = []       # sammelt PCM-Chunks des aktuellen Sprache-Laufs
     fp_checked_this_run = False
+    stream_failures = 0      # leere Reads in Folge vom aktuellen Sender (Watchdog)
 
     def do_switch(reason: str):
         """Springt reihum zum nächsten (aktivierten) Sender, bis Musik läuft
@@ -615,12 +711,15 @@ def main():
         anhand ihres bereits vorhandenen Puffers beurteilt (kein
         1.5s-Warten + frisches Fenster nötig) — bei "music" sofort mit
         vollem Puffer-Burst übernommen, bei "speech" verworfen und der
-        nächste Kandidat probiert."""
-        nonlocal current, last_switch_time, source
-        print(f"🎙  {reason} auf '{current['name']}' — schalte um ...")
+        nächste Kandidat probiert.
+
+        Kandidaten, die der Watchdog gerade als tot markiert hat, werden
+        übersprungen, ohne sie überhaupt anzufassen."""
+        nonlocal current, last_switch_time, source, stream_failures
+        log.info("🎙  %s auf '%s' — schalte um ...", reason, current["name"])
         active = state.active_stations
         if not active:
-            print("   ... keine aktivierten Sender konfiguriert, bleibe hier.")
+            log.warning("   ... keine aktivierten Sender konfiguriert, bleibe hier.")
             return
         ids = [s["id"] for s in active]
         pos = ids.index(current["id"]) if current["id"] in ids else -1
@@ -632,35 +731,59 @@ def main():
                 # Hauptloop erledigt den eigentlichen Wechsel (inkl.
                 # current/state/Streak-Reset) beim nächsten Durchlauf
                 state.request_switch(pending)
-                print("   ... manueller Switch angefordert, breche Auto-Suche ab.")
+                log.info("   ... manueller Switch angefordert, breche Auto-Suche ab.")
                 return
             pos = (pos + 1) % len(active)
             candidate = active[pos]
             skips += 1
 
+            if dead_until.get(candidate["id"], 0.0) > time.time():
+                log.debug("   ... '%s' ist als tot markiert, überspringe.", candidate["name"])
+                continue
+
             pb = prebuffer.pop(candidate["id"], None)
             if pb is not None:
                 buf_mono, buf_stereo, candidate_source = pb.promote()
+                if pb.dead:
+                    # Quelle ist im Hintergrund gestorben. Früher wurde ein
+                    # leerer Puffer mangels Audio als "music" durchgewunken
+                    # und der tote Sender übernommen — genau so landete der
+                    # Player auf einer Quelle, die nie wieder etwas lieferte.
+                    candidate_source.stop()
+                    dead_until[candidate["id"]] = time.time() + STATION_DEAD_COOLDOWN
+                    log.warning("   ... '%s' liefert im Puffer nichts mehr — für %.0f Min. "
+                                "aus der Rotation.", candidate["name"], STATION_DEAD_COOLDOWN / 60)
+                    continue
                 tail = buf_mono[-int(SAMPLE_RATE * WINDOW_SECONDS):] if buf_mono.size else buf_mono
-                verdict = classify(tail) if tail.size else "music"
-                if verdict == "music":
-                    current = candidate
-                    source.stop()
-                    source = candidate_source
-                    state.set_current(current["id"])
-                    if buf_stereo.size:
-                        output.write(buf_stereo)
-                    print(f"▶ Spiele: {current['name']} (aus Puffer, nahtlos)")
-                    last_switch_time = time.time()
-                    break
-                candidate_source.stop()
-                print(f"   ... auch Sprache (gepuffert), probiere nächsten Sender.")
-                continue
+                if not tail.size:
+                    # Puffer noch leer (gerade erst gestartet) — kein Grund,
+                    # den Sender zu verdächtigen, aber auch keine Grundlage
+                    # für ein Urteil: normal frisch verbinden statt blind
+                    # übernehmen.
+                    candidate_source.stop()
+                    log.debug("   ... Puffer von '%s' noch leer, probiere frisch.",
+                              candidate["name"])
+                else:
+                    if classify(tail) == "music":
+                        current = candidate
+                        source.stop()
+                        source = candidate_source
+                        state.set_current(current["id"])
+                        stream_failures = 0
+                        if buf_stereo.size:
+                            output.write(buf_stereo)
+                        log.info("▶ Spiele: %s (aus Puffer, nahtlos)", current["name"])
+                        last_switch_time = time.time()
+                        break
+                    candidate_source.stop()
+                    log.info("   ... auch Sprache (gepuffert), probiere nächsten Sender.")
+                    continue
 
             current = candidate
             source.start(current["url"])
             state.set_current(current["id"])
-            print(f"▶ Spiele: {current['name']}")
+            stream_failures = 0
+            log.info("▶ Spiele: %s", current["name"])
             last_switch_time = time.time()
             time.sleep(1.5)
             probe_mono, probe_stereo = source.read_window(WINDOW_SECONDS)
@@ -669,15 +792,34 @@ def main():
                     output.write(probe_stereo)
                 if classify(probe_mono) == "music":
                     break
-            print(f"   ... auch Sprache, probiere nächsten Sender.")
+            else:
+                # Gar nichts gekommen: der Sender ist nicht bloß gerade am
+                # Reden, er antwortet nicht. Direkt aus der Rotation nehmen,
+                # statt ihn beim nächsten Durchlauf gleich wieder anzufassen.
+                dead_until[current["id"]] = time.time() + STATION_DEAD_COOLDOWN
+                log.warning("   ... '%s' liefert kein Audio — für %.0f Min. aus der Rotation.",
+                            current["name"], STATION_DEAD_COOLDOWN / 60)
+                continue
+            log.info("   ... auch Sprache, probiere nächsten Sender.")
 
     try:
         while True:
             # Puffer für die nächsten Sender ab der aktuellen Position
             # aktuell halten -- billig genug, um einmal pro Schleifen-
             # durchlauf zu prüfen (kein Rebuild, falls schon passend).
-            sync_prebuffer(prebuffer, current["id"], state.active_stations, SAMPLE_RATE,
-                            state.prebuffer_seconds, state.prebuffer_count)
+            # Als tot markierte Sender werden gar nicht erst gepuffert.
+            active_now = state.active_stations
+            died = sync_prebuffer(prebuffer, current["id"],
+                                   alive_stations(active_now, dead_until, current["id"]),
+                                   SAMPLE_RATE, state.prebuffer_seconds, state.prebuffer_count)
+            for sid in died:
+                # Schon im Hintergrund gestorben, bevor überhaupt jemand
+                # dorthin schalten wollte -> gar nicht erst als Kandidat
+                # anbieten (und vor allem nicht im Sekundentakt neu starten).
+                dead_until[sid] = time.time() + STATION_DEAD_COOLDOWN
+                name = next((s["name"] for s in active_now if s["id"] == sid), sid)
+                log.warning("⚠ Hintergrund-Puffer von '%s' liefert nichts — für %.0f Min. "
+                            "aus der Rotation.", name, STATION_DEAD_COOLDOWN / 60)
 
             if state.pop_reload_request():
                 # Sender oder Puffer-Einstellungen wurden über die
@@ -694,40 +836,43 @@ def main():
                     for pb in prebuffer.values():
                         pb.stop()
                     prebuffer.clear()
-                    print(f"⏱  Puffer-Einstellungen geändert: "
-                          f"{state.prebuffer_count} Sender × {state.prebuffer_seconds:.0f}s.")
+                    log.info("⏱  Puffer-Einstellungen geändert: %d Sender × %.0fs.",
+                             state.prebuffer_count, state.prebuffer_seconds)
                 active = state.active_stations
                 active_ids = {s["id"] for s in active}
                 if not active:
-                    print("⚠ Keine aktivierten Sender mehr konfiguriert — "
-                          "Wiedergabe pausiert bis wieder einer aktiv ist.", file=sys.stderr)
+                    log.warning("⚠ Keine aktivierten Sender mehr konfiguriert — "
+                                "spiele den aktuellen weiter, bis wieder einer aktiv ist.")
                 elif current["id"] not in active_ids:
                     current = active[0]
                     used_buffer = switch_to_station(current)
                     state.set_current(current["id"])
-                    print(f"⚙ Senderliste geändert, aktueller Sender nicht mehr aktiv "
-                          f"— schalte auf: {current['name']}"
-                          f"{' (aus Puffer)' if used_buffer.startswith('prebuffered') else ''}")
+                    log.info("⚙ Senderliste geändert, aktueller Sender nicht mehr aktiv "
+                             "— schalte auf: %s%s", current["name"],
+                             " (aus Puffer)" if used_buffer.startswith("prebuffered") else "")
                     last_switch_time = time.time()
                     speech_streak = 0
                     speech_buffer = []
                     fp_checked_this_run = False
                 else:
-                    print("⚙ Senderliste neu geladen.")
+                    log.info("⚙ Senderliste neu geladen (%d aktiv).", len(active))
                 continue
 
             manual_id = state.pop_manual_request()
             if manual_id is not None and manual_id != current["id"]:
                 station = next((s for s in state.active_stations if s["id"] == manual_id), None)
                 if station is None:
-                    print(f"⚠ Manueller Switch auf unbekannten/inaktiven Sender ignoriert: "
-                          f"{manual_id}", file=sys.stderr)
+                    log.warning("⚠ Manueller Switch auf unbekannten/inaktiven Sender "
+                                "ignoriert: %s", manual_id)
                     continue
                 current = station
+                # Ausdrücklicher Nutzerwunsch: eine alte Tot-Markierung darf
+                # dem nicht im Weg stehen (der Sender kann längst wieder da sein).
+                dead_until.pop(current["id"], None)
                 used_buffer = switch_to_station(current)
                 state.set_current(current["id"])
-                print(f"🎛  Manuell umgeschaltet auf: {current['name']}"
-                      f"{' (aus Puffer)' if used_buffer.startswith('prebuffered') else ''}")
+                log.info("🎛  Manuell umgeschaltet auf: %s%s", current["name"],
+                         " (aus Puffer)" if used_buffer.startswith("prebuffered") else "")
                 last_switch_time = time.time()
                 speech_streak = 0
                 speech_buffer = []
@@ -754,17 +899,46 @@ def main():
                 speech_streak = 0
                 speech_buffer = []
                 fp_checked_this_run = False
-                print(f"🔇 Sabbelfilter {'wieder aktiviert' if new_enabled else 'deaktiviert'} "
-                      f"(automatisches Umschalten {'läuft weiter' if new_enabled else 'pausiert'}).")
+                log.info("🔇 Sabbelfilter %s (automatisches Umschalten %s).",
+                         "wieder aktiviert" if new_enabled else "deaktiviert",
+                         "läuft weiter" if new_enabled else "pausiert")
                 continue
 
             pcm, pcm_stereo = source.read_window(WINDOW_SECONDS)
             if pcm.size == 0:
-                print(f"⚠ Stream '{current['name']}' liefert nichts mehr, "
-                      f"versuche neu zu verbinden ...", file=sys.stderr)
-                source.start(current["url"])
-                time.sleep(1)
+                # WATCHDOG: erst ein paar Reconnects (ein kurzer Hänger soll
+                # keinen Senderwechsel auslösen), dann ist der Sender raus.
+                stream_failures += 1
+                if stream_failures < STREAM_FAILURE_LIMIT:
+                    log.warning("⚠ Stream '%s' liefert nichts mehr (%d/%d), "
+                                "versuche neu zu verbinden ...",
+                                current["name"], stream_failures, STREAM_FAILURE_LIMIT)
+                    source.start(current["url"])
+                    time.sleep(1)
+                    continue
+
+                log.error("⛔ Stream '%s' liefert nach %d Versuchen immer noch nichts — "
+                          "nehme ihn für %.0f Min. aus der Rotation und schalte weiter.",
+                          current["name"], stream_failures, STATION_DEAD_COOLDOWN / 60)
+                dead_until[current["id"]] = time.time() + STATION_DEAD_COOLDOWN
+                stream_failures = 0
+                speech_streak = 0
+                speech_buffer = []
+                fp_checked_this_run = False
+
+                if not alive_stations(state.active_stations, dead_until):
+                    # Alle aktivierten Sender sind als tot markiert (z.B.
+                    # weil das Netz komplett weg war). Sperren aufheben und
+                    # allen nochmal eine Chance geben, statt in einer Runde
+                    # aus lauter übersprungenen Kandidaten hängenzubleiben.
+                    log.error("⛔ Alle aktivierten Sender sind als tot markiert — "
+                              "hebe die Sperren auf und probiere von vorn.")
+                    dead_until.clear()
+
+                do_switch("Sender liefert kein Audio")
                 continue
+
+            stream_failures = 0
 
             if pcm_stereo.size:
                 output.write(pcm_stereo)
@@ -791,9 +965,7 @@ def main():
                 if fp_db and not fp_checked_this_run and speech_streak >= FINGERPRINT_TRIGGER_SECONDS:
                     fp_checked_this_run = True
                     combined = np.concatenate(speech_buffer)
-                    match = fp_db.match_or_learn(
-                        combined, SAMPLE_RATE, current["name"], verbose=VERBOSE
-                    )
+                    match = fp_db.match_or_learn(combined, SAMPLE_RATE, current["name"])
                     ts = time.strftime("%Y%m%d-%H%M%S")
                     if match:
                         save_fingerprint_debug_clip(
@@ -801,8 +973,10 @@ def main():
                             f"match_clip{match['clip_id']}_{current['id']}_{ts}.wav",
                         )
                         state.set_last_fingerprint_clip(match["clip_id"], match["label"], current["id"])
-                        print(f"🔁 Bekannter Jingle/Werbespot wiedererkannt "
-                              f"(schon {match['times_seen']}x gehört)")
+                        log.info("🔁 Bekannter Jingle/Werbespot wiedererkannt: Clip #%d '%s' "
+                                 "(schon %dx gehört, Match-Stärke %d)",
+                                 match["clip_id"], match["label"], match["times_seen"],
+                                 match["match_strength"])
                         speech_streak = 0
                         speech_buffer = []
                         fp_checked_this_run = False
@@ -824,7 +998,12 @@ def main():
                 do_switch("Moderation erkannt")
 
     except KeyboardInterrupt:
-        print("\nBeende.")
+        log.info("Beende.")
+    except Exception:
+        # Ohne das stirbt der Prozess mit einem Traceback auf stderr, der in
+        # der Logdatei fehlt — genau dann, wenn man ihn braucht.
+        log.exception("💥 Unerwarteter Fehler im Hauptloop — beende.")
+        raise
     finally:
         source.stop()
         for pb in prebuffer.values():

@@ -2244,7 +2244,7 @@
     "name": "BBC Radio Scotland",
     "url": "https://a.files.bbci.co.uk/ms6/live/3441A116-B12E-4D2F-ACA8-C1984642FA4B/audio/simulcast/dash/nonuk/pc_hd_abr_v2/cfs/bbc_radio_scotland_fm.mpd",
     "category": "Unsortiert",
-    "enabled": true
+    "enabled": false
   },
   {
     "id": "classic-fm",

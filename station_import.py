@@ -21,12 +21,15 @@ verschachtelte .m3u korrekt als "Invalid data" ab, ein HTTP-GET hätte
 sie fälschlich als erreichbar gemeldet).
 """
 
+import logging
 import re
 import subprocess
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import stations_store
+
+log = logging.getLogger("import")
 
 CHECK_TIMEOUT = 6.0      # Sekunden pro ffprobe-Check
 CHECK_CONCURRENCY = 10   # max. gleichzeitige Checks
@@ -75,9 +78,14 @@ def check_reachable(url: str, timeout: float = CHECK_TIMEOUT) -> bool:
              "-show_entries", "stream=codec_type", "-of", "csv=p=0", url],
             capture_output=True, text=True, timeout=timeout,
         )
-    except (subprocess.TimeoutExpired, OSError):
+    except (subprocess.TimeoutExpired, OSError) as e:
+        log.debug("[check] %s -> nicht erreichbar (%s)", url, type(e).__name__)
         return False
-    return result.returncode == 0 and "audio" in result.stdout
+    ok = result.returncode == 0 and "audio" in result.stdout
+    if not ok:
+        log.debug("[check] %s -> kein Audio-Stream (rc=%d, stderr=%s)",
+                  url, result.returncode, (result.stderr or "").strip()[:120])
+    return ok
 
 
 def run_import(url: str, progress=None) -> dict:
@@ -92,10 +100,14 @@ def run_import(url: str, progress=None) -> dict:
     Gibt {"checked": int, "working": int, "added": int} zurück. Wirft bei
     Netzwerk-/Parse-Fehlern beim Laden der Playlist selbst (nicht bei
     einzelnen nicht erreichbaren Sendern — die werden einfach übersprungen)."""
+    log.info("📻 Sender-Import gestartet: %s", url)
     if progress:
         progress.set_phase("downloading")
     text = fetch_m3u(url)
     entries = parse_m3u(text)
+    log.info("📻 Playlist geladen: %d Einträge, prüfe Erreichbarkeit "
+             "(max. %d parallel, %.0fs Timeout pro Sender) ...",
+             len(entries), CHECK_CONCURRENCY, CHECK_TIMEOUT)
 
     if progress:
         progress.set_phase("checking", total=len(entries))
@@ -133,5 +145,7 @@ def run_import(url: str, progress=None) -> dict:
         to_add.append(e)
 
     added = stations_store.bulk_add(to_add, category=stations_store.IMPORT_CATEGORY)
+    log.info("📻 Import fertig: %d geprüft, %d erreichbar, %d neu in '%s'.",
+             len(entries), len(working), len(added), stations_store.IMPORT_CATEGORY)
 
     return {"checked": len(entries), "working": len(working), "added": len(added)}

@@ -15,6 +15,7 @@ im selben Prozess, also reicht das.
 
 import base64
 import json
+import logging
 import os
 import re
 import threading
@@ -30,14 +31,17 @@ import settings_store
 import station_import
 import stations_store
 
+log = logging.getLogger("webui")
+
 # Einmalig beim Modul-Import gelesen (statt bei jedem Request von der
 # Platte) — kleines statisches Asset, ändert sich nicht zur Laufzeit.
 _BANNER_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "radiozapper.webp")
 try:
     with open(_BANNER_PATH, "rb") as _f:
         _BANNER_BYTES = _f.read()
-except OSError:
+except OSError as _e:
     _BANNER_BYTES = None
+    log.warning("⚠ Banner-Bild %s nicht lesbar (%s) — Seite läuft ohne.", _BANNER_PATH, _e)
 
 
 class SwitcherState:
@@ -1148,7 +1152,11 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
-            pass  # kein Logspam für jeden Poll-Request
+            # Nicht mehr komplett verwerfen: auf DEBUG, damit die Requests in
+            # der Logdatei nachvollziehbar sind (wer hat wann was geklickt),
+            # ohne die Konsole mit einem Eintrag pro /api/status-Poll alle
+            # 5 Sekunden zuzumüllen.
+            log.debug("[http] %s %s", self.address_string(), fmt % args)
 
         def _send(self, body: bytes, content_type: str, status: int = 200):
             self.send_response(status)
@@ -1240,6 +1248,8 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                 self._send_json({"ok": False, "error": "Unbekannte Kategorie."}, status=400)
                 return
             changed = stations_store.set_category_enabled(category, False)
+            log.info("🎛  Config: Kategorie '%s' komplett deaktiviert (%d Sender).",
+                     category, changed)
             state.request_reload()
             self._send_json({"ok": True, "changed": changed})
 
@@ -1260,7 +1270,15 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
             # "Clip-DB leeren"-Knopf: löscht ALLE gelernten Fingerprint-
             # Clips (nicht stations.json!). Sicherheitsabfrage passiert im
             # Frontend (confirm()) — hier keine weitere Rückfrage nötig.
-            cleared = fingerprint.clear_all(fingerprint_db_path)
+            try:
+                cleared = fingerprint.clear_all(fingerprint_db_path)
+            except Exception as e:
+                # z.B. "database is locked", wenn der Hauptloop gerade selbst
+                # schreibt — als saubere Fehlermeldung zurückgeben statt als
+                # abgebrochener Request ohne Antwort.
+                log.exception("⚠ Clip-DB leeren fehlgeschlagen.")
+                self._send_json({"ok": False, "error": f"Datenbankfehler: {e}"}, status=500)
+                return
             self._send_json({"ok": True, "cleared": cleared})
 
         def _handle_import_start(self):
@@ -1285,15 +1303,17 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                     if result["added"]:
                         state.request_reload()
                 except Exception as e:
+                    log.exception("⚠ Sender-Import fehlgeschlagen (%s).", import_url)
                     import_state.fail(str(e))
 
-            threading.Thread(target=worker, daemon=True).start()
+            threading.Thread(target=worker, daemon=True, name="import").start()
             self._send_json({"ok": True})
 
         def _handle_skip(self):
             # "Gesabbel!"-Knopf: Nutzer hat selbst Sprache erkannt, auch
             # wenn VAD/Heuristik (noch) nicht angeschlagen haben -> sofort
             # weiterschalten, ohne auf die automatische Erkennung zu warten.
+            log.info("🎛  Web-Interface: '🗣️ Gesabbel!' gedrückt.")
             state.request_skip()
             self._send_json({"ok": True})
 
@@ -1303,6 +1323,8 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
             # den Request an (inkl. Zurücksetzen der Streak-Buchhaltung),
             # der tatsächliche neue Zustand kommt beim nächsten
             # /api/status-Poll an.
+            log.info("🎛  Web-Interface: Sabbelfilter-Umschaltung angefordert "
+                     "(aktuell %s).", "an" if state.filter_enabled else "aus")
             state.request_filter_toggle()
             self._send_json({"ok": True})
 
@@ -1312,6 +1334,7 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
             # falsch/unerwünscht rausstellt -> den zugrundeliegenden Clip
             # aus der DB werfen (damit er nicht weiter fälschlich matcht)
             # UND zurück zu dem Sender schalten, der vor dem Treffer lief.
+            log.info("🎛  Web-Interface: '🛑 Zapping-Fehler' gedrückt.")
             clip = state.pop_last_fingerprint_clip()
             if clip is None:
                 self._send_json({
@@ -1320,7 +1343,12 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                 }, status=404)
                 return
 
-            label = fingerprint.delete_clip(fingerprint_db_path, clip["clip_id"])
+            try:
+                label = fingerprint.delete_clip(fingerprint_db_path, clip["clip_id"])
+            except Exception as e:
+                log.exception("⚠ Clip #%s löschen fehlgeschlagen.", clip["clip_id"])
+                self._send_json({"ok": False, "error": f"Datenbankfehler: {e}"}, status=500)
+                return
 
             switched_back_to = None
             prev_id = clip.get("previous_station_id")
@@ -1344,6 +1372,7 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
             station_id = payload.get("id")
             active_ids = {s["id"] for s in state.active_stations}
             if isinstance(station_id, str) and station_id in active_ids:
+                log.info("🎛  Web-Interface: manueller Switch auf '%s' angefordert.", station_id)
                 state.request_switch(station_id)
                 self._send_json({"ok": True})
             else:
@@ -1401,6 +1430,8 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
 def start_server(port: int, state: SwitcherState, icecast_cfg: dict,
                   fingerprint_db_path: str) -> ThreadingHTTPServer:
     httpd = ThreadingHTTPServer(("0.0.0.0", port), make_handler(state, icecast_cfg, fingerprint_db_path))
-    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True, name="webui")
     thread.start()
+    log.debug("Webserver-Thread gestartet (Port %d, Icecast-Admin: %s)",
+              port, icecast_cfg.get("admin_url") or "nicht konfiguriert")
     return httpd

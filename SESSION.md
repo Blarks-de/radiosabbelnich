@@ -1194,3 +1194,174 @@ wollte der Nutzer nicht jeden einzeln per Haken deaktivieren müssen.
   True)` — nur mein Test, war nicht als dauerhafte Nutzer-Entscheidung
   gedacht), Player wieder bei 356 aktiven Sendern, Prozesszahl weiterhin
   bei 7 ffmpeg-Prozessen, Stream durchgehend 44.1kHz/Stereo.
+
+## 2026-08-03 — Review-Befunde: Watchdog gegen tote Sender + zentrales Logging
+
+Auslöser: kompletter Review-Durchgang durch das Projekt (Stereo-Umbau,
+Web-Interface, Fingerprint-Fix, Sender-Import, Prebuffering). Dabei kam
+aus den Live-Daten des laufenden Containers ein Totalausfall zum
+Vorschein, der vorher niemandem aufgefallen war.
+
+### Der Befund: 8,5 Stunden Stillstand in der Nacht
+
+`docker logs` des seit 21:23 laufenden Containers, nach Stunden gruppiert:
+
+```
+19:45–04:19 UTC   3569 × "⚠ Stream 'BBC Radio Scotland' liefert nichts mehr"
+                  0 Wiedergabe-Zeilen, 0 Senderwechsel
+```
+
+8,9 h Stillstand bei 9,2 h Logspanne. Icecasts `error.log` zeigt passend
+dazu um 19:45:04 `Disconnecting source due to socket timeout` — der Mount
+war also die ganze Nacht komplett weg, Hörer konnten sich nicht mal neu
+verbinden. Ursachenkette, drei Glieder:
+
+1. **`radiozapper.py`, Hauptloop**: leerer Read -> Meldung ->
+   `source.start()` -> `sleep(1)` -> `continue`, endlos. Kein Limit, kein
+   Weiterschalten, und vor allem nie wieder ein `output.write()`. Der
+   Kommentar an `STREAM_READ_TIMEOUT` behauptete, der Timeout verhindere
+   ein Blockieren des Loops — er schützt aber nur den einzelnen Read, nicht
+   die Endlosschleife drumherum.
+2. **`do_switch()`**: `verdict = classify(tail) if tail.size else "music"`
+   — ein Puffer *ohne jedes Audio* galt als Musik und wurde übernommen.
+   `pb.dead` wurde gar nicht abgefragt. Genau so wurde der tote Sender um
+   04:55 "aus Puffer, nahtlos" zum aktuellen Sender.
+3. **Import**: `bulk_add()` legt importierte Sender mit `enabled: True`
+   an, die 344 Sender aus der Kodinerds-Liste standen also ungeprüft
+   sofort in der Rotation. BBC Radio Scotland ist eine DASH-`.mpd`-URL:
+   ffprobe akzeptiert sie (Audio-Stream vorhanden), ffmpeg kann sie nicht
+   dauerhaft streamen. Der Erreichbarkeits-Check hat hier eine echte
+   Lücke — unverändert offen, siehe unten.
+
+Der Nutzer hatte BBC Radio Scotland morgens von Hand in `stations.json`
+deaktiviert; das war der Workaround, nicht der Fix.
+
+### Umgesetzt: Watchdog (`radiozapper.py`)
+
+- Neue Konstanten `STREAM_FAILURE_LIMIT = 3` und
+  `STATION_DEAD_COOLDOWN = 300.0`, neues dict `dead_until` (id ->
+  Ablaufzeitpunkt der Sperre) im Hauptloop.
+- Leerer Read zählt `stream_failures` hoch. Unter dem Limit wie bisher
+  reconnecten (ein kurzer Hänger soll keinen Senderwechsel auslösen), am
+  Limit: Sender auf die Sperrliste, `do_switch("Sender liefert kein
+  Audio")`. Jeder erfolgreiche Read setzt den Zähler zurück, ebenso jeder
+  Wechsel (`switch_to_station()`/`do_switch()` per `nonlocal`).
+- Neuer Helper `alive_stations(active, dead_until, keep_id=None)` filtert
+  gesperrte Sender raus. `keep_id` (der laufende Sender) bleibt immer
+  drin, sonst würden bei jedem Wechsel sämtliche Puffer-Positionen
+  verrutschen und alle Puffer unnötig neu aufgebaut.
+- `do_switch()` überspringt gesperrte Kandidaten, ohne sie anzufassen.
+- Ein manueller Switch löscht die Sperre für diesen Sender (ausdrücklicher
+  Nutzerwunsch schlägt Automatik — der Sender kann längst wieder da sein).
+- Sind *alle* aktiven Sender gesperrt (z.B. Netz komplett weg), werden die
+  Sperren aufgehoben und alle bekommen nochmal eine Chance, statt in einer
+  Runde aus lauter übersprungenen Kandidaten hängenzubleiben.
+
+### Umgesetzt: tote Puffer nicht mehr übernehmen
+
+- `do_switch()`: bei `pb.dead` wird der Kandidat verworfen und gesperrt,
+  statt ihn als "music" durchzuwinken. Ein noch *leerer* (gerade erst
+  gestarteter) Puffer wird nicht als Verdachtsfall behandelt, sondern
+  ganz normal frisch verbunden.
+- `switch_to_station()` (manueller/Reload-Pfad): tote Puffer-Quelle wird
+  nicht adoptiert, stattdessen frischer Connect.
+- `PrebufferedSource._join()`: läuft der Reader-Thread nach dem
+  `join(timeout=...)` noch, wird die Quelle jetzt als tot markiert statt
+  stillschweigend übernommen — vorher hätten Hauptloop und Reader-Thread
+  gleichzeitig aus derselben Pipe gelesen und sich die Bytes geteilt.
+- `sync_prebuffer()` gibt jetzt die gestorbenen IDs zurück, statt sie
+  direkt neu zu starten. **Im Live-Test aufgefallen**: bei einer dauerhaft
+  toten URL bedeutete "einfach neu versuchen" einen frischen
+  ffmpeg-Prozess pro Schleifendurchlauf, also im Sekundentakt. Der
+  Hauptloop sperrt sie stattdessen.
+
+### Umgesetzt: Logging (`logging_setup.py`, alle Module)
+
+Bisher: `print()` nach stdout, Warnungen nach stderr, Detailausgaben nur
+bei `--verbose`, HTTP-Requests komplett verworfen (`log_message` = `pass`)
+— und nichts davon persistent. Die Nacht-Diagnose oben ging nur, weil der
+Container zufällig nicht neugestartet worden war.
+
+- Neues Modul `logging_setup.py`: `setup(log_file, verbose)` konfiguriert
+  den Root-Logger mit zwei Handlern — Konsole (INFO, mit `--verbose`
+  DEBUG) und `RotatingFileHandler` auf `logs/radiozapper.log`, **immer**
+  DEBUG, 5 × 10 MB. Nicht beschreibbares Logverzeichnis degradiert zu
+  "nur Konsole" statt den Start zu verhindern.
+- `threading.excepthook` wird umgebogen: Exceptions in Hintergrund-Threads
+  (Puffer-Reader, Import-Worker, Webserver) landen im Log statt still auf
+  stderr. Der Hauptloop hat zusätzlich ein `except Exception:` mit
+  `log.exception()`.
+- Alle Module haben jetzt einen eigenen Logger (`radiozapper`, `webui`,
+  `fingerprint`, `speech`, `import`, `stations`, `settings`); sämtliche
+  `print()`-Aufrufe sind ersetzt. Die `verbose`-Parameter von
+  `SpeechDetector.classify()` und `FingerprintDB.match_or_learn()` sind
+  weggefallen — das entscheidet jetzt der Log-Level.
+- Threads haben sprechende Namen (`pb-<sender-id>`, `import`, `webui`),
+  das Dateiformat zeigt sie an.
+- Neu im Log, weil beim Debuggen genau das gefehlt hat: der **beste
+  Nicht-Treffer** jedes Fingerprint-Vergleichs mit Abstand zur Schwelle,
+  die HTTP-Requests des Web-Interfaces (DEBUG), jede Config-Änderung mit
+  Sender-Namen, jeder gestartete/gestorbene Puffer.
+- `--log-file` (Default `logs/radiozapper.log`, leer = aus) als neues
+  CLI-Argument; `--verbose` heißt jetzt "DEBUG auch auf der Konsole".
+- Dockerfile: `--verbose` aus dem ENTRYPOINT entfernt (die Datei hat die
+  Details ohnehin), `logging_setup.py` wird mitkopiert.
+  docker-compose.yml: `./logs:/app/logs` gemountet, `logs/` in
+  `.gitignore`.
+
+### Verifiziert
+
+- **Isoliert** (Kopie des Projekts in einem Temp-Verzeichnis, eigene
+  stations.json mit einer toten URL `http://127.0.0.1:1/dead.mp3` plus
+  zwei echten Sendern, Restream auf einen separaten Icecast-Mount):
+  3 Fehlversuche in ~2 s, dann `⛔ ... nehme ihn für 5 Min. aus der
+  Rotation`, Wechsel auf Radio Bob aus dem Puffer, danach 58 s stabil
+  weitergespielt. Der tote Sender wurde danach kein einziges Mal mehr
+  gepuffert.
+- **Unit**: `alive_stations()` gegen alle Fälle (keine Sperre, aktive
+  Sperre, abgelaufene Sperre, `keep_id`, alles gesperrt),
+  `prebuffer_target_ids()` auf der gefilterten Liste,
+  `PrebufferedSource` gegen tote URL (`dead=True`, Puffer leer) und
+  gegen SWR3 live (`dead=False`, 5,0 s Mono + 5,0 s Stereo, Verhältnis
+  exakt 1:2).
+- **Live am echten Deployment**: Test-Sender mit toter URL über die
+  Config-API angelegt. Beim Start sofort
+  `⚠ Hintergrund-Puffer von 'AAA Watchdog-Test' liefert nichts — für
+  5 Min. aus der Rotation` (kein Sekundentakt-Respawn mehr). Danach
+  manuell draufgeschaltet: 06:39:36 Wechsel hin, 06:39:39 Sperre,
+  06:39:40 `▶ Spiele: ANTENNE BAYERN (aus Puffer, nahtlos)` — **~4
+  Sekunden Stille statt 8,5 Stunden**. Test-Sender danach wieder
+  gelöscht, `stations.json` unverändert bei 356 Sendern / 14 aktiven.
+- Logdatei liegt auf dem Host unter `logs/radiozapper.log`, überlebt
+  Container-Neustarts, Konsole zeigt nur noch die 8 Startzeilen +
+  Ereignisse.
+
+### Bewusst NICHT in diesem Durchgang (aus dem Review, weiterhin offen)
+
+- **Import aktiviert alles sofort** (`bulk_add(enabled=True)`) und der
+  ffprobe-Check erkennt DASH/HLS-Manifeste fälschlich als dauerhaft
+  abspielbar. Der Watchdog fängt die Folgen jetzt ab, die Ursache bleibt.
+  Vorschlag: `enabled=False` beim Import + `ffmpeg -t 3 -f null -` statt
+  eines reinen Manifest-Parse.
+- **Prebuffer-Burst**: gemessen 87,6 s Audio in 75 s Wall-Clock — jeder
+  Wechsel schiebt bis zu `prebuffer_seconds` auf einen Schlag in den
+  Encoder. Hörer rutschen pro Zap ~10 s hinter Live; Icecasts
+  `queue-size` (512 KB ≈ 21 s bei 192 kbit/s) kann bei mehreren schnellen
+  Wechseln überlaufen.
+- **`sync_prebuffer()`/`pb.stop()` blockieren den Hauptloop** bis zu 9 s
+  pro Quelle (bei 5 Puffern also bis 45 s) — passiert bei jeder
+  Config-Änderung.
+- **Kein Health-Status im Web-Interface**: während der 8,5 h zeigte die UI
+  unverändert "Läuft gerade: BBC Radio Scotland".
+- **Fingerprint**: Algorithmus ist verifiziert gut (Selbst-Match 727/729,
+  stärkster Fremd-Treffer 7 von 20 Clips bei Schwelle 25), hat aber real
+  noch nie eine Wiederholung erkannt — 83 Clips, alle `times_seen = 1`,
+  einziger Treffer seit dem Fix war ein Fehlalarm. Verdacht: Prüfung nur
+  einmal pro Sprach-Run bei exakt 3 s, Wiederholungen liegen anders
+  ausgerichtet. Außerdem: DB wächst unbegrenzt, kein Pruning/`VACUUM`.
+- **`SpeechDetector.leftover`** wird beim Senderwechsel nicht
+  zurückgesetzt (bis zu 511 Samples des alten Senders im ersten Fenster
+  des neuen).
+- Config-Seite skaliert nicht auf 356 Sender (keine Suche, kein
+  Bulk-Delete, kein "Alle aktivieren"), CSRF auf `/api/skip` und
+  `/api/filter/toggle`, keine automatisierten Tests im Repo.

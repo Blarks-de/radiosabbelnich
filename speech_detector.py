@@ -11,13 +11,15 @@ Netz, das genau darauf trainiert ist: "ist hier eine menschliche Stimme
 zu hören", auch über Hintergrundgeräuschen/Musik.
 
 Silero erwartet 16kHz Mono, feste 512-Sample-Frames (32ms). Unser
-Stream läuft intern mit SAMPLE_RATE (z.B. 22050 Hz) — wird hier per
-einfacher linearer Interpolation runtergerechnet (reicht für VAD-Zwecke
-völlig, ist keine Hifi-Anwendung).
+Analysepfad läuft intern mit SAMPLE_RATE (aktuell 44100 Hz, siehe
+radiozapper.py) — wird hier per einfacher linearer Interpolation
+runtergerechnet (reicht für VAD-Zwecke völlig, ist keine Hifi-Anwendung).
 """
 
-import sys
+import logging
 import numpy as np
+
+log = logging.getLogger("speech")
 
 try:
     from silero_vad_lite import SileroVAD
@@ -52,14 +54,14 @@ class SpeechDetector:
                 self.vad = None
                 self.frame_size = None
                 self.available = False
-                print(f"⚠ Silero VAD konnte nicht initialisiert werden ({e}) — "
-                      f"falle auf die Signal-Heuristik zurück.", file=sys.stderr)
+                log.warning("⚠ Silero VAD konnte nicht initialisiert werden (%s) — "
+                            "falle auf die Signal-Heuristik zurück.", e)
         else:
             self.vad = None
             self.frame_size = None
             self.available = False
-            print(f"⚠ silero-vad-lite nicht verfügbar ({_SILERO_IMPORT_ERROR}) — "
-                  f"falle auf die Signal-Heuristik zurück.", file=sys.stderr)
+            log.warning("⚠ silero-vad-lite nicht verfügbar (%s) — "
+                        "falle auf die Signal-Heuristik zurück.", _SILERO_IMPORT_ERROR)
 
     def _resample(self, pcm_int16: np.ndarray) -> np.ndarray:
         samples = pcm_int16.astype(np.float32) / 32768.0
@@ -71,9 +73,10 @@ class SpeechDetector:
         x_new = np.linspace(0, duration, num=n_target, endpoint=False)
         return np.interp(x_new, x_old, samples).astype(np.float32)
 
-    def classify(self, pcm_int16: np.ndarray, verbose: bool = False):
+    def classify(self, pcm_int16: np.ndarray):
         """Liefert (label, mean_prob) oder (None, 0.0) falls VAD nicht
-        verfügbar ist (dann bitte auf Heuristik-Fallback umschalten)."""
+        verfügbar ist (dann bitte auf Heuristik-Fallback umschalten).
+        Die Einzelwerte pro Fenster gehen als DEBUG ins Log."""
         if not self.available or pcm_int16.size == 0:
             return None, 0.0
 
@@ -94,9 +97,7 @@ class SpeechDetector:
         mean_prob = float(np.mean(probs))
         label = "speech" if speech_ratio >= self.window_ratio else "music"
 
-        if verbose:
-            print(f"    [vad] mean_prob={mean_prob:.3f} "
-                  f"speech_ratio={speech_ratio:.2f} -> "
-                  f"{'SPEECH' if label == 'speech' else 'music'}", file=sys.stderr)
+        log.debug("[vad] mean_prob=%.3f speech_ratio=%.2f -> %s",
+                  mean_prob, speech_ratio, "SPEECH" if label == "speech" else "music")
 
         return label, mean_prob

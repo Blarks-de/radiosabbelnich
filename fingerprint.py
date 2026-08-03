@@ -40,12 +40,15 @@ Treffer erreicht — Tests mit demselben Clip + Rauschen/halber Lautstärke/
 0.1s Zeitversatz lagen bei 104–702 Treffern).
 """
 
+import logging
 import sqlite3
 import time
 from collections import Counter
 from typing import Optional
 
 import numpy as np
+
+log = logging.getLogger("fingerprint")
 
 # ----------------------------------------------------------------------
 # Parameter (Trade-off: mehr/engere Nachbarschaft = mehr Peaks = robuster
@@ -170,13 +173,14 @@ class FingerprintDB:
         c.execute("CREATE INDEX IF NOT EXISTS idx_hash ON hashes(hash)")
         self.conn.commit()
 
-    def match_or_learn(self, pcm_int16: np.ndarray, sr: int, label: str,
-                        verbose: bool = False) -> Optional[dict]:
+    def match_or_learn(self, pcm_int16: np.ndarray, sr: int, label: str) -> Optional[dict]:
         """Prüft den Clip gegen die DB. Bei Treffer: Zähler hochzählen,
         Match-Info zurückgeben. Bei keinem Treffer: Clip neu anlegen,
-        None zurückgeben."""
+        None zurückgeben. Details gehen als DEBUG ins Log."""
         query_hashes = fingerprint_clip(pcm_int16, sr)
         if len(query_hashes) < MIN_HASH_MATCHES:
+            log.debug("[fingerprint] nur %d Hashes — zu wenig für ein Urteil, ignoriere Clip.",
+                      len(query_hashes))
             return None  # Clip zu kurz/leise für verlässliches Fingerprinting
 
         c = self.conn.cursor()
@@ -201,6 +205,13 @@ class FingerprintDB:
 
         if votes:
             (best_clip_id, _), best_count = votes.most_common(1)[0]
+            # Auch der beste NICHT-Treffer ist interessant: daran sieht man im
+            # Log, wie viel Luft zwischen echten Treffern und Zufallstreffern
+            # liegt (Schwelle MIN_HASH_MATCHES) — die Grundlage für ein
+            # späteres Nachjustieren.
+            log.debug("[fingerprint] bester Kandidat: Clip #%d mit %d konsistenten "
+                      "Hash-Matches (Schwelle %d, Query hat %d Hashes)",
+                      best_clip_id, best_count, MIN_HASH_MATCHES, len(query_hashes))
             if best_count >= MIN_HASH_MATCHES:
                 now = time.strftime("%Y-%m-%d %H:%M:%S")
                 c.execute(
@@ -211,10 +222,9 @@ class FingerprintDB:
                 row = c.execute(
                     "SELECT label, times_seen FROM clips WHERE id = ?", (best_clip_id,)
                 ).fetchone()
-                if verbose:
-                    print(f"    [fingerprint] Treffer: Clip #{best_clip_id} "
-                          f"('{row[0]}'), {best_count} konsistente Hash-Matches, "
-                          f"bereits {row[1]}x gesehen")
+                log.debug("[fingerprint] Treffer: Clip #%d ('%s'), %d konsistente "
+                          "Hash-Matches, bereits %dx gesehen",
+                          best_clip_id, row[0], best_count, row[1])
                 return {"clip_id": best_clip_id, "label": row[0],
                         "times_seen": row[1], "match_strength": best_count}
 
@@ -230,9 +240,8 @@ class FingerprintDB:
             [(h, clip_id, off) for h, off in query_hashes],
         )
         self.conn.commit()
-        if verbose:
-            print(f"    [fingerprint] neuer Clip #{clip_id} gelernt "
-                  f"({len(query_hashes)} Hashes)")
+        log.debug("[fingerprint] neuer Clip #%d gelernt (%d Hashes, Label '%s')",
+                  clip_id, len(query_hashes), label)
         return None
 
     def close(self):
@@ -261,6 +270,7 @@ def delete_clip(db_path: str, clip_id: int) -> Optional[str]:
         c.execute("DELETE FROM hashes WHERE clip_id = ?", (clip_id,))
         c.execute("DELETE FROM clips WHERE id = ?", (clip_id,))
         conn.commit()
+        log.info("🗑 Fingerprint-Clip #%d ('%s') gelöscht.", clip_id, row[0])
         return row[0]
     finally:
         conn.close()
@@ -281,6 +291,7 @@ def clear_all(db_path: str) -> int:
         c.execute("DELETE FROM hashes")
         c.execute("DELETE FROM clips")
         conn.commit()
+        log.info("🗑 Fingerprint-DB geleert: %d Clip(s) gelöscht.", count)
         return count
     finally:
         conn.close()

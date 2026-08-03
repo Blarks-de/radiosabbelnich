@@ -22,6 +22,7 @@ COPY webui.py .
 COPY stations_store.py .
 COPY settings_store.py .
 COPY station_import.py .
+COPY logging_setup.py .
 COPY stations.json .
 COPY radiozapper.webp .
 
@@ -35,4 +36,9 @@ COPY radiozapper.webp .
 # Icecast-Port abweichen. Der Webserver selbst lauscht containerintern fest
 # auf 5000 (siehe docker-compose.yml für die host-seitige Portwahl über
 # WEBUI_PORT).
-ENTRYPOINT ["sh", "-c", "python3 -u radiozapper.py --icecast-url \"$ICECAST_URL\" --webui-port 5000 --icecast-admin-url \"$ICECAST_ADMIN_URL\" --icecast-admin-user \"$ICECAST_ADMIN_USER\" --icecast-admin-password \"$ICECAST_ADMIN_PASSWORD\" --icecast-mount \"${ICECAST_MOUNT:-/radiozapper.mp3}\" --icecast-public-port \"${ICECAST_PUBLIC_PORT:-8000}\" --verbose"]
+#
+# Bewusst OHNE --verbose: die Logdatei unter logs/ schreibt ohnehin immer
+# auf DEBUG-Niveau (VAD-Werte, Fingerprint-Details, HTTP-Requests), da muss
+# `docker compose logs` nicht dieselbe Flut nochmal zeigen. Wer sie doch auf
+# der Konsole haben will, hängt --verbose hier an.
+ENTRYPOINT ["sh", "-c", "python3 -u radiozapper.py --icecast-url \"$ICECAST_URL\" --webui-port 5000 --icecast-admin-url \"$ICECAST_ADMIN_URL\" --icecast-admin-user \"$ICECAST_ADMIN_USER\" --icecast-admin-password \"$ICECAST_ADMIN_PASSWORD\" --icecast-mount \"${ICECAST_MOUNT:-/radiozapper.mp3}\" --icecast-public-port \"${ICECAST_PUBLIC_PORT:-8000}\""]

@@ -4,3 +4,4 @@ __pycache__/
 *.pyc
 fingerprints.db
 fingerprint_clips/
+logs/
