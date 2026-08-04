@@ -348,6 +348,8 @@ zum Server verloren" statt einen eingefrorenen alten Zustand. Icons unter
 | `favicon.ico` | Browser-Tab-Icon, quadratische Miniatur von `radiozapper.webp` |
 | `stations.json` | Senderliste (Name, URL, Kategorie, aktiv/inaktiv) |
 | `docker-compose.yml` | Icecast + RadioZapper als zwei Services |
+| `check-radiozapper.sh` | Preflight-Check vor dem (ersten) Start: Docker, RAM/HD/Internet, `.env`, MP3-Ordner, Ports |
+| `run_radiozapper.sh` | Start-Skript: RAM/HD/Internet-Check + `docker compose up -d --build` |
 
 RadioZapper und das Web-Interface laufen im selben Prozess (Web-Server
 als Hintergrund-Thread) — kein separater Service, keine IPC nötig, nur
@@ -364,8 +366,21 @@ git clone <repo-url> RadioZapper
 cd RadioZapper
 cp env.example .env      # Passwörter/Hostname eintragen
 touch fingerprints.db    # muss als Datei existieren, siehe unten
+./check-radiozapper.sh   # optional: prüft Docker/.env/MP3-Ordner/Ports vorab
 docker compose up -d --build
 ```
+
+`./check-radiozapper.sh` installiert bei Bedarf Docker, zeigt RAM/HD/
+Internet-Status, prüft ob `.env` vollständig ausgefüllt ist (inkl.
+Warnung vor unveränderten `env.example`-Platzhaltern), ob der in
+`NEWS_MP3_FOLDER` eingetragene Ordner existiert/lesbar ist/MP3s enthält,
+und ob `WEBUI_PORT`/`ICECAST_PORT`/`ICECAST_SSL_PORT` frei sind — läuft
+bereits RadioZapper selbst auf diesen Ports, gilt das als ok; blockiert
+stattdessen ein anderer Docker-Container den Port, schlägt das Skript
+eine freie Alternative zum Eintragen in `.env` vor. Reine Diagnose (Exit-
+Code 1 bei Problemen), startet selbst nichts. Danach `./run_radiozapper.sh`
+zum eigentlichen Start (macht denselben RAM/HD/Internet-Check nochmal,
+dann `docker compose up -d --build`).
 
 Das `touch` ist Pflicht, nicht Kosmetik: `fingerprints.db` hängt in
 `docker-compose.yml` als einzelne Datei im Container. Fehlt sie auf dem

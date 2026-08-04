@@ -2834,3 +2834,120 @@ zweiten Handy); (2) das Favicon (Browser-Tab-Icon) auf eine Miniatur von
   `image/x-icon`, `<link rel="icon" href="/favicon.ico">` steht im
   ausgelieferten HTML, `btn-qr-vlc`/`btn-qr-phone`/`qr-modal-title` sind
   im ausgelieferten HTML vorhanden.
+
+## 2026-08-04 (Fortsetzung 3) — install_radiozapper.sh → check-radiozapper.sh: voller Preflight-Check
+
+**Auslöser**: `install_radiozapper.sh` installierte bisher nur Docker und
+war sonst funktionslos. Nutzer wollte daraus ein echtes Preflight-Check-
+Skript machen (umbenannt, mit demselben RAM/HD/Internet-Check wie
+`run_radiozapper.sh`), das zusätzlich prüft: `.env` vorhanden/ausgefüllt,
+`NEWS_MP3_FOLDER` eingetragen und funktionsfähig, und ob die benötigten
+Ports frei sind (bei Belegung durch einen fremden Docker-Container:
+Alternative suchen und vorschlagen). Auf Deutsch weiterarbeiten (die
+letzten Antworten waren versehentlich auf Deutsch begonnen, aber der
+Nutzer hat es hier nochmal ausdrücklich bestätigt).
+
+### Umsetzung
+
+- `git mv install_radiozapper.sh check-radiozapper.sh`, Docker-Install-
+  Teil inhaltlich unverändert übernommen (nur `echo`/`exit 1` durch die
+  neuen `ok()`/`fail()`-Helfer ersetzt, damit er sich ins einheitliche
+  Report-Format der übrigen Checks einfügt).
+- RAM/HD/Internet-Block **1:1 aus `run_radiozapper.sh` übernommen**
+  (identischer Code, bewusst dupliziert statt in eine dritte, gemeinsame
+  Datei ausgelagert — zwei kurze, unabhängig aufrufbare Skripte für zwei
+  verschiedene Zwecke, siehe "Bewusst NICHT gemacht").
+- **`.env`-Check**: fehlt die Datei komplett → `fail` mit Hinweis auf
+  `cp env.example .env`. Existiert sie, werden die Pflichtfelder
+  (`ICECAST_ADMIN_USER`/`_PASSWORD`, `ICECAST_SOURCE_PASSWORD`,
+  `ICECAST_HOSTNAME`, `ICECAST_ADMIN_EMAIL`, `ICECAST_LOCATION`) auf
+  "gesetzt und nicht leer" geprüft (`fail` bei Lücken) UND separat
+  darauf, ob sie noch exakt den `env.example`-Platzhaltern entsprechen
+  (`change_me_admin`/`change_me_source`/`admin@example.com` → `warn`,
+  kein `fail`: technisch startet der Stack damit, ist aber unsicher).
+  Passwortwerte selbst werden nirgends ausgegeben, nur ob sie gesetzt
+  bzw. noch der Platzhalter sind — die echte `.env` auf diesem Host
+  enthält Klartext-Passwörter, die gehören nicht in Skript-Output/Logs.
+- **MP3-Ordner-Check**: `NEWS_MP3_FOLDER` roch nach drei Zuständen:
+  unverändert auf dem Default `./news_mp3` (Repo-Platzhalterordner) →
+  `warn`, Feature bleibt einfach inaktiv, kein Fehler (siehe
+  `env.example`-Kommentar, Feature ist explizit optional); Pfad
+  eingetragen, existiert aber nicht oder ist nicht lesbar → `fail`; Pfad
+  eingetragen und lesbar, aber keine `*.mp3`-Dateien drin → `warn`; alles
+  gut → `ok` mit gefundener Dateianzahl.
+- **Port-Check** (`WEBUI_PORT`, `ICECAST_PORT`, und `ICECAST_SSL_PORT`
+  nur falls `TLS_CERT_FILE`+`TLS_KEY_FILE` gesetzt sind): `port_open()`
+  testet rein über Bash-Bordmittel (`/dev/tcp/127.0.0.1/$port`) statt
+  `netstat`/`ss` — die sind nicht überall installiert, insbesondere nicht
+  auf macOS, das `install_radiozapper.sh`s Docker-Teil ja weiterhin
+  explizit unterstützt. Ist der Port offen, ermittelt
+  `port_owner_container()` per `docker ps --format
+  '{{.Names}}\t{{.Ports}}'` + Grep auf `(^|:)PORT->`, welcher Container
+  ihn hält:
+  - Eigener Container (`radiozapper`/`icecast-radiozapper`, z.B. weil
+    der Stack bereits läuft und man den Check einfach nochmal ausführt)
+    → `ok`, kein Problem.
+  - Fremder Container → `fail` samt Namen, PLUS `find_free_port()` sucht
+    ab `port+1` (max. 20 Versuche) den nächsten freien Port und schlägt
+    ihn als `VAR=neuer_port` zum Eintragen in `.env` vor.
+  - Belegt, aber kein Docker-Container passt (Docker läuft nicht, oder
+    ein Nicht-Docker-Prozess hält den Port) → `fail` mit entsprechendem
+    Hinweis, gleicher Alternativ-Vorschlag.
+  Port-Konflikte zählen als `fail`, nicht `warn` — anders als beim
+  MP3-Ordner würde `docker compose up` hier tatsächlich mit "port is
+  already allocated" scheitern, das ist kein rein kosmetisches Problem.
+- Exit-Code: `FAILED`-Zähler über alle `fail()`-Aufrufe, Skript endet mit
+  `exit 1`, sobald mindestens einer aufgetreten ist (nutzbar in CI/
+  Automatisierung, auch wenn es hier keine gibt) — reine Diagnose, das
+  Skript startet selbst nichts (das bleibt `run_radiozapper.sh`
+  vorbehalten).
+
+### Bewusst NICHT gemacht
+
+- RAM/HD/Internet-Check NICHT in eine gemeinsame dritte Datei
+  ausgelagert, die beide Skripte einbinden — explizit als "denselben
+  Preflightcheck einbauen" angefordert (verstanden als: kopieren, nicht
+  als gemeinsame Bibliothek extrahieren), und zwei kurze, unabhängig
+  lauffähige Skripte sind hier pragmatischer als eine dritte Datei nur
+  für ~25 gemeinsame Zeilen.
+- `VOSK_MODEL_FOLDER` NICHT mitgeprüft, obwohl strukturell identisch zum
+  MP3-Ordner-Check — nur `NEWS_MP3_FOLDER` war explizit verlangt, und das
+  Vosk-Modell deaktiviert sich laut `stt_filter.py` ohnehin selbst mit
+  klarer Logmeldung, wenn es fehlt (kein stiller Fehlzustand, den ein
+  Preflight-Check zusätzlich abfangen müsste).
+- `TLS_CERT_FILE`/`TLS_KEY_FILE` NICHT auf Existenz/Lesbarkeit geprüft —
+  nicht verlangt, und beide Dienste fallen ohne gültiges Zertifikat schon
+  selbst sauber auf HTTP zurück (siehe CLAUDE.md, TLS-Abschnitt), kein
+  Blocker für den Start.
+- Port-Alternative wird nur VORGESCHLAGEN, nicht automatisch in `.env`
+  geschrieben — ungefragtes Verändern der Nutzer-Konfiguration wäre hier
+  überraschendes Verhalten für einen reinen Diagnose-Lauf.
+
+### Verifiziert
+
+- `bash -n check-radiozapper.sh` — Syntax ohne Fehler.
+- **Live gegen das echte Deployment** (nur lesend: `.env` einlesen,
+  `docker ps`, `/dev/tcp`-Verbindungstests — keine Schreiboperation):
+  alle drei laufenden Ports korrekt als "eigener Container" erkannt
+  (`radiozapper` auf 5000, `icecast-radiozapper` auf 8000 und 8444),
+  `.env` als vollständig ausgefüllt erkannt (keine Platzhalter mehr
+  drin), `NEWS_MP3_FOLDER=/mnt/eimer/data/Audio/Musik/Oldies/` mit 431
+  gefundenen MP3s bestätigt. Exit-Code 0.
+- **Isolierte Tests** in einem Temp-Verzeichnis (Kopie des Skripts +
+  `env.example`, nach CLAUDE.md-Testmuster):
+  - Keine `.env` → `fail`.
+  - `.env` = unverändertes `env.example` → 3 Platzhalter-Warnungen
+    (`ICECAST_ADMIN_PASSWORD`/`ICECAST_SOURCE_PASSWORD`/
+    `ICECAST_ADMIN_EMAIL`), kein `fail` (technisch vollständig).
+  - `ICECAST_HOSTNAME` leer geräumt → korrekt als fehlend gemeldet,
+    zusätzlich zu den Platzhalter-Warnungen.
+  - `NEWS_MP3_FOLDER` auf nicht existenten Pfad → `fail`.
+  - `NEWS_MP3_FOLDER` auf leeres (aber existentes) Verzeichnis → `warn`.
+  - **Port-Konflikt mit echtem Fremd-Container**: `docker run -d --rm
+    --name test-port-blocker -p 18080:80 nginx:alpine`, dann
+    `WEBUI_PORT=18080` in Test-`.env` gesetzt → korrekt `fail` mit Namen
+    `test-port-blocker` erkannt, Alternative `WEBUI_PORT=18081`
+    vorgeschlagen (18080 selbst war ja belegt, 18081 der erste freie
+    Port danach). Testcontainer danach gestoppt (`--rm` hat ihn beim
+    Stop automatisch entfernt), Temp-Verzeichnis gelöscht — am
+    Produktivsystem bleibt nichts zurück.
