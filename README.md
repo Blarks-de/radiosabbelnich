@@ -145,14 +145,16 @@ curl -X POST http://<host>:5000/api/config/settings \
      -d '{"news_break_enabled": true, "news_break_window_minutes": 2}'
 ```
 
-Ein Zeitfenster wird höchstens einmal bedient — läuft die MP3 kürzer als
-das Fenster, geht's danach sofort zurück zum Sender (kein Nachlegen einer
-zweiten MP3 im selben Fenster). Ein manueller Sender-Wechsel während der
-Pause bricht sie sofort ab (eigene Entscheidung schlägt Automatik, wie
-überall sonst in RadioZapper auch). Während der Pause pausiert auch die
-automatische Sprache-Erkennung (VAD/Heuristik/Fingerprint) — die MP3
-selbst enthält u.U. Sprache, das soll nicht als "Moderation" auf dem
-eigentlichen Sender fehlgedeutet werden.
+Ein Zeitfenster wird höchstens einmal betreten — läuft eine MP3 kürzer als
+das restliche Fenster, wird automatisch eine weitere zufällige MP3
+nachgeladen (kein Repeat direkt hintereinander, sofern der Ordner mehr als
+eine Datei enthält), bis `window_minutes` abgelaufen ist. Erst dann geht's
+automatisch zurück zum pausierten Sender. Ein manueller Sender-Wechsel
+während der Pause bricht sie sofort ab (eigene Entscheidung schlägt
+Automatik, wie überall sonst in RadioZapper auch). Während der Pause
+pausiert auch die automatische Sprache-Erkennung (VAD/Heuristik/
+Fingerprint) — die MP3 selbst enthält u.U. Sprache, das soll nicht als
+"Moderation" auf dem eigentlichen Sender fehlgedeutet werden.
 
 ## STT-Sprachfilter
 
@@ -239,19 +241,18 @@ Erreichbar unter `http://<host>:5000/`:
   Sender ICY-Metadaten oder eine bekannte Alternativ-Quelle liefert
 - **Eingebetteter Player** — direkt im Browser mithören, ohne extra
   App/Client
-- **Streaming-Adresse für VLC & Co.** — unter der "Läuft gerade"-Box steht
-  die volle Stream-URL zum Eintragen in einen externen Player (türkis,
-  unterstrichen — Klick kopiert sie in die Zwischenablage). Standardmäßig
-  automatisch aus der Adresse gebildet, über die die Seite gerade
-  aufgerufen wird; auf der Config-Seite unter "🔗 Streaming-Adresse"
-  fest hinterlegbar, falls die tatsächliche öffentliche Adresse davon
-  abweicht.
-- **📱 QR-Code** — Knopf neben der Streaming-Adresse öffnet ein Popup mit
-  QR-Code + Klartext-URL zum Abfotografieren, z.B. um den Stream mit VLC
-  auf dem Handy zu öffnen, ohne die Adresse abzutippen. Wird rein
-  clientseitig aus derselben Adresse erzeugt, die auch daneben als Text
-  steht (kein zusätzlicher Request, keine externe Bibliothek — die
-  QR-Erzeugung läuft komplett offline im Browser).
+- **▶️ VLC / 📱 Handy** — zwei Icons unter der "Läuft gerade"-Box öffnen
+  jeweils ein QR-Code-Popup: **▶️ VLC** für die Stream-URL zum Eintragen
+  in einen externen Player (Standardmäßig automatisch aus der Adresse
+  gebildet, über die die Seite gerade aufgerufen wird; auf der
+  Config-Seite unter "🔗 Streaming-Adresse" fest hinterlegbar, falls die
+  tatsächliche öffentliche Adresse davon abweicht), **📱 Handy** für die
+  Adresse dieses Web-Interfaces selbst (praktisch, um die Seite auf einem
+  zweiten Gerät zu öffnen oder als PWA zu installieren, siehe unten).
+  Jedes Popup zeigt zusätzlich die Adresse als Klartext samt
+  "📋 Adresse kopieren"-Knopf. QR-Codes werden rein clientseitig erzeugt
+  (kein zusätzlicher Request, keine externe Bibliothek — läuft komplett
+  offline im Browser).
 - **Sender-Liste** zum manuellen Umschalten
 - **⚡ ZAPPEN!** — hast du selbst erkannt, dass gerade geredet wird
   (die Automatik aber noch nicht reagiert hat)? Schaltet sofort weiter.
@@ -266,9 +267,15 @@ Erreichbar unter `http://<host>:5000/`:
   dazwischenfunkt. Aktueller Zustand direkt am Button erkennbar.
 - **🤥 Bullshitometer** — grüner-zu-roter Balken, zeigt den aktuell
   gemessenen Sprache-Wert (VAD-Wahrscheinlichkeit bzw. Heuristik-Votum)
-  live in Prozent, aktualisiert alle 5s. Rein informativ (nicht klickbar)
+  live in Prozent, aktualisiert alle 3s. Rein informativ (nicht klickbar)
   — friert grau ein, während Nachrichten-Pause läuft oder der
   Sabbelfilter aus ist, weil dann gar nicht klassifiziert wird.
+
+Aktueller Sender, News-Break-Status und Sabbelfilter-Zustand kommen nicht
+nur per Intervall-Polling (alle 3s), sondern zusätzlich über einen
+Long-Poll (`GET /api/status/wait`) an — ein Senderwechsel oder News-Break-
+Übergang erscheint dadurch binnen Millisekunden statt erst beim nächsten
+Poll-Tick.
 - **Hörer-Übersicht** — wer gerade zuhört (IP/Client/Verbindungsdauer)
 - **⚙ Sender verwalten** (`/config`) — Sender hinzufügen, bearbeiten,
   löschen, per Haken (de)aktivieren, gruppiert nach Kategorie
@@ -297,6 +304,29 @@ Erreichbar unter `http://<host>:5000/`:
 Der rohe Icecast-Stream bleibt parallel unter `http://<host>:8000/radiozapper.mp3`
 erreichbar (z.B. für VLC).
 
+### Als App installieren (PWA)
+
+Die Player-Seite ist als Progressive Web App installierbar — praktisch für
+unterwegs, damit "Zappen" nicht erst einen Browser-Tab braucht. Unter
+Chrome/Android: Seite öffnen → Menü (⋮) → "Zum Startbildschirm hinzufügen"
+(bzw. Chrome zeigt das oft von selbst als Vorschlag an). Die installierte
+App läuft dann im eigenen Fenster ohne Adressleiste (`display: standalone`).
+
+Auf der installierten/mobilen Ansicht gibt es zwei große Buttons
+"⏮ Zurück"/"Weiter ⏭" für den vorherigen/nächsten Sender in der
+konfigurierten Rotationsreihenfolge (alphabetisch, wie die normale
+Sender-Liste) — ohne erst durch die ganze Liste scrollen zu müssen. Ein
+Klick zeigt den Ziel-Sender **sofort** an (optimistisches UI-Update), die
+Bestätigung vom Server kommt normalerweise binnen Millisekunden über
+denselben Long-Poll nach, der auch die normale Sender-Liste aktuell hält.
+
+Ein Service Worker (`sw.js`) cached die statische Oberflächen-Hülle
+(HTML-Shell, Icons, QR-Bibliothek) fürs Offline-Öffnen — reine Live-Daten
+(`/api/*`, der Audio-Stream selbst) sind davon ausdrücklich ausgenommen,
+ohne Netzwerkverbindung zeigt die App also weiterhin ehrlich "Verbindung
+zum Server verloren" statt einen eingefrorenen alten Zustand. Icons unter
+`icon-192.png`/`icon-512.png` sind aktuell schlichte Platzhalter-Grafiken.
+
 ## Architektur
 
 | Datei | Zweck |
@@ -312,6 +342,10 @@ erreichbar (z.B. für VLC).
 | `news_break.py` | Nachrichten-Pause: Zeitfenster-Logik + zufällige MP3-Auswahl |
 | `stt_filter.py` | STT-Sprachfilter: Vosk/Whisper-Engines, austauschbar, Zusatzsignal für die Switch-Entscheidung |
 | `qrcode.js` | Vendorte QR-Code-Bibliothek (MIT, kazuhikoarase/qrcode-generator) fürs "📱 QR-Code"-Popup |
+| `manifest.json` | PWA-Manifest (Name, Icons, `display: standalone`) fürs "Zum Startbildschirm hinzufügen" |
+| `sw.js` | Service Worker: cached die statische Oberflächen-Hülle fürs Offline-Öffnen, kein Audio/API-Caching |
+| `icon-192.png`, `icon-512.png` | PWA-Icons fürs Installieren als App (aktuell Platzhalter) |
+| `favicon.ico` | Browser-Tab-Icon, quadratische Miniatur von `radiozapper.webp` |
 | `stations.json` | Senderliste (Name, URL, Kategorie, aktiv/inaktiv) |
 | `docker-compose.yml` | Icecast + RadioZapper als zwei Services |
 
@@ -426,3 +460,8 @@ auf die Konsole, `--log-file ""` schaltet die Datei ab.
   bei klarer Trennung zu echten Wiederholungen), gelegentliche
   Fehlalarme sind trotzdem nie ganz ausgeschlossen. Dafür gibt's den
   "Zapping-Fehler"-Knopf.
+- "⏮ Zurück"/"Weiter ⏭" während einer laufenden Nachrichten-Pause: die
+  Pause kennt (bewusst, siehe `CLAUDE.md`) nur den pausierten Sender als
+  virtuelle ID, nicht dessen Position in der Rotation — ein Klick während
+  der Pause schaltet deshalb zum ersten Sender der Liste statt zum
+  eigentlichen Nachbarn des pausierten Senders.

@@ -28,6 +28,11 @@ COPY stt_filter.py .
 COPY stations.json .
 COPY radiozapper.webp .
 COPY qrcode.js .
+COPY manifest.json .
+COPY sw.js .
+COPY icon-192.png .
+COPY icon-512.png .
+COPY favicon.ico .
 
 # ICECAST_URL wird beim Start via docker-compose environment gesetzt,
 # z.B. icecast://source:PASSWORT@icecast-radiozapper:8000/mix.mp3

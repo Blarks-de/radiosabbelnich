@@ -61,6 +61,30 @@ except OSError as _e:
     _QRCODE_JS_BYTES = None
     log.warning("⚠ %s nicht lesbar (%s) — QR-Code-Button bleibt ohne Wirkung.", _QRCODE_JS_PATH, _e)
 
+# PWA-Assets (Manifest, Service Worker, Icons) -- statische Dateien wie
+# oben, gleiches Lade-Muster. Fehlen sie, bleibt die Seite ein normales
+# Webinterface: kein "Zum Home-Bildschirm hinzufügen" auf Android, aber
+# keine Fehlfunktion.
+def _load_static(filename, binary=True):
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
+    try:
+        with open(path, "rb" if binary else "r", **({} if binary else {"encoding": "utf-8"})) as f:
+            return f.read()
+    except OSError as e:
+        log.warning("⚠ PWA-Asset %s nicht lesbar (%s) — Installierbarkeit eingeschränkt.", path, e)
+        return None
+
+
+_MANIFEST_JSON_BYTES = _load_static("manifest.json")
+_SERVICE_WORKER_JS_BYTES = _load_static("sw.js")
+_ICON_192_BYTES = _load_static("icon-192.png")
+_ICON_512_BYTES = _load_static("icon-512.png")
+# Browser-Tab-Icon -- eine per Center-Crop quadratisch zugeschnittene
+# Miniatur von radiozapper.webp (768x768, dann intern von den Browsern auf
+# 16/32/48px skaliert), NICHT dieselbe Grafik wie icon-192/512.png (das
+# schlichte "Broadcast"-Symbol-Platzhalter fürs Installieren als App).
+_FAVICON_ICO_BYTES = _load_static("favicon.ico")
+
 
 class SwitcherState:
     """Thread-sicherer geteilter Zustand zwischen Hauptloop und Webserver.
@@ -73,6 +97,15 @@ class SwitcherState:
 
     def __init__(self):
         self._lock = threading.Lock()
+        # Versionszähler + Condition fürs Long-Polling (siehe wait_for_change()):
+        # bumped bei allem, was die Web-UI zeitnah sehen soll (Senderwechsel,
+        # News-Break-Start/Ende, Filter-Toggle) -- NICHT bei speech_probability/
+        # stt_status, die ändern sich zu oft (jedes Analysefenster) und würden
+        # den Long-Poll wieder auf Poll-Tempo runterziehen, ohne echten Nutzen
+        # fürs "hinkt hinterher"-Problem (Bullshitometer bleibt Sache des
+        # normalen Intervall-Pollings).
+        self._version = 0
+        self._version_cond = threading.Condition(self._lock)
         self._all_stations = []
         self._active_stations = []
         self._current_id = None
@@ -170,6 +203,8 @@ class SwitcherState:
     def set_current(self, station_id):
         with self._lock:
             self._current_id = station_id
+            self._version += 1
+            self._version_cond.notify_all()
 
     def current_station(self):
         """Aktuell laufender Sender als dict, oder None.
@@ -201,6 +236,8 @@ class SwitcherState:
             self._news_break_file = file_name
             if active:
                 self._current_id = NEWS_BREAK_STATION_ID
+            self._version += 1
+            self._version_cond.notify_all()
 
     @property
     def news_break_active(self) -> bool:
@@ -314,6 +351,35 @@ class SwitcherState:
     def set_filter_enabled(self, enabled: bool):
         with self._lock:
             self._filter_enabled = enabled
+            self._version += 1
+            self._version_cond.notify_all()
+
+    @property
+    def version(self) -> int:
+        with self._lock:
+            return self._version
+
+    def wait_for_change(self, known_version: int, timeout: float) -> int:
+        """Blockiert (im aufrufenden Thread -- bei ThreadingHTTPServer ist
+        das ein eigener Thread pro Request, blockiert also keine anderen
+        Requests), bis sich die Version ändert oder `timeout` Sekunden
+        vergangen sind, je nachdem was zuerst eintritt. Gibt die aktuelle
+        Version zurück, damit der Aufrufer (siehe /api/status/wait) beim
+        nächsten Long-Poll wieder ab hier weiterwarten kann.
+
+        Grundlage für den Fast-Path im Frontend: normales Intervall-Polling
+        bleibt als Sicherheitsnetz bestehen (Bullshitometer/Hörerzahlen
+        ändern sich auch ohne Versionssprung), aber ein echter Senderwechsel
+        oder News-Break-Übergang muss so nicht erst auf den nächsten
+        Poll-Tick warten."""
+        deadline = time.monotonic() + timeout
+        with self._lock:
+            while self._version == known_version:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._version_cond.wait(remaining)
+            return self._version
 
     def request_filter_toggle(self):
         """"Sabbelfilter deaktivieren/aktivieren"-Knopf. Läuft über
@@ -438,6 +504,13 @@ def _fetch_listeners(admin_url, user, password, mount, timeout=3):
 # Radiosender-Server (unabhängig von der laufenden ffmpeg-Wiedergabe) —
 # bei mehreren offenen Browser-Tabs, die alle /api/status pollen, soll
 # das nicht bei jedem einzelnen Poll erneut passieren.
+# Obergrenze für /api/status/wait (Long-Poll, siehe SwitcherState.wait_for_change()).
+# ThreadingHTTPServer startet pro Request einen eigenen Thread -- ein
+# hängender Long-Poll blockiert also keine anderen Requests, hält aber
+# einen Thread offen, deshalb hier begrenzt statt unbegrenzt zu warten
+# (u.a. falls ein Client/Proxy dazwischen die Verbindung sonst nie beendet).
+_STATUS_WAIT_TIMEOUT = 25.0
+
 _NOW_PLAYING_TTL = 15.0
 _now_playing_cache = {}  # url -> (timestamp, titel_oder_None)
 _now_playing_lock = threading.Lock()
@@ -564,6 +637,7 @@ def _build_status(state: SwitcherState, icecast_cfg: dict) -> dict:
         "news_break_active": state.news_break_active,
         "stt_status": state.stt_status,
         "speech_probability": state.speech_probability,
+        "version": state.version,
     }
 
 
@@ -573,6 +647,15 @@ _PAGE_HTML = """<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RadioZapper</title>
+<link rel="icon" href="/favicon.ico">
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#1abc9c">
+<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="RadioZapper">
 <style>
   :root { color-scheme: light dark; }
   body {
@@ -590,18 +673,15 @@ _PAGE_HTML = """<!doctype html>
     background: #eee; color: #555; min-height: 1.1em;
   }
   #now-playing:empty { display: none; }
-  #stream-url {
-    font-size: .8rem; color: #1abc9c; text-decoration: underline;
-    margin-top: .4rem; line-height: 1.4; cursor: pointer;
-  }
-  #stream-url:empty { display: none; }
-  #stream-url-row { display: flex; align-items: flex-start; gap: .5rem; }
-  #stream-url-row #stream-url { flex: 1; }
-  #btn-qrcode {
-    flex-shrink: 0; padding: .3rem .6rem; font-size: .9rem; border-radius: .4rem;
+  #address-row { display: flex; gap: .6rem; margin-top: .6rem; }
+  #address-row button {
+    flex: 1; padding: .5rem; font-size: 1.3rem; border-radius: .5rem;
     border: 1px solid #999; background: none; color: inherit; cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; gap: .15rem;
   }
-  #btn-qrcode[hidden] { display: none; }
+  #address-row button[hidden] { display: none; }
+  #address-row button:active { opacity: .7; }
+  #address-row .icon-label { font-size: .65rem; color: #888; }
   @media (prefers-color-scheme: dark) {
     #current, #now-playing { background: #2a2a2a; }
     #now-playing { color: #aaa; }
@@ -673,6 +753,18 @@ _PAGE_HTML = """<!doctype html>
     border: 1px solid #999; background: none; color: inherit; cursor: pointer;
   }
   .action-buttons button:active { opacity: .7; }
+  /* Große Touch-Ziele fürs mobile/PWA-Umschalten (Android-Empfehlung:
+     mind. 48x48dp) -- deutlich größer als die übrigen Buttons hier, weil
+     das der primäre Bedienweg "von unterwegs" sein soll, nicht ein
+     Sender aus einer langen Liste antippen. */
+  .zap-nav { display: flex; gap: .6rem; margin-top: .9rem; }
+  .zap-nav button {
+    flex: 1; padding: 1rem .5rem; font-size: 1.1rem; font-weight: 600;
+    border-radius: .6rem; border: 1px solid #1abc9c; background: #1abc9c1a;
+    color: inherit; cursor: pointer; min-height: 3.2rem;
+  }
+  .zap-nav button:active { background: #1abc9c33; }
+  .zap-nav button:disabled { opacity: .5; cursor: default; }
   .filter-toggle-row { text-align: center; margin-top: .5rem; }
   .filter-toggle-row button {
     padding: .4rem 1rem; font-size: .85rem; border-radius: .4rem;
@@ -687,16 +779,24 @@ _PAGE_HTML = """<!doctype html>
 <h1 class="sr-only">RadioZapper</h1>
 <div id="current">Lade …</div>
 <div id="now-playing"></div>
-<div id="stream-url-row">
-  <div id="stream-url"></div>
-  <button id="btn-qrcode" hidden title="QR-Code für Stream-URL anzeigen">📱 QR-Code</button>
+<div class="zap-nav">
+  <button id="btn-prev-station" title="Vorheriger Sender">⏮ Zurück</button>
+  <button id="btn-next-station" title="Nächster Sender">Weiter ⏭</button>
+</div>
+<div id="address-row">
+  <button id="btn-qr-vlc" hidden title="QR-Code für die Stream-Adresse (VLC & Co.)">
+    <span>▶️</span><span class="icon-label">VLC</span>
+  </button>
+  <button id="btn-qr-phone" title="QR-Code für dieses Web-Interface (zum Öffnen auf dem Handy)">
+    <span>📱</span><span class="icon-label">Handy</span>
+  </button>
 </div>
 <audio id="player" controls preload="none"></audio>
 
 <div id="qr-modal" class="modal-overlay" hidden>
   <div class="modal-box">
     <button id="qr-modal-close" class="modal-close" aria-label="Schließen">✕</button>
-    <h2>📱 Stream-URL zum Scannen</h2>
+    <h2 id="qr-modal-title">Adresse zum Scannen</h2>
     <div id="qr-code-container"></div>
     <div id="qr-modal-url"></div>
     <button id="qr-modal-copy">📋 Adresse kopieren</button>
@@ -742,6 +842,17 @@ function esc(s) {
 let switching = false;
 let playerSrcSet = false;
 let currentStreamUrl = '';
+let lastVersion = 0;
+// Letzter vollständiger /api/status-Stand, fürs optimistische UI-Update bei
+// Vor/Zurück (siehe switchRelative()) -- die Zielstation muss VOR der
+// Server-Antwort bekannt sein, sonst gäbe es dort nichts zu optimieren.
+let lastStatus = null;
+
+function setSwitching(value) {
+  switching = value;
+  document.getElementById('btn-prev-station').disabled = value;
+  document.getElementById('btn-next-station').disabled = value;
+}
 
 // navigator.clipboard.writeText() braucht einen "secure context" (HTTPS
 // oder localhost) -- dieses Web-Interface läuft typischerweise per
@@ -773,6 +884,34 @@ async function refresh() {
     document.getElementById('current').textContent = 'Verbindung zum Server verloren …';
     return;
   }
+  applyStatus(data);
+}
+
+// Long-Poll-Fast-Path (siehe /api/status/wait in webui.py): hängt am
+// Server, bis sich etwas Wesentliches ändert (Senderwechsel, News-Break-
+// Start/Ende, Filter-Toggle), statt stur alle paar Sekunden zu fragen --
+// dadurch kommen genau diese Übergänge binnen Millisekunden statt erst
+// beim nächsten Poll-Tick an. Das normale Intervall-Polling unten bleibt
+// zusätzlich bestehen (Sicherheitsnetz + Bullshitometer/Hörerzahlen, die
+// sich auch ohne Versionssprung ändern).
+async function longPollLoop() {
+  for (;;) {
+    try {
+      const res = await fetch('/api/status/wait?version=' + lastVersion);
+      const data = await res.json();
+      applyStatus(data);
+    } catch (e) {
+      // Verbindung weg (Server-Neustart, Netzwerk-Hänger) -- kurz warten
+      // statt den Server/die Konsole mit einer engen Fehlerschleife
+      // zuzumüllen, dann erneut versuchen.
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  }
+}
+
+function applyStatus(data) {
+  lastVersion = data.version || 0;
+  lastStatus = data;
 
   document.getElementById('current').textContent =
     data.current_name ? ('▶ Läuft gerade: ' + data.current_name) : 'Kein Sender aktiv';
@@ -843,8 +982,7 @@ async function refresh() {
     player.src = autoUrl;
     playerSrcSet = true;
     currentStreamUrl = data.stream_url || autoUrl;
-    document.getElementById('stream-url').innerHTML = 'Streaming via VLC<br>' + esc(currentStreamUrl);
-    document.getElementById('btn-qrcode').hidden = false;
+    document.getElementById('btn-qr-vlc').hidden = false;
   }
 
   const list = document.getElementById('stations');
@@ -853,12 +991,15 @@ async function refresh() {
     const li = document.createElement('li');
     const btn = document.createElement('button');
     btn.textContent = s.name;
+    btn.dataset.id = s.id;
     if (s.id === data.current_id) btn.classList.add('active');
     btn.disabled = switching;
     btn.addEventListener('click', () => switchStation(s.id));
     li.appendChild(btn);
     list.appendChild(li);
   }
+  document.getElementById('btn-prev-station').disabled = switching || data.stations.length === 0;
+  document.getElementById('btn-next-station').disabled = switching || data.stations.length === 0;
 
   const listenersEl = document.getElementById('listeners');
   if (data.listeners === null) {
@@ -880,8 +1021,28 @@ async function refresh() {
   document.getElementById('meta').textContent = 'Aktualisiert: ' + new Date().toLocaleTimeString('de-DE');
 }
 
+// Zeigt einen Sender-Wechsel sofort im UI an, ohne auf die Server-Antwort
+// oder den nächsten Long-Poll/Intervall-Tick zu warten -- Sekunden-Verzug
+// wäre bei "von unterwegs zappen" spürbar unangenehm. Wird per
+// state.set_current() im Hauptloop ohnehin bald bestätigt (oder per
+// nachfolgendem refresh() unten); trifft die optimistische Annahme mal
+// nicht zu (z.B. Sender inzwischen deaktiviert), korrigiert sich das beim
+// nächsten Status-Update von selbst.
+function applyOptimistic(station) {
+  if (!station) return;
+  document.getElementById('current').textContent = '▶ Läuft gerade: ' + station.name;
+  document.getElementById('now-playing').textContent = '';
+  if (lastStatus) lastStatus.current_id = station.id;
+  document.querySelectorAll('#stations li button').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.id === station.id);
+  });
+}
+
 async function switchStation(id) {
-  switching = true;
+  if (switching) return;
+  setSwitching(true);
+  const station = lastStatus && lastStatus.stations ? lastStatus.stations.find((s) => s.id === id) : null;
+  applyOptimistic(station);
   try {
     await fetch('/api/switch', {
       method: 'POST',
@@ -889,10 +1050,42 @@ async function switchStation(id) {
       body: JSON.stringify({id}),
     });
   } finally {
-    switching = false;
+    setSwitching(false);
   }
   refresh();
 }
+
+// Ermittelt den Nachbar-Sender rein lokal aus dem letzten /api/status-Stand
+// -- für die optimistische Anzeige. Die tatsächliche Umschaltung passiert
+// serverseitig (/api/switch/next|prev, siehe webui.py), dieselbe Reihenfolge
+// (state.active_stations, alphabetisch) wird dort unabhängig neu ermittelt.
+function computeNeighbor(direction) {
+  if (!lastStatus || !lastStatus.stations || lastStatus.stations.length === 0) return null;
+  const ids = lastStatus.stations.map((s) => s.id);
+  let idx = ids.indexOf(lastStatus.current_id);
+  if (idx === -1) idx = direction > 0 ? -1 : 0;
+  const newIdx = ((idx + direction) % ids.length + ids.length) % ids.length;
+  return lastStatus.stations[newIdx];
+}
+
+async function switchRelative(direction) {
+  if (switching) return;
+  setSwitching(true);
+  applyOptimistic(computeNeighbor(direction));
+  try {
+    const res = await fetch(direction > 0 ? '/api/switch/next' : '/api/switch/prev', {method: 'POST'});
+    const data = await res.json();
+    if (!data.ok) setActionMsg('Fehler: ' + (data.error || 'unbekannt'));
+  } catch (e) {
+    setActionMsg('Fehler: ' + e.message);
+  } finally {
+    setSwitching(false);
+  }
+  refresh();
+}
+
+document.getElementById('btn-prev-station').addEventListener('click', () => switchRelative(-1));
+document.getElementById('btn-next-station').addEventListener('click', () => switchRelative(1));
 
 function setActionMsg(text) {
   const el = document.getElementById('action-msg');
@@ -900,32 +1093,43 @@ function setActionMsg(text) {
   setTimeout(() => { if (el.textContent === text) el.textContent = ''; }, 5000);
 }
 
-document.getElementById('stream-url').addEventListener('click', async () => {
-  if (!currentStreamUrl) return;
-  try {
-    await copyToClipboard(currentStreamUrl);
-    setActionMsg('📋 Adresse kopiert.');
-  } catch (e) {
-    setActionMsg('Kopieren fehlgeschlagen: ' + e.message);
-  }
-});
+// Zwei Icon-Buttons teilen sich denselben Modal-Dialog, kodieren aber
+// unterschiedliche Adressen (Stream-URL fürs VLC-Icon, die Adresse dieser
+// Seite selbst fürs Handy-Icon) -- qrModalUrl merkt sich, welche der
+// beiden gerade angezeigt wird, damit der Kopieren-Knopf im Modal weiß,
+// was er kopieren soll (statt hart an currentStreamUrl gebunden zu sein).
+let qrModalUrl = '';
+
+function closeQrModal() {
+  document.getElementById('qr-modal').hidden = true;
+}
+
+function openQrModal(url, title) {
+  if (!url || typeof qrcode !== 'function') return;
+  qrModalUrl = url;
+  const qr = qrcode(0, 'M');
+  qr.addData(url);
+  qr.make();
+  document.getElementById('qr-code-container').innerHTML = qr.createSvgTag({cellSize: 5, margin: 4});
+  document.getElementById('qr-modal-title').textContent = title;
+  document.getElementById('qr-modal-url').textContent = url;
+  document.getElementById('qr-modal').hidden = false;
+}
 
 // Nur EIN Icecast-Mount für die gesamte Rotation (siehe CLAUDE.md,
 // "IcecastOutput besteht über Senderwechsel hinweg") -- der QR-Code
 // kodiert also immer dieselbe currentStreamUrl, unabhängig davon, welcher
 // Sender gerade läuft. Kein Bezug zur Senderliste nötig.
-function closeQrModal() {
-  document.getElementById('qr-modal').hidden = true;
-}
+document.getElementById('btn-qr-vlc').addEventListener('click', () => {
+  openQrModal(currentStreamUrl, '▶️ Stream-Adresse zum Scannen (VLC & Co.)');
+});
 
-document.getElementById('btn-qrcode').addEventListener('click', () => {
-  if (!currentStreamUrl || typeof qrcode !== 'function') return;
-  const qr = qrcode(0, 'M');
-  qr.addData(currentStreamUrl);
-  qr.make();
-  document.getElementById('qr-code-container').innerHTML = qr.createSvgTag({cellSize: 5, margin: 4});
-  document.getElementById('qr-modal-url').textContent = currentStreamUrl;
-  document.getElementById('qr-modal').hidden = false;
+// location.origin statt einer fest einprogrammierten Adresse -- dieselbe
+// Begründung wie beim eingebetteten Player oben: garantiert die Adresse,
+// über die DIESER Browser die Seite gerade selbst erreicht, unabhängig von
+// Hostname/Port des jeweiligen Deployments.
+document.getElementById('btn-qr-phone').addEventListener('click', () => {
+  openQrModal(location.origin + '/', '📱 Web-Interface-Adresse zum Scannen');
 });
 
 document.getElementById('qr-modal-close').addEventListener('click', closeQrModal);
@@ -937,7 +1141,7 @@ document.addEventListener('keydown', (ev) => {
 });
 document.getElementById('qr-modal-copy').addEventListener('click', async () => {
   try {
-    await copyToClipboard(currentStreamUrl);
+    await copyToClipboard(qrModalUrl);
     setActionMsg('📋 Adresse kopiert.');
   } catch (e) {
     setActionMsg('Kopieren fehlgeschlagen: ' + e.message);
@@ -982,7 +1186,23 @@ document.getElementById('btn-filter-toggle').addEventListener('click', async () 
 });
 
 refresh();
-setInterval(refresh, 5000);
+longPollLoop();
+// Sicherheitsnetz zusätzlich zum Long-Poll oben: Bullshitometer/Hörerzahlen
+// ändern sich auch ohne Versionssprung (kein request/pop-Ereignis), und
+// falls der Long-Poll je hängen bleibt (Proxy/Browser-Eigenheiten), holt
+// das hier trotzdem regelmäßig den aktuellen Stand.
+setInterval(refresh, 3000);
+
+// PWA: Service Worker fürs Offline-Fallback der Oberflächen-Hülle (siehe
+// sw.js) -- Registrierung selbst ist Voraussetzung für "Zum Home-Bildschirm
+// hinzufügen" unter Chrome/Android, nicht nur fürs Offline-Verhalten.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch((e) => {
+      console.warn('Service-Worker-Registrierung fehlgeschlagen:', e);
+    });
+  });
+}
 </script>
 </body>
 </html>
@@ -995,6 +1215,7 @@ _CONFIG_PAGE_HTML = """<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RadioZapper — Sender verwalten</title>
+<link rel="icon" href="/favicon.ico">
 <style>
   :root { color-scheme: light dark; }
   body {
@@ -1810,8 +2031,51 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                     self.send_header("Cache-Control", "public, max-age=86400")
                     self.end_headers()
                     self.wfile.write(_QRCODE_JS_BYTES)
+            elif self.path == "/manifest.json":
+                if _MANIFEST_JSON_BYTES is None:
+                    self.send_error(404)
+                else:
+                    self._send(_MANIFEST_JSON_BYTES, "application/manifest+json; charset=utf-8")
+            elif self.path == "/sw.js":
+                if _SERVICE_WORKER_JS_BYTES is None:
+                    self.send_error(404)
+                else:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/javascript; charset=utf-8")
+                    self.send_header("Content-Length", str(len(_SERVICE_WORKER_JS_BYTES)))
+                    # Bewusst KEIN langes Caching wie bei /qrcode.js -- ein
+                    # veralteter Service Worker im Browser-Cache würde eine
+                    # neu ausgerollte sw.js (z.B. geänderte SHELL_URLS) erst
+                    # nach bis zu 24h (Chromes eingebautes SW-Update-Limit)
+                    # statt beim nächsten Seitenaufruf bemerken.
+                    self.send_header("Cache-Control", "no-cache")
+                    self.end_headers()
+                    self.wfile.write(_SERVICE_WORKER_JS_BYTES)
+            elif self.path == "/favicon.ico":
+                if _FAVICON_ICO_BYTES is None:
+                    self.send_error(404)
+                else:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/x-icon")
+                    self.send_header("Content-Length", str(len(_FAVICON_ICO_BYTES)))
+                    self.send_header("Cache-Control", "public, max-age=86400")
+                    self.end_headers()
+                    self.wfile.write(_FAVICON_ICO_BYTES)
+            elif self.path in ("/icon-192.png", "/icon-512.png"):
+                icon_bytes = _ICON_192_BYTES if self.path == "/icon-192.png" else _ICON_512_BYTES
+                if icon_bytes is None:
+                    self.send_error(404)
+                else:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/png")
+                    self.send_header("Content-Length", str(len(icon_bytes)))
+                    self.send_header("Cache-Control", "public, max-age=86400")
+                    self.end_headers()
+                    self.wfile.write(icon_bytes)
             elif self.path == "/api/status":
                 self._send_json(_build_status(state, icecast_cfg))
+            elif self.path.startswith("/api/status/wait"):
+                self._handle_status_wait()
             elif self.path == "/api/config/stations":
                 # bewusst frisch von der Platte, nicht state.all_stations:
                 # das ist nur ein Cache für die Rotation im Hauptloop und
@@ -1839,6 +2103,10 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
         def do_POST(self):
             if self.path == "/api/switch":
                 self._handle_switch()
+            elif self.path == "/api/switch/next":
+                self._handle_switch_relative(1)
+            elif self.path == "/api/switch/prev":
+                self._handle_switch_relative(-1)
             elif self.path == "/api/skip":
                 self._handle_skip()
             elif self.path == "/api/filter/toggle":
@@ -1958,6 +2226,25 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
             threading.Thread(target=worker, daemon=True, name="import").start()
             self._send_json({"ok": True})
 
+        def _handle_status_wait(self):
+            """Long-Poll-Fast-Path für die Web-UI: blockiert bis zu
+            _STATUS_WAIT_TIMEOUT Sekunden, bis state.version sich ändert
+            (Senderwechsel, News-Break-Start/Ende, Filter-Toggle -- siehe
+            SwitcherState.wait_for_change()), oder gibt nach Timeout einfach
+            den aktuellen Stand zurück (Heartbeat, falls sich in der
+            Wartezeit gar nichts tut). Das Frontend hängt sofort den
+            nächsten Long-Poll mit der zurückgegebenen Version dran ->
+            ein echter Zustandswechsel kommt so binnen Millisekunden an,
+            statt frühestens beim nächsten Intervall-Poll-Tick."""
+            query = urllib.parse.urlsplit(self.path).query
+            params = urllib.parse.parse_qs(query)
+            try:
+                known_version = int(params.get("version", ["0"])[0])
+            except ValueError:
+                known_version = 0
+            state.wait_for_change(known_version, timeout=_STATUS_WAIT_TIMEOUT)
+            self._send_json(_build_status(state, icecast_cfg))
+
         def _handle_skip(self):
             # "ZAPPEN!"-Knopf: Nutzer hat selbst Sprache erkannt, auch
             # wenn VAD/Heuristik (noch) nicht angeschlagen haben -> sofort
@@ -2026,6 +2313,32 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                 self._send_json({"ok": True})
             else:
                 self._send_json({"ok": False, "error": "invalid id"}, status=400)
+
+        def _handle_switch_relative(self, direction: int):
+            # Für die mobile/PWA-Ansicht: "Vorheriger/Nächster Sender" ohne
+            # dass das Frontend die komplette Rotationsreihenfolge kennen
+            # muss -- läuft über denselben request_switch()-Pfad wie jeder
+            # andere manuelle Wechsel, ermittelt hier nur vorab die Ziel-ID.
+            active = state.active_stations
+            if not active:
+                self._send_json({"ok": False, "error": "keine aktiven Sender"}, status=400)
+                return
+            ids = [s["id"] for s in active]
+            try:
+                idx = ids.index(state.current_id)
+            except ValueError:
+                # state.current_id zeigt während einer Nachrichten-Pause auf
+                # die synthetische News-Break-ID (siehe SwitcherState.
+                # set_news_break()), die nicht in der Rotation steckt -- als
+                # Anker dann so tun, als stünde man "vor" dem ersten bzw.
+                # "nach" dem letzten Sender, damit Vor/Zurück trotzdem in
+                # der Liste landet statt mit einem Fehler ins Leere zu laufen.
+                idx = -1 if direction > 0 else 0
+            target = ids[(idx + direction) % len(ids)]
+            log.info("🎛  Web-Interface: %s Sender angefordert ('%s').",
+                     "nächster" if direction > 0 else "vorheriger", target)
+            state.request_switch(target)
+            self._send_json({"ok": True, "id": target})
 
         def _handle_add_station(self):
             payload = self._read_json_body()

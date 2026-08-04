@@ -2488,3 +2488,349 @@ statt manuellem Abtippen/Kopieren übernehmen zu können.
 - Container noch NICHT neu gebaut/gestartet — steht als nächster Schritt
   aus (`docker compose up -d --build radiozapper`), danach Sichtprüfung
   im echten Browser + Scan mit einem echten Gerät.
+
+## 2026-08-04 — Zwei Bugfixes: Frontend-Sync-Verzögerung + News-Break spielte nur eine MP3
+
+Auslöser: zwei gemeldete Bugs in einer Runde.
+
+### Bug 1: Web-UI hinkt dem Backend-Zustand hinterher
+
+**Root Cause**: Die Startseite holte den gesamten Zustand ausschließlich
+per `setInterval(refresh, 5000)` — alle 5 Sekunden ein `GET /api/status`,
+kein Push, kein Caching-Problem im eigentlichen Sinn. Ein Senderwechsel
+oder News-Break-Übergang (beide laufen im Hauptloop, request/pop-Muster,
+siehe CLAUDE.md) war im `SwitcherState` sofort sichtbar, aber die Web-UI
+erfuhr davon frühestens beim nächsten Poll-Tick — im schlechtesten Fall
+knapp 5s Verzögerung.
+
+**Fix**: Long-Poll-Fast-Path zusätzlich zum bestehenden Intervall-Polling
+(nicht ersetzt — siehe unten, warum).
+- `webui.py`/`SwitcherState`: neuer Versionszähler `_version` +
+  `threading.Condition` (auf demselben Lock wie der übrige State). Bumped
+  in `set_current()`, `set_news_break()`, `set_filter_enabled()` — genau
+  die drei Ereignisse, die die Web-UI zeitnah sehen soll (Senderwechsel,
+  News-Break-Start/Ende, Filter-Toggle). BEWUSST NICHT bei
+  `set_speech_probability()`/`set_stt_status()` mitgezählt — die ändern
+  sich viel häufiger (jedes Analysefenster) und würden den Long-Poll
+  wieder auf Poll-Tempo runterziehen, ohne dem eigentlichen Problem zu
+  helfen.
+- Neue Methode `wait_for_change(known_version, timeout)`: blockiert im
+  aufrufenden Thread, bis sich die Version ändert oder der Timeout
+  erreicht ist. Läuft gefahrlos im Request-Handler-Thread, weil
+  `ThreadingHTTPServer` (siehe `daemon_threads=True`, Python-Default) für
+  jeden Request ohnehin einen eigenen Thread aufmacht — ein hängender
+  Long-Poll blockiert keine anderen Requests.
+- Neue Route `GET /api/status/wait?version=N` (`_STATUS_WAIT_TIMEOUT =
+  25.0`s Obergrenze) — liefert `_build_status()` (jetzt mit `"version"`-
+  Feld) entweder sofort nach einem echten Zustandswechsel oder nach dem
+  Timeout als Heartbeat.
+- Frontend (`_PAGE_HTML`-Script): `refresh()` in einen Fetch-Teil und
+  eine neue `applyStatus(data)`-Funktion (alle bisherigen UI-Updates)
+  aufgeteilt. Neue `longPollLoop()` hängt endlos an `/api/status/wait`
+  und ruft bei jeder Antwort `applyStatus()` auf, mit dem zurückgegebenen
+  `version` fürs nächste Long-Poll. Das bestehende `setInterval(refresh,
+  ...)` bleibt zusätzlich bestehen (jetzt 3000ms statt 5000ms) — Grund:
+  Bullshitometer/Hörerzahlen ändern sich auch OHNE Versionssprung (keine
+  request/pop-Aktion dahinter), rein auf den Long-Poll umzustellen hätte
+  diese beiden Anzeigen bis zu 25s einfrieren lassen. Das
+  Intervall-Polling ist also kein Fallback fürs alte Problem, sondern
+  bleibt für andere Daten zuständig; der Long-Poll behebt gezielt "hinkt
+  nach einem Senderwechsel/News-Break-Ende hinterher".
+- BEWUSST KEIN WebSocket/SSE: `ThreadingHTTPServer` + ein einfacher
+  Long-Poll pro offenem Tab passt zur bestehenden Architektur (kein
+  asyncio, keine neue Abhängigkeit) und reicht für die private
+  Nutzerzahl dieses Web-Interfaces (siehe "Kein Auth, nur hinter VPN").
+
+### Bug 2: News-Break spielte nur eine MP3 statt das volle Fenster
+
+**Root Cause**: Im Hauptloop (`radiozapper.py`) behandelte der
+`pcm.size == 0`-Zweig (MP3 zu Ende, `source.read_window()` liefert
+nichts mehr) das Ende JEDER News-Break-MP3 unconditional als Ende der
+gesamten Pause — `resume_from_news_break()` wurde direkt aufgerufen,
+ganz gleich ob `window_minutes` noch nicht abgelaufen war. Der
+Eintritts-Zweig (`slot and not news_break_active and slot !=
+news_break_served_slot`) lud dagegen korrekt eine MP3 beim ERSTEN
+Betreten des Fensters — es gab aber keinen Code-Pfad, der beim
+MP3-Ende erneut prüfte, ob das Fenster selbst noch lief.
+
+**Fix**:
+- Neue Closure `start_news_break_mp3(cfg)` in `radiozapper.py`s `main()`
+  — extrahiert die bisher im Eintritts-Zweig inline stehende Logik
+  (`pick_random_mp3()` + `source.start(path, realtime=True)` +
+  `state.set_news_break()` + `quick_forward()`), damit sie von zwei
+  Stellen aus aufrufbar ist.
+- Eintritts-Zweig nutzt jetzt `start_news_break_mp3()`.
+- `pcm.size == 0`-Zweig: bevor `resume_from_news_break()` aufgerufen
+  wird, jetzt zusätzlich `news_break.active_slot(state.news_break_cfg)`
+  geprüft — läuft das Fenster noch, wird `start_news_break_mp3()` erneut
+  aufgerufen (nächste zufällige MP3, `exclude=news_break_last_file`
+  verhindert Wiederholung direkt hintereinander, sofern der Ordner mehr
+  als eine Datei hat). Erst wenn das Fenster selbst vorbei ODER keine
+  weitere MP3 verfügbar ist, greift `resume_from_news_break()` wie
+  bisher.
+
+### Verifiziert
+- `python3 -c "import ast; ast.parse(...)"` für `radiozapper.py` und
+  `webui.py` — ohne Fehler. `node --check` für den extrahierten
+  `<script>`-Block — ohne Fehler.
+- Long-Poll-Fast-Path: In-Process-Testinstanz von `webui.start_server()`
+  (kein Docker) gegen `urllib.request`. Version-Bump per
+  `state.set_current()` während ein Long-Poll-Request lief: Antwort kam
+  nach 0.501s (statt bis zu 25s Timeout), `version` korrekt um 1 erhöht.
+  Gleicher Test für `state.set_news_break(True, ...)`: Antwort nach
+  0.301s, `news_break_active` korrekt `true`. Timeout-Pfad separat mit
+  künstlich verkürztem `_STATUS_WAIT_TIMEOUT=1.5` geprüft: Antwort nach
+  1.501s mit unveränderter Version (kein Zustandswechsel in der Zeit).
+- News-Break-Verkettung: kompletter Testaufbau nach dem in CLAUDE.md
+  dokumentierten Muster (`*.py` in Temp-Verzeichnis kopiert, eigene
+  `stations.json`/`settings.json`, separater Icecast-Mount auf demselben
+  Produktiv-Icecast unter neuem Mount-Namen `test-output2.mp3` — NICHT
+  der echte `radiozapper.mp3`-Mount). Fake-"Radiosender" als eigener,
+  dauerhaft laufender ffmpeg-Sinuston-Stream auf Mount
+  `test-fakestation.mp3`. Vier ~6s-Test-MP3s mit unterschiedlichen
+  Frequenzen (440/660/880/1200 Hz) als News-Break-Ordner.
+  `window_minutes` wurde bewusst so berechnet, dass die nächstgelegene
+  :00/:30-Grenze (von `news_break.active_slot()` verwendet) bereits in
+  der VERGANGENHEIT lag (sonst ist das Fenster symmetrisch um die
+  Grenze aktiv und damit viel länger als beabsichtigt — beim ersten
+  Testversuch dadurch fälschlich 27+ Minuten statt der geplanten ~50s,
+  siehe unten).
+  Live-Ergebnis (echte Uhrzeiten, `window_minutes=0.807` ≈ 48.4s ab
+  09:30:03): Fenster betreten 09:30:03 (`tone_440.mp3`), danach
+  automatisch nachgeladen um 09:30:09 (`tone_880`), 09:30:15 (`tone_1200`),
+  09:30:22 (`tone_880`), 09:30:28 (`tone_660`), 09:30:34 (`tone_880`),
+  09:30:40 (`tone_660`), 09:30:46 (`tone_440`) — sieben automatische
+  Nachlade-Ereignisse über 43s, nie zwei gleiche Dateien direkt
+  hintereinander. Fenster korrekt als abgelaufen erkannt um 09:30:53
+  (nach Ende der letzten MP3), sauberer Rücksprung zu "Fake Test
+  Station" per `resume_from_news_break()`. Vorher (ungefixt) hätte der
+  Lauf nach der ERSTEN MP3 (09:30:09) sofort zurückgeschaltet.
+- Erster Testlauf-Fehlversuch bewusst dokumentiert (siehe oben): bei
+  Testaufbau um 09:15:52 lag die nächstgelegene Grenze (09:30:00) noch
+  in der Zukunft, das resultierende Fenster war dadurch von 09:14:52 bis
+  09:45:07 aktiv (30 Minuten) statt der beabsichtigten ~60s — keine
+  Fehlfunktion des Fixes, sondern ein Fehler in der Testvorbereitung
+  (falsche Annahme über `active_slot()`s Symmetrie um die Grenze). Für
+  zukünftige Tests: `window_minutes` nur dann als "Distanz zur
+  nächsten Grenze + gewünschte Testdauer" berechnen, wenn die
+  nächstgelegene Grenze bereits in der Vergangenheit liegt (Minute
+  der Stunde in [0,15) oder [30,45)), sonst warten.
+- Container noch NICHT neu gebaut/gestartet — steht als nächster Schritt
+  aus (`docker compose up -d --build radiozapper`).
+
+## 2026-08-04 (Fortsetzung) — PWA: installierbar auf Android + Vor/Zurück-Buttons
+
+**Auslöser**: Nutzer wollte das Web-Interface auf Android installieren
+("Zum Startbildschirm hinzufügen") und von unterwegs mit großen Touch-
+Buttons statt der langen Sender-Liste umschalten können.
+
+### Umsetzung
+
+- **PWA-Grundgerüst**: neue statische Dateien `manifest.json` (Name,
+  `display: standalone`, Icons, `theme_color` passend zum bestehenden
+  Akzent-Türkis `#1abc9c`) und `sw.js` (Service Worker). Beide wie
+  `radiozapper.webp`/`qrcode.js` schon vorher: einmalig beim Modul-Import
+  von der Platte gelesen (`_load_static()`, neue kleine Helper-Funktion,
+  die das bisher pro Datei duplizierte try/open-Muster für die beiden
+  neuen Assets nicht ein drittes Mal kopiert), über eigene GET-Routen
+  ausgeliefert. `icon-192.png`/`icon-512.png` sind Platzhalter — reines
+  Python (`zlib`+`struct`, keine neue Abhängigkeit) hat ein simples
+  Broadcast-Symbol (Punkt + zwei Viertel-Kreisbögen) in Türkis auf
+  weißem Grund als valides PNG erzeugt, ohne Pillow im Container
+  installieren zu müssen. `sw.js` bekommt bewusst `Cache-Control:
+  no-cache` (anders als die sonst 24h gecachten statischen Assets) —
+  sonst würde ein veralteter Service Worker im Browser-Cache eine
+  künftige `sw.js`-Änderung erst nach bis zu 24h bemerken (Chromes
+  eingebautes SW-Update-Intervall), nicht beim nächsten Seitenaufruf.
+  Alle vier neuen Dateien in `Dockerfile` einzeln per `COPY` ergänzt
+  (siehe CLAUDE.md: der Dockerfile kopiert jede Datei einzeln, sonst
+  fehlt sie im Image).
+- **Service Worker** cached nur die statische Oberflächen-Hülle (`/`,
+  Manifest, Icons, Banner, `qrcode.js`) — Strategie: network-first mit
+  Cache-Fallback fürs Offline-Öffnen. `/api/*` und alles mit
+  `Range`-Header (Audio-Anfragen) werden im `fetch`-Handler explizit
+  übersprungen, ebenso alles außerhalb der eigenen Origin: der
+  Icecast-Stream läuft auf einem eigenen Port/eigener Origin (siehe
+  CLAUDE.md, "IcecastOutput besteht über Senderwechsel hinweg"), aber
+  ein Service Worker bekommt trotzdem `fetch`-Events dafür, sobald die
+  Seite unter seiner Kontrolle steht — den dauerhaft offenen
+  Audio-Stream durch `respondWith()`/`cache.put()` zu schleifen wäre
+  Speicher-/Latenz-Unsinn und wurde deshalb von vornherein ausgeschlossen,
+  nicht erst nach einem beobachteten Problem.
+- **Meta-Tags** in `_PAGE_HTML`: `<link rel="manifest">`, `theme-color`,
+  `apple-touch-icon` + die üblichen `*-mobile-web-app-capable`-Tags (auch
+  wenn nur Android/Chrome verlangt war — Standard-Boilerplate, schadet
+  auf anderen Plattformen nicht). Service-Worker-Registrierung im
+  bestehenden `<script>`-Block, hinter dem existierenden
+  `refresh()`/`longPollLoop()`/`setInterval()`-Block.
+- **Vor/Zurück-Buttons**: zwei große Touch-Buttons (`min-height: 3.2rem`,
+  Android-Empfehlung ≥48dp) direkt unter der Sender-Anzeige, noch vor der
+  Streaming-Adresse. Rufen zwei neue schlanke Endpoints
+  `POST /api/switch/next`/`POST /api/switch/prev` auf (vorher gab es nur
+  `POST /api/switch` mit expliziter Ziel-ID — kein Endpoint kannte die
+  Rotationsreihenfolge). Server-seitige Umsetzung in `webui.py`
+  (`_handle_switch_relative()`): ermittelt den Nachbarn aus
+  `state.active_stations` (alphabetisch = Rotationsreihenfolge, siehe
+  CLAUDE.md) + `state.current_id`, ruft danach exakt denselben
+  `state.request_switch(id)`-Pfad wie ein normaler manueller Klick auf —
+  kein zweiter Code-Pfad für "Umschalten", nur ein zusätzlicher Weg, die
+  Ziel-ID zu bestimmen. Bleibt damit im request/pop-Muster: der Hauptloop
+  entscheidet weiter selbst, wann und wie der Wechsel tatsächlich passiert.
+  - **Edge Case News-Break**: `state.current_id` zeigt während einer
+    Nachrichten-Pause auf die synthetische `NEWS_BREAK_STATION_ID` (siehe
+    `SwitcherState.set_news_break()`), die nicht in `active_stations`
+    steckt — `ids.index()` wirft dann `ValueError`. Statt das als Fehler
+    nach außen zu geben, fällt der Handler auf "vor dem ersten" (bei
+    "nächster") bzw. "nach dem letzten" (bei "vorheriger") Sender zurück,
+    damit der Klick trotzdem sinnvoll in der Liste landet statt ins Leere
+    zu laufen (Test unten). Der eigentliche Nachbar des *pausierten*
+    Senders ist darüber nicht erreichbar — bewusst nicht gelöst, siehe
+    unten.
+- **Optimistisches UI-Update**: neue `lastStatus`-Variable im Frontend
+  hält den letzten vollständigen `/api/status`-Stand; `computeNeighbor()`
+  berechnet daraus rein clientseitig denselben Nachbarn, den der Server
+  gleich unabhängig noch mal ermittelt (zwei unabhängige, aber identische
+  Berechnungen — kein Griff auf einen gemeinsamen State, weil der Server
+  ja gerade erst nach dem Request seinen state.current_id aktualisiert).
+  `applyOptimistic()` setzt sofort "Läuft gerade: …" + Active-Highlight in
+  der Sender-Liste, noch bevor die Server-Antwort da ist. Trifft die
+  Annahme mal nicht zu (Sender inzwischen deaktiviert, News-Break-
+  Fallback wie oben), korrigiert der nächste `/api/status`-Stand das von
+  selbst — kein Sonderfall-Code nötig, weil `refresh()`/der Long-Poll
+  ohnehin regelmäßig den echten Stand nachzieht.
+- **Bereits bestehender Long-Poll-Fast-Path** (`GET /api/status/wait`,
+  siehe Eintrag "Bug 1" oben vom selben Tag) übernimmt weiterhin die
+  eigentliche Zustellung des neuen Zustands an ALLE offenen Tabs —
+  dafür war für diese Aufgabe keine weitere Änderung nötig (kein
+  WebSocket, kein verkürztes Poll-Intervall): das optimistische Update
+  deckt die Wahrnehmungslücke auf dem Gerät ab, das selbst geklickt hat,
+  der Long-Poll den Rest.
+
+### Bewusst NICHT gemacht
+
+- Kein WebSocket — der bestehende Long-Poll-Fast-Path (Version-Zähler +
+  `Condition.wait()`, siehe SESSION.md vom selben Tag weiter oben) liefert
+  bereits Sub-Sekunden-Latenz für alle Clients; eine zweite Zustellart
+  einzuziehen hätte keinen Nutzen gebracht, nur Komplexität.
+- Kein echter "Vorheriger Sender relativ zum pausierten Sender während
+  News-Break" — dafür müsste `SwitcherState` die reale Sender-ID
+  zusätzlich zur synthetischen News-Break-ID vorhalten, während die Pause
+  läuft. Aktuell dokumentiertes Fallback-Verhalten (auf den ersten Sender
+  der Liste springen) reicht für den seltenen Fall "Klick genau in den
+  paar Sekunden einer Nachrichten-Pause" — siehe auch README.md,
+  "Bekannte Einschränkungen".
+- Kein Audio-Caching im Service Worker (war explizit nicht verlangt) und
+  keine Offline-Wiedergabe — ergibt bei einem Live-Radio-Restream ohnehin
+  keinen Sinn.
+- Eigene, "echte" Icons (nur Platzhalter-PNGs) — reine Optik, kein
+  Blocker für Installierbarkeit/Funktion.
+
+### Verifiziert
+
+- `python3 -c "import ast; ast.parse(...)"` für `webui.py` — ohne Fehler.
+  `node --check` für den extrahierten `<script>`-Block und für `sw.js` —
+  beide ohne Fehler.
+- In-Process-Testinstanz von `webui.start_server()` (kein Docker, Muster
+  wie beim Long-Poll-Test oben) gegen `urllib.request`, mit einer
+  Test-`stations.json` (drei aktive Sender `alpha`/`beta`/`gamma` + ein
+  deaktivierter, um zu prüfen, dass Deaktivierte nicht mitrotieren):
+  - `GET /manifest.json` liefert valides JSON mit `name: "RadioZapper"`,
+    `display: "standalone"`, zwei Icon-Einträgen.
+  - `GET /sw.js`, `GET /icon-192.png`, `GET /icon-512.png` liefern
+    200 mit den erwarteten Content-Types (`icon-*.png` beginnen korrekt
+    mit der PNG-Magic-Number `\x89PNG\r\n\x1a\n`).
+  - `GET /` enthält `<link rel="manifest">`, beide neuen Button-IDs
+    (`btn-prev-station`/`btn-next-station`) und die
+    Service-Worker-Registrierung.
+  - `POST /api/switch/next` dreimal hintereinander (mit dazwischen
+    simuliertem `pop_manual_request()`+`set_current()`, weil ohne
+    laufenden Hauptloop niemand den Request tatsächlich anwendet):
+    alpha → beta → gamma → **alpha** — korrekter Wrap-around am Ende der
+    alphabetischen Liste.
+  - `POST /api/switch/prev` von alpha aus: liefert korrekt **gamma**
+    (Wrap-around rückwärts).
+  - `state.set_news_break(True, "jingle.mp3")` gesetzt, danach
+    `POST /api/switch/next`: liefert wie dokumentiert `alpha` (Fallback
+    auf ersten Sender) statt eines Fehlers.
+- Container noch NICHT neu gebaut/gestartet — steht als nächster Schritt
+  aus (`docker compose up -d --build radiozapper`).
+
+## 2026-08-04 (Fortsetzung 2) — Adress-Icons statt Text-Link + eigenes Favicon
+
+**Auslöser**: Nutzer hat die PWA vom vorigen Eintrag live auf dem Handy
+getestet ("läuft ausgezeichnet") und zwei Nachbesserungen gewünscht: (1)
+den bisherigen Text-Link "Streaming via VLC" durch ein Icon ersetzen, das
+per Klick den bestehenden QR-Code zeigt, plus ein zweites Icon für einen
+QR-Code auf das Web-Interface selbst (fürs schnelle Öffnen auf einem
+zweiten Handy); (2) das Favicon (Browser-Tab-Icon) auf eine Miniatur von
+`radiozapper.webp` ändern statt des Browser-Default.
+
+### Umsetzung
+
+- **Adress-Icons**: `#stream-url-row` (Text + versteckter "📱 QR-Code"-
+  Knopf) ersetzt durch `#address-row` mit zwei gleichwertigen Icon-Buttons:
+  `btn-qr-vlc` (▶️, Label "VLC", bleibt wie vorher bis `playerSrcSet`
+  versteckt) und `btn-qr-phone` (📱, Label "Handy", von Anfang an
+  sichtbar — hängt nicht von der erst asynchron ermittelten Stream-URL
+  ab). Kein Klick-zum-Kopieren mehr direkt auf der Seite (die alte
+  `#stream-url`-Klick-Kopieren-Funktion ist mit dem Element weggefallen)
+  — Kopieren läuft jetzt ausschließlich über den bereits vorhandenen
+  "📋 Adresse kopieren"-Knopf im QR-Modal, das für beide Icons wieder-
+  verwendet wird.
+  - Modal generalisiert: `openQrModal(url, title)` statt der bisher fest
+    auf `currentStreamUrl` verdrahteten Logik, neues `<h2
+    id="qr-modal-title">` statt des festen "📱 Stream-URL zum Scannen".
+    Neue Variable `qrModalUrl` merkt sich, welche der beiden Adressen
+    gerade im Modal steckt, damit der Kopieren-Knopf im Modal die
+    richtige kopiert (vorher hart an `currentStreamUrl` gebunden — hätte
+    beim Handy-Icon die falsche Adresse kopiert).
+  - Handy-Icon kodiert `location.origin + '/'`, **nicht** eine fest
+    einprogrammierte Adresse — dieselbe Begründung wie beim eingebetteten
+    Player weiter oben im selben Script (Kommentar dort: "die Adresse,
+    über die der Browser diese Seite selbst erreicht, ist garantiert
+    erreichbar"). Für den anfragenden Nutzer ergibt das exakt die
+    gewünschte `https://dockfish.icefish-ghost.ts.net:5000/`, bleibt aber
+    auch bei anderem Hostname/Port/anderem Deployment korrekt, ohne
+    Sonderfall-Code.
+  - "VLC"-Icon: ▶️ statt eines tatsächlichen VLC-Logos (kein offizielles
+    Emoji dafür verfügbar) — bewusst NICHT 🚧 gewählt (naheliegende
+    Anspielung auf VLCs Verkehrshütchen-Maskottchen), weil das auf
+    Android/Noto als Baustellen-Absperrung statt als Hütchen gerendert
+    wird und ohne den daneben stehenden "VLC"-Text missverständlich wäre.
+- **Favicon**: `favicon.ico` (Multi-Size: 16/32/48px, per PIL aus einem
+  quadratischen Center-Crop von `radiozapper.webp` erzeugt — NICHT
+  dieselbe Grafik wie `icon-192/512.png`, die bleiben der schlichte
+  "Broadcast"-Platzhalter fürs Installieren als App). Geladen/ausgeliefert
+  nach demselben Muster wie die übrigen statischen Assets
+  (`_load_static()`, neue GET-Route `/favicon.ico`,
+  `Cache-Control: public, max-age=86400` wie bei den Icons). Neuer
+  `<link rel="icon" href="/favicon.ico">`-Tag in BEIDEN Seiten-Templates
+  (Player-Seite UND `/config`) — Browser fragen `/favicon.ico` zwar auch
+  ohne expliziten Link-Tag automatisch pro Origin ab, der explizite Tag
+  ist aber zuverlässiger (manche Browser cachen sonst hartnäckig ein
+  einmal gesehenes leeres/Default-Favicon). In `Dockerfile` ergänzt.
+
+### Bewusst NICHT gemacht
+
+- `icon-192.png`/`icon-512.png` (PWA-/Startbildschirm-Icons) NICHT
+  ebenfalls auf die `radiozapper.webp`-Miniatur umgestellt — nur das
+  Favicon war verlangt. Die Startbildschirm-Icons bleiben also vorerst
+  der schlichte Broadcast-Platzhalter aus dem vorigen Eintrag.
+
+### Verifiziert
+
+- `python3 -c "import ast; ast.parse(...)"` für `webui.py` — ohne Fehler.
+  `node --check` für den neu extrahierten `<script>`-Block — ohne Fehler.
+- In-Process-Test (gleiches Muster wie oben): `_PAGE_HTML` enthält
+  `btn-qr-vlc`/`btn-qr-phone`/`qr-modal-title`/`address-row`, die alten
+  IDs `stream-url`/`btn-qrcode` sind vollständig verschwunden.
+- **Container diesmal tatsächlich neu gebaut und live geprüft** (Korrektur
+  zum "noch nicht gebaut"-Stand am Ende des vorigen Eintrags — der Nutzer
+  hat `docker compose up -d --build radiozapper` zwischen den beiden
+  Einträgen bereits selbst ausgeführt und die PWA/Vor-Zurück-Buttons live
+  auf dem Handy für gut befunden): nach jedem der beiden Rebuilds in
+  diesem Eintrag `curl -sk https://localhost:5000/...` gegen den
+  laufenden Container geprüft — `/favicon.ico` liefert `200`/
+  `image/x-icon`, `<link rel="icon" href="/favicon.ico">` steht im
+  ausgelieferten HTML, `btn-qr-vlc`/`btn-qr-phone`/`qr-modal-title` sind
+  im ausgelieferten HTML vorhanden.
