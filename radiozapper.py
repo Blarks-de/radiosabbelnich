@@ -891,6 +891,30 @@ def main():
         speech_buffer = []
         fp_checked_this_run = False
 
+    def start_news_break_mp3(cfg: dict) -> bool:
+        """Startet die nächste MP3 der laufenden Nachrichten-Pause — sowohl
+        beim Erstbetreten des Fensters als auch wenn die vorige MP3 zu Ende
+        ist, das Fenster (window_minutes) selbst aber noch läuft. Ohne das
+        endete die Pause ursprünglich nach genau einer Datei, auch wenn vom
+        Zeitfenster noch viel übrig war (siehe SESSION.md). `exclude`
+        verhindert eine direkte Wiederholung, sofern der Ordner mehr als
+        eine MP3 enthält. Gibt False zurück, wenn keine MP3 verfügbar ist
+        (Ordner leer/nicht lesbar) — der Aufrufer entscheidet dann, was
+        stattdessen passiert."""
+        nonlocal news_break_last_file
+        path = news_break.pick_random_mp3(cfg.get("mp3_folder"), exclude=news_break_last_file)
+        if path is None:
+            return False
+        news_break_last_file = os.path.basename(path)
+        # realtime=True ist hier PFLICHT, nicht optional -- siehe
+        # StreamSource.start()-Docstring. StreamSource.start() räumt die
+        # alte Verbindung (den pausierten Sender bzw. die vorige MP3)
+        # selbst auf.
+        source.start(path, realtime=True)
+        state.set_news_break(True, news_break_last_file)
+        quick_forward()
+        return True
+
     def do_switch(reason: str):
         """Springt reihum zum nächsten (aktivierten) Sender, bis Musik läuft
         (oder alle durch sind). Wird sowohl von der Heuristik als auch bei
@@ -1131,18 +1155,9 @@ def main():
             slot = news_break.active_slot(news_break_cfg)
             if slot and not news_break_active and slot != news_break_served_slot:
                 news_break_served_slot = slot
-                path = news_break.pick_random_mp3(news_break_cfg.get("mp3_folder"), exclude=news_break_last_file)
-                if path is not None:
-                    news_break_resume_id = current["id"]
-                    news_break_last_file = os.path.basename(path)
-                    # realtime=True ist hier PFLICHT, nicht optional -- siehe
-                    # StreamSource.start()-Docstring. StreamSource.start()
-                    # räumt die alte Verbindung (den pausierten Sender)
-                    # selbst auf.
-                    source.start(path, realtime=True)
-                    state.set_news_break(True, news_break_last_file)
+                news_break_resume_id = current["id"]
+                if start_news_break_mp3(news_break_cfg):
                     news_break_active = True
-                    quick_forward()
                     log.info("📰 Nachrichten-Pause: spiele '%s' (zurück zu '%s' danach)",
                              news_break_last_file, current["name"])
                     last_switch_time = time.time()
@@ -1161,6 +1176,21 @@ def main():
                     # ein planmäßiges Ereignis, kein toter Sender. VOR dem
                     # Watchdog abgefangen, damit der davon nichts mitbekommt
                     # (siehe Modul-weite Konstanten oben/CLAUDE.md).
+                    #
+                    # Läuft das Zeitfenster selbst noch (window_minutes noch
+                    # nicht um)? Dann nächste zufällige MP3 nachladen statt
+                    # sofort zurückzuschalten -- ursprünglicher Bug: pro
+                    # Fenster wurde nur genau eine Datei gespielt, danach
+                    # sofort zurück zum Sender, egal wie viel vom Fenster
+                    # noch übrig war (siehe SESSION.md).
+                    if (news_break.active_slot(state.news_break_cfg)
+                            and start_news_break_mp3(state.news_break_cfg)):
+                        log.info("📰 Nachrichten-Pause: nächste MP3 '%s'", news_break_last_file)
+                        last_switch_time = time.time()
+                        speech_streak = 0
+                        speech_buffer = []
+                        fp_checked_this_run = False
+                        continue
                     resume_from_news_break("Nachrichten-Pause-MP3 zu Ende")
                     continue
                 # WATCHDOG: erst ein paar Reconnects (ein kurzer Hänger soll

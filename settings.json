@@ -4,10 +4,11 @@
   "import_url": "http://bit.ly/kn-kodi-radio",
   "stream_url": "",
   "tls_enabled": true,
+  "language": "de",
   "news_break": {
     "enabled": true,
     "mp3_folder": "/app/news_mp3",
-    "window_minutes": 5.0,
+    "window_minutes": 6.0,
     "enabled_hours": null
   },
   "stt_filter": {

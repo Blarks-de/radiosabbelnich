@@ -81,7 +81,7 @@
     "name": "90s90s",
     "url": "https://streams.90s90s.de/web/mp3-128/mediaplayer",
     "category": "National",
-    "enabled": true
+    "enabled": false
   },
   {
     "id": "105-5-spreeradio",
@@ -109,14 +109,14 @@
     "name": "89.0 RTL",
     "url": "http://stream.89.0rtl.de/live/mp3-256/direktlinkHP",
     "category": "Unsortiert",
-    "enabled": true
+    "enabled": false
   },
   {
     "id": "105-5-spreeradio-rock",
     "name": "105'5 Spreeradio Rock",
     "url": "http://stream.spreeradio.de/spree-rock/mp3-128/konsole",
-    "category": "Unsortiert",
-    "enabled": false
+    "category": "National",
+    "enabled": true
   },
   {
     "id": "antenne-brandenburg",
@@ -262,8 +262,8 @@
     "id": "105-5-spreeradio-80er",
     "name": "105'5 Spreeradio 80er",
     "url": "http://stream.spreeradio.de/spree-80er/mp3-128/konsole",
-    "category": "Unsortiert",
-    "enabled": false
+    "category": "National",
+    "enabled": true
   },
   {
     "id": "campusradio-universit-t-duisburg-essen-campusfm",
@@ -808,8 +808,8 @@
     "id": "radio-bob-blues",
     "name": "RADIO BOB! Blues",
     "url": "https://streams.radiobob.de/blues/mp3-192/mediaplayer/",
-    "category": "Unsortiert",
-    "enabled": false
+    "category": "Lokal",
+    "enabled": true
   },
   {
     "id": "radio-bob-emo",
@@ -864,8 +864,8 @@
     "id": "radio-bob-80er-rock",
     "name": "RADIO BOB! 80er Rock",
     "url": "https://streams.radiobob.de/bob-80srock/mp3-192/mediaplayer",
-    "category": "Unsortiert",
-    "enabled": false
+    "category": "Lokal",
+    "enabled": true
   },
   {
     "id": "radio-bob-70er-rock",
@@ -1046,8 +1046,8 @@
     "id": "radio-bob-best-of-rock",
     "name": "RADIO BOB! Best of Rock",
     "url": "https://streams.radiobob.de/bob-bestofrock/mp3-192/mediaplayer",
-    "category": "Unsortiert",
-    "enabled": false
+    "category": "Lokal",
+    "enabled": true
   },
   {
     "id": "radio-bob-unplugged",
