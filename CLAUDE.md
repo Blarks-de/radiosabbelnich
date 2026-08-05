@@ -306,6 +306,57 @@ merkt von alldem nichts.
   `confidence_threshold`/`combine_mode` liest `combine_label()` bei jedem
   Aufruf frisch aus `state.stt_filter_cfg` — dafür ist kein Reload nötig.
 
+### Zweisprachiges Web-Interface (i18n.py)
+
+`i18n.py` ist reine Domänenlogik ohne Bezug zu `StreamSource`/
+`SwitcherState`, analog zu `news_break.py`/`stt_filter.py`: ein Dict
+`STRINGS` (nach Key gruppiert, `"de"`/`"en"` nebeneinander) plus
+`DEFAULT_LANGUAGE` aus `UI_LANGUAGE` in `.env`. Übersetzt wird NUR, was
+der Nutzer im Browser sieht (Labels, Buttons, `alert()`/`confirm()`-
+Dialoge) — Log-Meldungen, Code-Kommentare und die von
+`settings_store.py`/`station_import.py`/`stations_store.py` geworfenen
+`ValueError`-Texte bleiben bewusst deutsch (siehe "Sprache und
+Konventionen" oben).
+
+`_PAGE_HTML`/`_CONFIG_PAGE_HTML` in `webui.py` bleiben EIN Quelltext
+pro Seite, nicht zwei Sprachvarianten: statisches Markup bekommt
+`data-i18n`/`data-i18n-html`/`data-i18n-title`/`data-i18n-placeholder`/
+`data-i18n-aria-label`-Attribute, JS-seitige Dialoge nutzen `t('key',
+vars)`. Ein injiziertes `<script>` (`const I18N = {...}` — das
+komplette `i18n.STRINGS`-Dict für die gewählte Sprache als JSON, plus
+`t()`) und ein synchron beim Laden ausgeführtes `applyStaticI18n()`
+ersetzen die Texte, BEVOR der erste Repaint passiert — kein
+sichtbares Umspringen der Sprache, kein zweiter Template-Mechanismus.
+
+Beide Templates werden trotzdem nur EINMAL pro Sprache tatsächlich
+gerendert, nicht pro Request: `_render_i18n_variants()` läuft beim
+Modul-Import von `webui.py` und ersetzt die zwei Platzhalter
+`%%LANG%%`/`%%I18N_JSON%%` für jede Sprache in `i18n.LANGUAGES`,
+Ergebnis landet in `_PAGE_HTML_BYTES`/`_CONFIG_PAGE_HTML_BYTES` (dict
+`{"de": bytes, "en": bytes}`, analog zu `_MANIFEST_JSON_BYTES` weiter
+oben in derselben Datei). `do_GET` wählt daraus nur per
+`state.language`-Lookup — kein Pro-Request-Stringersatz.
+
+`_check_i18n_coverage()` läuft beim selben Modul-Import: ein Regex
+sammelt alle in den Templates tatsächlich verwendeten
+`data-i18n*`/`t('key'`-Keys und gleicht sie gegen `i18n.STRINGS` ab —
+ein fehlender/vertippter Key wirft sofort beim Start (kein Test-
+Framework im Projekt, siehe oben, das übernimmt hier diese Rolle).
+Der Regex für `t('key'` braucht zwingend ein Lookbehind
+(`(?<![A-Za-z0-9_])t\('`), sonst matcht er in JEDEM Bezeichner, der
+zufällig auf "t(" endet — `document.createElemen`**`t('`**`div')`,
+`spli`**`t('`**`{'...` — beides real aufgetreten (siehe SESSION.md).
+
+`language` ist ein normales `settings_store`-Feld, läuft über denselben
+request/pop-Zyklus wie `tls_enabled`/`stream_url` (spätestens einen
+Hauptloop-Tick nach dem Speichern aktiv) — ANDERS als `tls_enabled`
+aber OHNE Neustart des Containers, weil die Auswahl reiner Dict-Lookup
+ist statt eines Socket-Rewraps. Die Config-Seite lädt sich nach dem
+Speichern trotzdem per `location.reload()` neu, weil pro Sprache schon
+fertiges Markup vorliegt — ein Sprachwechsel ohne Reload würde nur die
+serverseitig injizierten `I18N`-Strings der aktuell geladenen Seite
+treffen, nicht z.B. eine neu aufgerufene Unterseite.
+
 ## Docker-Besonderheiten
 
 - `stations.json`, `settings.json` und `fingerprints.db` sind als **einzelne

@@ -28,6 +28,7 @@ import xml.etree.ElementTree as ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import fingerprint
+import i18n
 import settings_store
 import station_import
 import stations_store
@@ -119,6 +120,7 @@ class SwitcherState:
         self._prebuffer_count = settings_store.DEFAULTS["prebuffer_count"]
         self._stream_url = settings_store.DEFAULTS["stream_url"]
         self._tls_enabled = settings_store.DEFAULTS["tls_enabled"]
+        self._language = settings_store.DEFAULTS["language"]
         self._news_break_cfg = dict(settings_store.DEFAULTS["news_break"])
         self._news_break_active = False
         self._news_break_file = None
@@ -143,6 +145,7 @@ class SwitcherState:
             self._prebuffer_count = settings["prebuffer_count"]
             self._stream_url = settings["stream_url"]
             self._tls_enabled = settings["tls_enabled"]
+            self._language = settings["language"]
             self._news_break_cfg = settings["news_break"]
             self._stt_filter_cfg = settings["stt_filter"]
 
@@ -172,6 +175,15 @@ class SwitcherState:
         Containers eine sichtbare Wirkung."""
         with self._lock:
             return self._tls_enabled
+
+    @property
+    def language(self) -> str:
+        """Anders als tls_enabled wirkt eine Änderung sofort: do_GET liest
+        diesen Wert bei jedem Seitenaufruf frisch und wählt damit nur eine
+        von zwei beim Modul-Import bereits fertig gerenderten HTML-Varianten
+        aus (siehe _PAGE_HTML_BYTES), kein Server-Neustart nötig."""
+        with self._lock:
+            return self._language
 
     @property
     def news_break_cfg(self) -> dict:
@@ -642,7 +654,7 @@ def _build_status(state: SwitcherState, icecast_cfg: dict) -> dict:
 
 
 _PAGE_HTML = """<!doctype html>
-<html lang="de">
+<html lang="%%LANG%%">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -777,44 +789,44 @@ _PAGE_HTML = """<!doctype html>
 <body>
 <img class="banner" src="/radiozapper.webp" alt="RadioZapper">
 <h1 class="sr-only">RadioZapper</h1>
-<div id="current">Lade …</div>
+<div id="current" data-i18n="common_loading">Lade …</div>
 <div id="now-playing"></div>
 <div class="zap-nav">
-  <button id="btn-prev-station" title="Vorheriger Sender">⏮ Zurück</button>
-  <button id="btn-next-station" title="Nächster Sender">Weiter ⏭</button>
+  <button id="btn-prev-station" title="Vorheriger Sender" data-i18n="idx_prev_btn" data-i18n-title="idx_prev_title">⏮ Zurück</button>
+  <button id="btn-next-station" title="Nächster Sender" data-i18n="idx_next_btn" data-i18n-title="idx_next_title">Weiter ⏭</button>
 </div>
 <div id="address-row">
-  <button id="btn-qr-vlc" hidden title="QR-Code für die Stream-Adresse (VLC & Co.)">
-    <span>▶️</span><span class="icon-label">VLC</span>
+  <button id="btn-qr-vlc" hidden title="QR-Code für die Stream-Adresse (VLC & Co.)" data-i18n-title="idx_qr_vlc_title">
+    <span>▶️</span><span class="icon-label" data-i18n="idx_qr_vlc_label">VLC</span>
   </button>
-  <button id="btn-qr-phone" title="QR-Code für dieses Web-Interface (zum Öffnen auf dem Handy)">
-    <span>📱</span><span class="icon-label">Handy</span>
+  <button id="btn-qr-phone" title="QR-Code für dieses Web-Interface (zum Öffnen auf dem Handy)" data-i18n-title="idx_qr_phone_title">
+    <span>📱</span><span class="icon-label" data-i18n="idx_qr_phone_label">Handy</span>
   </button>
 </div>
 <audio id="player" controls preload="none"></audio>
 
 <div id="qr-modal" class="modal-overlay" hidden>
   <div class="modal-box">
-    <button id="qr-modal-close" class="modal-close" aria-label="Schließen">✕</button>
-    <h2 id="qr-modal-title">Adresse zum Scannen</h2>
+    <button id="qr-modal-close" class="modal-close" aria-label="Schließen" data-i18n-aria-label="idx_qr_modal_close_aria">✕</button>
+    <h2 id="qr-modal-title" data-i18n="idx_qr_modal_title">Adresse zum Scannen</h2>
     <div id="qr-code-container"></div>
     <div id="qr-modal-url"></div>
-    <button id="qr-modal-copy">📋 Adresse kopieren</button>
+    <button id="qr-modal-copy" data-i18n="idx_qr_modal_copy_btn">📋 Adresse kopieren</button>
   </div>
 </div>
 
 <div class="action-buttons">
-  <button id="btn-zapping-error" title="Letzten fälschlich erkannten Werbe-Clip aus der Datenbank löschen">🛑 Zapping-Fehler</button>
-  <button id="btn-gesabbel" title="Sofort weiterschalten, weil hier gerade geredet wird">⚡ ZAPPEN!</button>
+  <button id="btn-zapping-error" title="Letzten fälschlich erkannten Werbe-Clip aus der Datenbank löschen" data-i18n="idx_zapping_error_btn" data-i18n-title="idx_zapping_error_title">🛑 Zapping-Fehler</button>
+  <button id="btn-gesabbel" title="Sofort weiterschalten, weil hier gerade geredet wird" data-i18n="idx_gesabbel_btn" data-i18n-title="idx_gesabbel_title">⚡ ZAPPEN!</button>
 </div>
 <div class="filter-toggle-row">
-  <button id="btn-filter-toggle" title="Automatische Sprache-Erkennung komplett pausieren/wieder anschalten">Sabbelfilter deaktivieren</button>
+  <button id="btn-filter-toggle" title="Automatische Sprache-Erkennung komplett pausieren/wieder anschalten" data-i18n="idx_filter_disable_btn" data-i18n-title="idx_filter_toggle_title">Sabbelfilter deaktivieren</button>
 </div>
 <div id="action-msg"></div>
 
 <div id="bs-meter-wrap">
   <div id="bs-meter-label">
-    <span>🤥 Bullshitometer</span>
+    <span data-i18n="idx_bs_meter_label">🤥 Bullshitometer</span>
     <span id="bs-meter-pct">–</span>
   </div>
   <div id="bs-meter-track">
@@ -822,15 +834,32 @@ _PAGE_HTML = """<!doctype html>
   </div>
 </div>
 
-<h2>Sender</h2>
+<h2 data-i18n="idx_stations_heading">Sender</h2>
 <ul id="stations"></ul>
 
-<h2>Hörer</h2>
-<div id="listeners">Lade …</div>
+<h2 data-i18n="idx_listeners_heading">Hörer</h2>
+<div id="listeners" data-i18n="common_loading">Lade …</div>
 
 <div id="meta"></div>
-<a class="config-link" href="/config">⚙ Sender verwalten</a>
+<a class="config-link" href="/config" data-i18n="idx_config_link">⚙ Sender verwalten</a>
 
+<script>
+const LANG = "%%LANG%%";
+const I18N = %%I18N_JSON%%;
+function t(key, vars) {
+  let s = (I18N && I18N[key]) || key;
+  if (vars) for (const k in vars) s = s.split('{' + k + '}').join(vars[k]);
+  return s;
+}
+function applyStaticI18n() {
+  document.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = t(el.getAttribute('data-i18n')); });
+  document.querySelectorAll('[data-i18n-html]').forEach((el) => { el.innerHTML = t(el.getAttribute('data-i18n-html')); });
+  document.querySelectorAll('[data-i18n-title]').forEach((el) => { el.title = t(el.getAttribute('data-i18n-title')); });
+  document.querySelectorAll('[data-i18n-placeholder]').forEach((el) => { el.placeholder = t(el.getAttribute('data-i18n-placeholder')); });
+  document.querySelectorAll('[data-i18n-aria-label]').forEach((el) => { el.setAttribute('aria-label', t(el.getAttribute('data-i18n-aria-label'))); });
+}
+applyStaticI18n();
+</script>
 <script src="/qrcode.js"></script>
 <script>
 function esc(s) {
@@ -881,7 +910,7 @@ async function refresh() {
     const res = await fetch('/api/status');
     data = await res.json();
   } catch (e) {
-    document.getElementById('current').textContent = 'Verbindung zum Server verloren …';
+    document.getElementById('current').textContent = t('idx_connection_lost');
     return;
   }
   applyStatus(data);
@@ -914,15 +943,15 @@ function applyStatus(data) {
   lastStatus = data;
 
   document.getElementById('current').textContent =
-    data.current_name ? ('▶ Läuft gerade: ' + data.current_name) : 'Kein Sender aktiv';
+    data.current_name ? t('idx_current_playing', {name: data.current_name}) : t('idx_no_station_active');
   document.getElementById('now-playing').textContent = data.now_playing ? '🎵 ' + data.now_playing : '';
 
   const filterBtn = document.getElementById('btn-filter-toggle');
   if (data.filter_enabled === false) {
-    filterBtn.textContent = 'Sabbelfilter aktivieren';
+    filterBtn.textContent = t('idx_filter_enable_btn');
     filterBtn.classList.add('disabled-state');
   } else {
-    filterBtn.textContent = 'Sabbelfilter deaktivieren';
+    filterBtn.textContent = t('idx_filter_disable_btn');
     filterBtn.classList.remove('disabled-state');
   }
 
@@ -936,10 +965,10 @@ function applyStatus(data) {
   const bsFill = document.getElementById('bs-meter-fill');
   const bsPct = document.getElementById('bs-meter-pct');
   if (data.news_break_active) {
-    bsPct.textContent = '📰 Pause';
+    bsPct.textContent = t('idx_news_break');
     bsWrap.classList.add('paused');
   } else if (data.filter_enabled === false) {
-    bsPct.textContent = 'Filter aus';
+    bsPct.textContent = t('idx_filter_off');
     bsWrap.classList.add('paused');
   } else {
     const pct = Math.round((data.speech_probability || 0) * 100);
@@ -1003,11 +1032,11 @@ function applyStatus(data) {
 
   const listenersEl = document.getElementById('listeners');
   if (data.listeners === null) {
-    listenersEl.textContent = 'Hörer-Info nicht verfügbar.';
+    listenersEl.textContent = t('idx_listeners_unavailable');
   } else if (data.listeners.length === 0) {
-    listenersEl.textContent = 'Aktuell keine Hörer verbunden.';
+    listenersEl.textContent = t('idx_listeners_none');
   } else {
-    let out = '<table><tr><th>IP</th><th>Verbunden seit</th><th>Client</th></tr>';
+    let out = `<table><tr><th>${t('idx_listeners_col_ip')}</th><th>${t('idx_listeners_col_since')}</th><th>${t('idx_listeners_col_client')}</th></tr>`;
     for (const l of data.listeners) {
       const mins = Math.floor(l.connected_seconds / 60);
       const secs = l.connected_seconds % 60;
@@ -1018,7 +1047,8 @@ function applyStatus(data) {
     listenersEl.innerHTML = out;
   }
 
-  document.getElementById('meta').textContent = 'Aktualisiert: ' + new Date().toLocaleTimeString('de-DE');
+  document.getElementById('meta').textContent =
+    t('idx_meta_updated', {time: new Date().toLocaleTimeString(LANG === 'de' ? 'de-DE' : 'en-GB')});
 }
 
 // Zeigt einen Sender-Wechsel sofort im UI an, ohne auf die Server-Antwort
@@ -1030,7 +1060,7 @@ function applyStatus(data) {
 // nächsten Status-Update von selbst.
 function applyOptimistic(station) {
   if (!station) return;
-  document.getElementById('current').textContent = '▶ Läuft gerade: ' + station.name;
+  document.getElementById('current').textContent = t('idx_current_playing', {name: station.name});
   document.getElementById('now-playing').textContent = '';
   if (lastStatus) lastStatus.current_id = station.id;
   document.querySelectorAll('#stations li button').forEach((btn) => {
@@ -1075,9 +1105,9 @@ async function switchRelative(direction) {
   try {
     const res = await fetch(direction > 0 ? '/api/switch/next' : '/api/switch/prev', {method: 'POST'});
     const data = await res.json();
-    if (!data.ok) setActionMsg('Fehler: ' + (data.error || 'unbekannt'));
+    if (!data.ok) setActionMsg(t('common_error', {msg: data.error || t('common_unknown')}));
   } catch (e) {
-    setActionMsg('Fehler: ' + e.message);
+    setActionMsg(t('common_error', {msg: e.message}));
   } finally {
     setSwitching(false);
   }
@@ -1121,7 +1151,7 @@ function openQrModal(url, title) {
 // kodiert also immer dieselbe currentStreamUrl, unabhängig davon, welcher
 // Sender gerade läuft. Kein Bezug zur Senderliste nötig.
 document.getElementById('btn-qr-vlc').addEventListener('click', () => {
-  openQrModal(currentStreamUrl, '▶️ Stream-Adresse zum Scannen (VLC & Co.)');
+  openQrModal(currentStreamUrl, t('idx_qr_vlc_modal_title'));
 });
 
 // location.origin statt einer fest einprogrammierten Adresse -- dieselbe
@@ -1129,7 +1159,7 @@ document.getElementById('btn-qr-vlc').addEventListener('click', () => {
 // über die DIESER Browser die Seite gerade selbst erreicht, unabhängig von
 // Hostname/Port des jeweiligen Deployments.
 document.getElementById('btn-qr-phone').addEventListener('click', () => {
-  openQrModal(location.origin + '/', '📱 Web-Interface-Adresse zum Scannen');
+  openQrModal(location.origin + '/', t('idx_qr_phone_modal_title'));
 });
 
 document.getElementById('qr-modal-close').addEventListener('click', closeQrModal);
@@ -1142,9 +1172,9 @@ document.addEventListener('keydown', (ev) => {
 document.getElementById('qr-modal-copy').addEventListener('click', async () => {
   try {
     await copyToClipboard(qrModalUrl);
-    setActionMsg('📋 Adresse kopiert.');
+    setActionMsg(t('idx_address_copied'));
   } catch (e) {
-    setActionMsg('Kopieren fehlgeschlagen: ' + e.message);
+    setActionMsg(t('idx_copy_failed', {msg: e.message}));
   }
 });
 
@@ -1153,35 +1183,35 @@ document.getElementById('btn-zapping-error').addEventListener('click', async () 
     const res = await fetch('/api/fingerprint/undo', {method: 'POST'});
     const data = await res.json();
     if (data.ok) {
-      let msg = '✓ Clip gelöscht' + (data.label ? (': ' + data.label) : '');
-      if (data.switched_back_to) msg += ' — zurück zu ' + data.switched_back_to;
+      let msg = t('idx_clip_deleted') + (data.label ? (': ' + data.label) : '');
+      if (data.switched_back_to) msg += t('idx_switched_back_to', {name: data.switched_back_to});
       setActionMsg(msg);
       setTimeout(refresh, 1000);
     } else {
       setActionMsg('– ' + data.error);
     }
   } catch (e) {
-    setActionMsg('Fehler: ' + e.message);
+    setActionMsg(t('common_error', {msg: e.message}));
   }
 });
 
 document.getElementById('btn-gesabbel').addEventListener('click', async () => {
   try {
     await fetch('/api/skip', {method: 'POST'});
-    setActionMsg('🗣️ Wird umgeschaltet …');
+    setActionMsg(t('idx_zap_switching'));
     setTimeout(refresh, 1500);
   } catch (e) {
-    setActionMsg('Fehler: ' + e.message);
+    setActionMsg(t('common_error', {msg: e.message}));
   }
 });
 
 document.getElementById('btn-filter-toggle').addEventListener('click', async () => {
   try {
     await fetch('/api/filter/toggle', {method: 'POST'});
-    setActionMsg('Sabbelfilter wird umgeschaltet …');
+    setActionMsg(t('idx_filter_switching'));
     setTimeout(refresh, 1200);
   } catch (e) {
-    setActionMsg('Fehler: ' + e.message);
+    setActionMsg(t('common_error', {msg: e.message}));
   }
 });
 
@@ -1210,7 +1240,7 @@ if ('serviceWorker' in navigator) {
 
 
 _CONFIG_PAGE_HTML = """<!doctype html>
-<html lang="de">
+<html lang="%%LANG%%">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -1237,6 +1267,14 @@ _CONFIG_PAGE_HTML = """<!doctype html>
     font-size: .75rem; font-weight: normal; padding: .3rem .6rem;
     border-radius: .4rem; border: 1px solid #999; background: none;
     color: inherit; cursor: pointer; flex-shrink: 0;
+  }
+  details.category-details { margin-top: 2rem; }
+  details.category-details summary {
+    cursor: pointer; list-style-position: outside;
+  }
+  details.category-details summary h2.category-header {
+    display: inline-flex; margin-top: 0; border-bottom: none;
+    padding-bottom: 0; vertical-align: middle;
   }
   ul.stations { list-style: none; padding: 0; margin: .5rem 0; }
   ul.stations li {
@@ -1331,83 +1369,83 @@ _CONFIG_PAGE_HTML = """<!doctype html>
 </head>
 <body>
 <img class="banner" src="/radiozapper.webp" alt="RadioZapper">
-<a class="back" href="/">← zurück zum Player</a>
-<h1>⚙ Sender verwalten</h1>
+<a class="back" href="/" data-i18n="cfg_back_link">← zurück zum Player</a>
+<h1 data-i18n="cfg_heading">⚙ Sender verwalten</h1>
 
-<h2>📰 Nachrichten-Pause</h2>
+<h2 data-i18n="cfg_news_break_heading">📰 Nachrichten-Pause</h2>
 <form id="news-break-form">
-  <p class="hint">Spielt zur vollen/halben Stunde statt eines Radiosenders
+  <p class="hint" data-i18n-html="cfg_news_break_hint">Spielt zur vollen/halben Stunde statt eines Radiosenders
     eine zufällige lokale MP3 ab. Der MP3-Ordner unten ist ein
     <strong>Container-interner Pfad</strong> — der eigentliche Host-Ordner
     (z.B. ein SMB-Mount) wird über <code>NEWS_MP3_FOLDER</code> in
     <code>.env</code> nach <code>/app/news_mp3</code> gemountet und braucht
     dafür einen Neustart des Containers, kein Feld hier.</p>
   <label class="checkbox">
-    <input type="checkbox" id="nb-enabled"> aktiv
+    <input type="checkbox" id="nb-enabled"> <span data-i18n="cfg_active_label">aktiv</span>
   </label>
-  <label>MP3-Ordner (Container-Pfad)
+  <label><span data-i18n="cfg_nb_folder_label">MP3-Ordner (Container-Pfad)</span>
     <input type="text" id="nb-mp3-folder" placeholder="/app/news_mp3" required>
   </label>
   <p class="hint" id="nb-mp3-folder-host"></p>
-  <label>Zeitfenster (Minuten)
+  <label><span data-i18n="cfg_nb_window_label">Zeitfenster (Minuten)</span>
     <input type="number" id="nb-window" min="0.1" max="15" step="0.1" required>
   </label>
   <label class="checkbox">
-    <input type="checkbox" id="nb-hours-enabled"> nur zu bestimmten Stunden aktiv
+    <input type="checkbox" id="nb-hours-enabled"> <span data-i18n="cfg_nb_hours_enabled_label">nur zu bestimmten Stunden aktiv</span>
   </label>
   <div class="hours-row">
-    <label>von Stunde
+    <label><span data-i18n="cfg_nb_hour_start_label">von Stunde</span>
       <input type="number" id="nb-hour-start" min="0" max="24" step="1">
     </label>
-    <label>bis Stunde
+    <label><span data-i18n="cfg_nb_hour_end_label">bis Stunde</span>
       <input type="number" id="nb-hour-end" min="0" max="24" step="1">
     </label>
   </div>
-  <button type="submit">Speichern</button>
+  <button type="submit" data-i18n="common_save">Speichern</button>
 </form>
 
-<div id="categories">Lade …</div>
+<div id="categories" data-i18n="common_loading">Lade …</div>
 
-<h2>Neuer Sender</h2>
+<h2 data-i18n="cfg_new_station_heading">Neuer Sender</h2>
 <form id="add-form">
-  <input type="text" id="add-name" placeholder="Name" required>
-  <input type="url" id="add-url" placeholder="Stream-URL (https://...)" required>
+  <input type="text" id="add-name" placeholder="Name" data-i18n-placeholder="cfg_add_name_placeholder" required>
+  <input type="url" id="add-url" placeholder="Stream-URL (https://...)" data-i18n-placeholder="cfg_add_url_placeholder" required>
   <select id="add-category"></select>
-  <label><input type="checkbox" id="add-enabled" checked> aktiviert</label>
-  <button type="submit">Hinzufügen</button>
+  <label><input type="checkbox" id="add-enabled" checked> <span data-i18n="cfg_enabled_label">aktiviert</span></label>
+  <button type="submit" data-i18n="cfg_add_btn">Hinzufügen</button>
 </form>
 
-<h2>📻 Sender-Import</h2>
+<h2 data-i18n="cfg_import_heading">📻 Sender-Import</h2>
 <form id="import-form">
-  <p class="hint">Lädt eine M3U-Playlist und hört bei jedem Sender ein
+  <p class="hint" data-i18n-html="cfg_import_hint">Lädt eine M3U-Playlist und hört bei jedem Sender ein
     paar Sekunden mit: übernommen wird nur, wer dabei durchgehend Audio
     liefert (nicht bloß beim Verbinden). Neue Sender landen
     <strong>deaktiviert</strong> in der Kategorie "Unsortiert" — du
     entscheidest per Haken, wer in die Rotation darf. Kann bei einer
     langen Liste einige Minuten dauern.</p>
-  <label>Playlist-URL
+  <label><span data-i18n="cfg_import_url_label">Playlist-URL</span>
     <input type="url" id="import-url" placeholder="http://...">
   </label>
-  <button type="submit" id="btn-import">Sender importieren</button>
+  <button type="submit" id="btn-import" data-i18n="cfg_import_btn">Sender importieren</button>
 </form>
 <div id="import-progress"></div>
 
-<h2>🔗 Streaming-Adresse</h2>
+<h2 data-i18n="cfg_stream_heading">🔗 Streaming-Adresse</h2>
 <form id="stream-url-form">
-  <p class="hint">Adresse, die auf der Startseite unter "Streaming via VLC"
+  <p class="hint" data-i18n-html="cfg_stream_hint">Adresse, die auf der Startseite unter "Streaming via VLC"
     angezeigt wird (zum Eintragen in einen externen Player). Leer lassen,
     um sie automatisch aus der Adresse zu bilden, über die die Startseite
     gerade im Browser aufgerufen wird.</p>
-  <label>Stream-URL
+  <label><span data-i18n="cfg_stream_url_label">Stream-URL</span>
     <input type="url" id="stream-url-input"
            placeholder="http://dockfish.icefish-ghost.ts.net:8000/radiozapper.mp3">
   </label>
-  <button type="submit">Speichern</button>
+  <button type="submit" data-i18n="common_save">Speichern</button>
 </form>
 
-<h2>🔒 HTTPS</h2>
+<h2 data-i18n="cfg_tls_heading">🔒 HTTPS</h2>
 <form id="tls-form">
-  <p class="hint">Verschlüsselt den Zugriff aufs Web-Interface (Player-
+  <p class="hint" data-i18n-html="cfg_tls_hint">Verschlüsselt den Zugriff aufs Web-Interface (Player-
     Seite und diese Config-Seite) per TLS. Braucht ein Zertifikat unter
     <code>TLS_CERT_FILE</code>/<code>TLS_KEY_FILE</code> in <code>.env</code>
     (Host-Pfade zu PEM-Dateien, z.B. per <code>tailscale cert</code>
@@ -1420,28 +1458,44 @@ _CONFIG_PAGE_HTML = """<!doctype html>
     Zertifikate in <code>.env</code> eingetragen sind — dafür gibt es
     keinen eigenen Schalter.</p>
   <label class="checkbox">
-    <input type="checkbox" id="tls-enabled"> HTTPS fürs Web-Interface aktiv
+    <input type="checkbox" id="tls-enabled"> <span data-i18n="cfg_tls_checkbox_label">HTTPS fürs Web-Interface aktiv</span>
   </label>
-  <button type="submit">Speichern</button>
+  <button type="submit" data-i18n="common_save">Speichern</button>
 </form>
 
-<h2>⏱ Puffer-Einstellungen</h2>
+<h2 data-i18n="cfg_language_heading">🌐 Sprache</h2>
+<form id="language-form">
+  <p class="hint" data-i18n-html="cfg_language_hint">Sprache der Web-Oberfläche (Player- und Config-Seite). Wirkt
+    sofort für neue Seitenaufrufe; diese Seite lädt nach dem Speichern
+    automatisch neu. Startwert kommt aus <code>UI_LANGUAGE</code> in
+    <code>.env</code>, danach gewinnt immer die hier gespeicherte
+    Einstellung.</p>
+  <label><span data-i18n="cfg_language_label">Sprache der Oberfläche</span>
+    <select id="language-select">
+      <option value="de">Deutsch</option>
+      <option value="en">English</option>
+    </select>
+  </label>
+  <button type="submit" data-i18n="common_save">Speichern</button>
+</form>
+
+<h2 data-i18n="cfg_buffer_heading">⏱ Puffer-Einstellungen</h2>
 <form id="settings-form">
-  <p class="hint">Die nächsten Sender in Rotationsreihenfolge laufen im
+  <p class="hint" data-i18n-html="cfg_buffer_hint">Die nächsten Sender in Rotationsreihenfolge laufen im
     Hintergrund mit und halten Audio vor, damit Wechsel flüssig ablaufen.
     Mehr Sekunden/Sender = flüssiger, aber mehr Bandbreite/CPU.</p>
-  <label>Sekunden pro gepuffertem Sender
+  <label><span data-i18n="cfg_buffer_seconds_label">Sekunden pro gepuffertem Sender</span>
     <input type="number" id="settings-seconds" min="0" max="60" step="0.5" required>
   </label>
-  <label>Anzahl vorausgepufferter Sender
+  <label><span data-i18n="cfg_buffer_count_label">Anzahl vorausgepufferter Sender</span>
     <input type="number" id="settings-count" min="0" max="20" step="1" required>
   </label>
-  <button type="submit">Speichern</button>
+  <button type="submit" data-i18n="common_save">Speichern</button>
 </form>
 
-<h2>🗣 STT-Sprachfilter</h2>
+<h2 data-i18n="cfg_stt_heading">🗣 STT-Sprachfilter</h2>
 <form id="stt-form">
-  <p class="hint">Zusätzliches Signal per Speech-to-Text: erkennt, ob
+  <p class="hint" data-i18n-html="cfg_stt_hint">Zusätzliches Signal per Speech-to-Text: erkennt, ob
     gerade zusammenhängender deutscher Text zu hören ist (echte
     Moderation) oder nicht (auch deutsch gesungene Musik zählt dann als
     "keine Sprache") — ergänzt VAD/Heuristik, die reinen Gesang oft
@@ -1450,48 +1504,65 @@ _CONFIG_PAGE_HTML = """<!doctype html>
     ressourcenhungriger. Modellpfad/-größe sind Container-interne Werte
     (siehe README) — braucht ggf. einen Neustart des Containers, falls
     das Modell erstmals gemountet wird.</p>
-  <p id="stt-status-line" class="hint">Lade Status …</p>
+  <p id="stt-status-line" class="hint" data-i18n="cfg_stt_status_loading">Lade Status …</p>
   <label class="checkbox">
-    <input type="checkbox" id="stt-enabled"> aktiv
+    <input type="checkbox" id="stt-enabled"> <span data-i18n="cfg_active_label">aktiv</span>
   </label>
-  <label>Engine
+  <label><span data-i18n="cfg_stt_engine_label">Engine</span>
     <select id="stt-engine">
-      <option value="vosk">Vosk (leichtgewicht, Pi-tauglich)</option>
-      <option value="whisper">Whisper (genauer, ressourcenhungriger)</option>
+      <option value="vosk" data-i18n="cfg_stt_engine_vosk_option">Vosk (leichtgewicht, Pi-tauglich)</option>
+      <option value="whisper" data-i18n="cfg_stt_engine_whisper_option">Whisper (genauer, ressourcenhungriger)</option>
     </select>
   </label>
-  <label>Vosk-Modellpfad (Container-Pfad)
+  <label><span data-i18n="cfg_stt_vosk_path_label">Vosk-Modellpfad (Container-Pfad)</span>
     <input type="text" id="stt-vosk-path" placeholder="/app/vosk-model-de">
   </label>
   <p class="hint" id="stt-vosk-path-host"></p>
-  <label>Whisper-Modellgröße
+  <label><span data-i18n="cfg_stt_whisper_size_label">Whisper-Modellgröße</span>
     <input type="text" id="stt-whisper-size" placeholder="tiny">
   </label>
-  <label>Sample-Intervall (Sekunden)
+  <label><span data-i18n="cfg_stt_interval_label">Sample-Intervall (Sekunden)</span>
     <input type="number" id="stt-interval" min="2" max="60" step="0.5" required>
   </label>
-  <label>Konfidenz-Schwelle (0–1)
+  <label><span data-i18n="cfg_stt_threshold_label">Konfidenz-Schwelle (0–1)</span>
     <input type="number" id="stt-threshold" min="0" max="1" step="0.05" required>
   </label>
-  <label>Verknüpfung mit VAD/Heuristik
+  <label><span data-i18n="cfg_stt_combine_label">Verknüpfung mit VAD/Heuristik</span>
     <select id="stt-combine">
-      <option value="and">UND — beide müssen "Sprache" sagen (empfohlen)</option>
-      <option value="or">ODER — eines reicht</option>
+      <option value="and" data-i18n="cfg_stt_combine_and_option">UND — beide müssen "Sprache" sagen (empfohlen)</option>
+      <option value="or" data-i18n="cfg_stt_combine_or_option">ODER — eines reicht</option>
     </select>
   </label>
-  <button type="submit">Speichern</button>
+  <button type="submit" data-i18n="common_save">Speichern</button>
 </form>
 
 <section id="fingerprint-section">
-  <h2 style="margin-top:0">🗑 Fingerprint-Datenbank</h2>
-  <p class="hint">Löscht alle gelernten Jingle-/Werbespot-Clips (nicht
+  <h2 style="margin-top:0" data-i18n="cfg_fingerprint_heading">🗑 Fingerprint-Datenbank</h2>
+  <p class="hint" data-i18n-html="cfg_fingerprint_hint">Löscht alle gelernten Jingle-/Werbespot-Clips (nicht
     die Senderliste). Danach lernt die Erkennung wieder bei Null.</p>
-  <button type="button" id="btn-clear-fingerprints">Clip-DB leeren</button>
+  <button type="button" id="btn-clear-fingerprints" data-i18n="cfg_fingerprint_clear_btn">Clip-DB leeren</button>
 </section>
 
 <div id="msg"></div>
 
 <script>
+const LANG = "%%LANG%%";
+const I18N = %%I18N_JSON%%;
+function t(key, vars) {
+  let s = (I18N && I18N[key]) || key;
+  if (vars) for (const k in vars) s = s.split('{' + k + '}').join(vars[k]);
+  return s;
+}
+function applyStaticI18n() {
+  document.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = t(el.getAttribute('data-i18n')); });
+  document.querySelectorAll('[data-i18n-html]').forEach((el) => { el.innerHTML = t(el.getAttribute('data-i18n-html')); });
+  document.querySelectorAll('[data-i18n-title]').forEach((el) => { el.title = t(el.getAttribute('data-i18n-title')); });
+  document.querySelectorAll('[data-i18n-placeholder]').forEach((el) => { el.placeholder = t(el.getAttribute('data-i18n-placeholder')); });
+  document.querySelectorAll('[data-i18n-aria-label]').forEach((el) => { el.setAttribute('aria-label', t(el.getAttribute('data-i18n-aria-label'))); });
+}
+applyStaticI18n();
+document.getElementById('language-select').value = LANG;
+
 function esc(s) {
   const d = document.createElement('div');
   d.textContent = s == null ? '' : String(s);
@@ -1499,6 +1570,13 @@ function esc(s) {
 }
 
 let categories = [];
+// "Unsortiert" landet nach einem Import oft mit hunderten Sendern (siehe
+// CLAUDE.md, "Config-Seite skaliert nicht auf mehrere hundert Sender") --
+// standardmäßig eingeklappt hinter einem <details>. loadStations() baut die
+// Kategorie-Liste bei praktisch jeder Aktion (Haken setzen, Bearbeiten,
+// Löschen, "Alle deaktivieren", ...) komplett neu auf; ohne dieses Merken
+// würde <details> dabei jedes Mal wieder zuklappen.
+let unsortedExpanded = false;
 let editingId = null;
 let msgTimer = null;
 
@@ -1516,7 +1594,7 @@ async function api(path, opts) {
   try {
     data = await res.json();
   } catch (e) {
-    throw new Error('Ungültige Antwort vom Server');
+    throw new Error(t('cfg_invalid_response'));
   }
   if (!res.ok || data.ok === false) {
     throw new Error(data.error || ('HTTP ' + res.status));
@@ -1529,7 +1607,7 @@ async function loadStations() {
   try {
     data = await api('/api/config/stations');
   } catch (e) {
-    showMsg('Konnte Senderliste nicht laden: ' + e.message, true);
+    showMsg(t('cfg_load_stations_failed', {msg: e.message}), true);
     return;
   }
   categories = data.categories;
@@ -1544,20 +1622,38 @@ async function loadStations() {
   for (const cat of categories) {
     const stations = data.stations
       .filter(s => s.category === cat)
-      .sort((a, b) => a.name.localeCompare(b.name, 'de'));
+      .sort((a, b) => a.name.localeCompare(b.name, LANG));
 
     const h2 = document.createElement('h2');
     h2.className = 'category-header';
     const h2Label = document.createElement('span');
     h2Label.textContent = cat;
     h2.appendChild(h2Label);
-    container.appendChild(h2);
+
+    // "Unsortiert" ist die einzige Kategorie, die typischerweise durch einen
+    // Import mit hunderten Sendern gefüllt wird -- hinter <details> versteckt,
+    // alle anderen Kategorien bleiben unverändert immer sichtbar.
+    const isUnsorted = cat === 'Unsortiert';
+    let parent = container;
+    if (isUnsorted) {
+      const details = document.createElement('details');
+      details.className = 'category-details';
+      details.open = unsortedExpanded;
+      details.addEventListener('toggle', () => { unsortedExpanded = details.open; });
+      const summary = document.createElement('summary');
+      summary.appendChild(h2);
+      details.appendChild(summary);
+      container.appendChild(details);
+      parent = details;
+    } else {
+      container.appendChild(h2);
+    }
 
     if (stations.length === 0) {
       const p = document.createElement('div');
       p.className = 'empty';
-      p.textContent = 'Keine Sender in dieser Kategorie.';
-      container.appendChild(p);
+      p.textContent = t('cfg_no_stations_in_category');
+      parent.appendChild(p);
       continue;
     }
 
@@ -1565,16 +1661,17 @@ async function loadStations() {
     if (enabledCount > 0) {
       const disableAllBtn = document.createElement('button');
       disableAllBtn.className = 'disable-all-btn';
-      disableAllBtn.textContent = 'Alle deaktivieren';
-      disableAllBtn.title = `Alle ${enabledCount} aktivierten Sender in "${cat}" deaktivieren`;
-      disableAllBtn.addEventListener('click', async () => {
-        if (!confirm(`Wirklich alle ${enabledCount} aktivierten Sender in "${cat}" deaktivieren?`)) return;
+      disableAllBtn.textContent = t('cfg_disable_all_btn');
+      disableAllBtn.title = t('cfg_disable_all_title', {count: enabledCount, cat});
+      disableAllBtn.addEventListener('click', async (ev) => {
+        ev.preventDefault(); // sonst schließt der Klick im <summary> zusätzlich das <details>
+        if (!confirm(t('cfg_disable_all_confirm', {count: enabledCount, cat}))) return;
         try {
           const data = await api('/api/config/categories/' + encodeURIComponent(cat) + '/disable-all', {method: 'POST'});
-          showMsg(`${data.changed} Sender in "${cat}" deaktiviert.`, false);
+          showMsg(t('cfg_disable_all_done', {count: data.changed, cat}), false);
           loadStations();
         } catch (e) {
-          showMsg('Fehler: ' + e.message, true);
+          showMsg(t('common_error', {msg: e.message}), true);
         }
       });
       h2.appendChild(disableAllBtn);
@@ -1585,7 +1682,7 @@ async function loadStations() {
     for (const s of stations) {
       ul.appendChild(renderStationRow(s));
     }
-    container.appendChild(ul);
+    parent.appendChild(ul);
   }
 }
 
@@ -1602,12 +1699,12 @@ function renderStationRow(s) {
     const nameInput = document.createElement('input');
     nameInput.type = 'text';
     nameInput.value = s.name;
-    nameInput.placeholder = 'Name';
+    nameInput.placeholder = t('cfg_add_name_placeholder');
 
     const urlInput = document.createElement('input');
     urlInput.type = 'url';
     urlInput.value = s.url;
-    urlInput.placeholder = 'Stream-URL';
+    urlInput.placeholder = t('cfg_field_url_placeholder');
 
     const catSelect = document.createElement('select');
     catSelect.innerHTML = categories.map(c =>
@@ -1619,7 +1716,7 @@ function renderStationRow(s) {
     li.appendChild(fields);
 
     const saveBtn = document.createElement('button');
-    saveBtn.textContent = 'Speichern';
+    saveBtn.textContent = t('common_save');
     saveBtn.onclick = async () => {
       try {
         await api('/api/config/stations/' + encodeURIComponent(s.id), {
@@ -1631,16 +1728,16 @@ function renderStationRow(s) {
           }),
         });
         editingId = null;
-        showMsg('Gespeichert.', false);
+        showMsg(t('cfg_saved'), false);
         loadStations();
       } catch (e) {
-        showMsg('Fehler: ' + e.message, true);
+        showMsg(t('common_error', {msg: e.message}), true);
       }
     };
     li.appendChild(saveBtn);
 
     const cancelBtn = document.createElement('button');
-    cancelBtn.textContent = 'Abbrechen';
+    cancelBtn.textContent = t('common_cancel');
     cancelBtn.onclick = () => { editingId = null; loadStations(); };
     li.appendChild(cancelBtn);
 
@@ -1650,7 +1747,7 @@ function renderStationRow(s) {
   const checkbox = document.createElement('input');
   checkbox.type = 'checkbox';
   checkbox.checked = s.enabled;
-  checkbox.title = 'aktiviert';
+  checkbox.title = t('cfg_enabled_label');
   checkbox.onchange = async () => {
     const wanted = checkbox.checked;
     try {
@@ -1661,7 +1758,7 @@ function renderStationRow(s) {
       });
       loadStations();
     } catch (e) {
-      showMsg('Fehler: ' + e.message, true);
+      showMsg(t('common_error', {msg: e.message}), true);
       checkbox.checked = !wanted;
     }
   };
@@ -1673,20 +1770,20 @@ function renderStationRow(s) {
   li.appendChild(nameDiv);
 
   const editBtn = document.createElement('button');
-  editBtn.textContent = 'Bearbeiten';
+  editBtn.textContent = t('common_edit');
   editBtn.onclick = () => { editingId = s.id; loadStations(); };
   li.appendChild(editBtn);
 
   const delBtn = document.createElement('button');
-  delBtn.textContent = 'Löschen';
+  delBtn.textContent = t('common_delete');
   delBtn.onclick = async () => {
-    if (!confirm(`"${s.name}" wirklich löschen?`)) return;
+    if (!confirm(t('cfg_delete_confirm', {name: s.name}))) return;
     try {
       await api('/api/config/stations/' + encodeURIComponent(s.id) + '/delete', {method: 'POST'});
-      showMsg('Gelöscht.', false);
+      showMsg(t('cfg_deleted'), false);
       loadStations();
     } catch (e) {
-      showMsg('Fehler: ' + e.message, true);
+      showMsg(t('common_error', {msg: e.message}), true);
     }
   };
   li.appendChild(delBtn);
@@ -1708,10 +1805,10 @@ document.getElementById('add-form').addEventListener('submit', async (ev) => {
     });
     document.getElementById('add-form').reset();
     document.getElementById('add-enabled').checked = true;
-    showMsg('Hinzugefügt.', false);
+    showMsg(t('cfg_added'), false);
     loadStations();
   } catch (e) {
-    showMsg('Fehler: ' + e.message, true);
+    showMsg(t('common_error', {msg: e.message}), true);
   }
 });
 
@@ -1723,13 +1820,13 @@ async function loadSettings() {
     document.getElementById('import-url').value = settings.import_url;
     document.getElementById('stream-url-input').value = settings.stream_url || '';
     document.getElementById('tls-enabled').checked = !!settings.tls_enabled;
+    document.getElementById('language-select').value = settings.language || LANG;
 
     const hostPaths = settings._host_paths || {};
     function hostPathHint(hostPath, envVar) {
       return hostPath
-        ? `📁 Aktuell gemountet von Host-Pfad: ${hostPath} (ändern über ${envVar} in .env + Neustart des Containers)`
-        : `Host-Pfad unbekannt (Container lief noch nicht mit dieser Anzeige -- ` +
-          `docker compose up -d --build radiozapper zeigt ihn danach an).`;
+        ? t('cfg_host_path_mounted', {path: hostPath, envVar})
+        : t('cfg_host_path_unknown');
     }
 
     const nb = settings.news_break || {};
@@ -1754,7 +1851,7 @@ async function loadSettings() {
     document.getElementById('stt-threshold').value = stt.confidence_threshold;
     document.getElementById('stt-combine').value = stt.combine_mode || 'and';
   } catch (e) {
-    showMsg('Konnte Einstellungen nicht laden: ' + e.message, true);
+    showMsg(t('cfg_load_settings_failed', {msg: e.message}), true);
   }
 
   try {
@@ -1762,11 +1859,11 @@ async function loadSettings() {
     const stt = status.stt_status || {};
     const line = document.getElementById('stt-status-line');
     if (!stt.engine) {
-      line.textContent = 'Status: deaktiviert.';
+      line.textContent = t('cfg_stt_status_disabled');
     } else if (stt.available) {
-      line.textContent = `Status: ✅ ${stt.engine} aktiv.`;
+      line.textContent = t('cfg_stt_status_active', {engine: stt.engine});
     } else {
-      line.textContent = `Status: ⚠ deaktiviert (${stt.error || 'Modell nicht ladbar'}).`;
+      line.textContent = t('cfg_stt_status_error', {error: stt.error || t('cfg_stt_status_model_not_loadable')});
     }
   } catch (e) {
     // Statuszeile ist rein informativ -- ein Fehlschlag hier soll das
@@ -1784,9 +1881,9 @@ document.getElementById('settings-form').addEventListener('submit', async (ev) =
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({prebuffer_seconds, prebuffer_count}),
     });
-    showMsg('Puffer-Einstellungen gespeichert.', false);
+    showMsg(t('cfg_buffer_saved'), false);
   } catch (e) {
-    showMsg('Fehler: ' + e.message, true);
+    showMsg(t('common_error', {msg: e.message}), true);
   }
 });
 
@@ -1799,9 +1896,9 @@ document.getElementById('stream-url-form').addEventListener('submit', async (ev)
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({stream_url}),
     });
-    showMsg('Streaming-Adresse gespeichert.', false);
+    showMsg(t('cfg_stream_saved'), false);
   } catch (e) {
-    showMsg('Fehler: ' + e.message, true);
+    showMsg(t('common_error', {msg: e.message}), true);
   }
 });
 
@@ -1814,9 +1911,25 @@ document.getElementById('tls-form').addEventListener('submit', async (ev) => {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({tls_enabled}),
     });
-    showMsg('HTTPS-Einstellung gespeichert — wirkt erst nach Neustart des Containers.', false);
+    showMsg(t('cfg_tls_saved'), false);
   } catch (e) {
-    showMsg('Fehler: ' + e.message, true);
+    showMsg(t('common_error', {msg: e.message}), true);
+  }
+});
+
+document.getElementById('language-form').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const language = document.getElementById('language-select').value;
+  try {
+    await api('/api/config/settings', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({language}),
+    });
+    showMsg(t('cfg_language_saved'), false);
+    setTimeout(() => location.reload(), 600);
+  } catch (e) {
+    showMsg(t('common_error', {msg: e.message}), true);
   }
 });
 
@@ -1841,9 +1954,9 @@ document.getElementById('news-break-form').addEventListener('submit', async (ev)
         news_break_enabled_hours,
       }),
     });
-    showMsg('Nachrichten-Pause gespeichert.', false);
+    showMsg(t('cfg_news_break_saved'), false);
   } catch (e) {
-    showMsg('Fehler: ' + e.message, true);
+    showMsg(t('common_error', {msg: e.message}), true);
   }
 });
 
@@ -1866,10 +1979,10 @@ document.getElementById('stt-form').addEventListener('submit', async (ev) => {
         stt_filter_confidence_threshold, stt_filter_combine_mode,
       }),
     });
-    showMsg('STT-Sprachfilter gespeichert.', false);
+    showMsg(t('cfg_stt_saved'), false);
     loadSettings();
   } catch (e) {
-    showMsg('Fehler: ' + e.message, true);
+    showMsg(t('common_error', {msg: e.message}), true);
   }
 });
 
@@ -1884,14 +1997,14 @@ async function pollImportStatus() {
   try {
     data = await api('/api/config/import/status');
   } catch (e) {
-    setImportProgress('Fehler beim Abfragen des Fortschritts: ' + e.message);
+    setImportProgress(t('cfg_import_progress_error', {msg: e.message}));
     return;
   }
 
   if (data.phase === 'downloading') {
-    setImportProgress('Lade Playlist …');
+    setImportProgress(t('cfg_import_loading_playlist'));
   } else if (data.phase === 'checking') {
-    setImportProgress(`Prüfe Sender … ${data.checked} von ${data.total}`);
+    setImportProgress(t('cfg_import_checking', {checked: data.checked, total: data.total}));
   }
 
   if (!data.running) {
@@ -1900,12 +2013,11 @@ async function pollImportStatus() {
     document.getElementById('btn-import').disabled = false;
     if (data.phase === 'error') {
       setImportProgress('');
-      showMsg('Import fehlgeschlagen: ' + data.error, true);
+      showMsg(t('cfg_import_failed', {error: data.error}), true);
     } else if (data.phase === 'done' && data.result) {
       const r = data.result;
       setImportProgress('');
-      showMsg(`${r.checked} Sender geprüft, ${r.working} liefern dauerhaft Audio, ` +
-              `${r.added} neu (deaktiviert) in "Unsortiert" — zum Aktivieren Haken setzen.`, false);
+      showMsg(t('cfg_import_result', {checked: r.checked, working: r.working, added: r.added}), false);
       loadStations();
     }
   }
@@ -1923,26 +2035,26 @@ document.getElementById('import-form').addEventListener('submit', async (ev) => 
       body: JSON.stringify({import_url}),
     });
     btn.disabled = true;
-    setImportProgress('Starte Import …');
+    setImportProgress(t('cfg_import_starting'));
     await api('/api/config/import/start', {method: 'POST'});
     if (importPolling) clearInterval(importPolling);
     importPolling = setInterval(pollImportStatus, 1000);
     pollImportStatus();
   } catch (e) {
     btn.disabled = false;
-    showMsg('Fehler: ' + e.message, true);
+    showMsg(t('common_error', {msg: e.message}), true);
   }
 });
 
 document.getElementById('btn-clear-fingerprints').addEventListener('click', async () => {
-  if (!confirm('Wirklich ALLE gelernten Fingerprint-Clips löschen? Das kann nicht rückgängig gemacht werden.')) {
+  if (!confirm(t('cfg_fingerprint_clear_confirm'))) {
     return;
   }
   try {
     const data = await api('/api/fingerprint/clear', {method: 'POST'});
-    showMsg(`${data.cleared} Clip(s) aus der Fingerprint-Datenbank gelöscht.`, false);
+    showMsg(t('cfg_fingerprint_cleared', {cleared: data.cleared}), false);
   } catch (e) {
-    showMsg('Fehler: ' + e.message, true);
+    showMsg(t('common_error', {msg: e.message}), true);
   }
 });
 
@@ -1963,6 +2075,45 @@ loadSettings();
 </body>
 </html>
 """
+
+_I18N_KEY_RE = re.compile(
+    r'data-i18n(?:-[\w-]+)?="([^"]+)"'      # data-i18n/-html/-title/-placeholder/-aria-label="key"
+    r"|(?<![A-Za-z0-9_])t\('([^']+)'"       # t('key' ...) in JS -- Lookbehind gegen Fehltreffer
+                                             # wie document.createElemen[t('div')] oder spli[t('{')]
+)
+
+
+def _check_i18n_coverage(template: str, template_name: str):
+    """Sicherheitsnetz gegen vergessene/vertippte Übersetzungs-Keys: kein
+    Test-Framework im Projekt (siehe CLAUDE.md), das übernimmt diese Rolle.
+    Läuft einmal beim Modul-Import -- ein fehlender Key wirft sofort beim
+    Start, statt als leerer/falscher Text erst zur Laufzeit im Browser
+    aufzufallen."""
+    keys = {a or b for a, b in _I18N_KEY_RE.findall(template)}
+    missing = keys - set(i18n.STRINGS)
+    if missing:
+        raise AssertionError(
+            f"{template_name}: i18n-Keys ohne Eintrag in i18n.STRINGS: {sorted(missing)}"
+        )
+
+
+def _render_i18n_variants(template: str, template_name: str) -> dict:
+    _check_i18n_coverage(template, template_name)
+    variants = {}
+    for lang in i18n.LANGUAGES:
+        strings_json = json.dumps({k: v[lang] for k, v in i18n.STRINGS.items()}, ensure_ascii=False)
+        html = template.replace("%%LANG%%", lang).replace("%%I18N_JSON%%", strings_json)
+        variants[lang] = html.encode("utf-8")
+    return variants
+
+
+# Einmal pro Sprache vorgerechnet (wie _MANIFEST_JSON_BYTES etc. oben) --
+# do_GET wählt anhand von state.language nur noch per Dict-Lookup aus, keine
+# Pro-Request-Stringarbeit. state.language kann sich zur Laufzeit ändern
+# (Config-Seite), die vorgerechneten Varianten für BEIDE Sprachen liegen
+# aber schon bereit -- kein Neustart nötig, anders als z.B. tls_enabled.
+_PAGE_HTML_BYTES = _render_i18n_variants(_PAGE_HTML, "_PAGE_HTML")
+_CONFIG_PAGE_HTML_BYTES = _render_i18n_variants(_CONFIG_PAGE_HTML, "_CONFIG_PAGE_HTML")
 
 
 def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: str,
@@ -2008,9 +2159,9 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
 
         def do_GET(self):
             if self.path in ("/", ""):
-                self._send(_PAGE_HTML.encode("utf-8"), "text/html; charset=utf-8")
+                self._send(_PAGE_HTML_BYTES[state.language], "text/html; charset=utf-8")
             elif self.path == "/config":
-                self._send(_CONFIG_PAGE_HTML.encode("utf-8"), "text/html; charset=utf-8")
+                self._send(_CONFIG_PAGE_HTML_BYTES[state.language], "text/html; charset=utf-8")
             elif self.path == "/radiozapper.webp":
                 if _BANNER_BYTES is None:
                     self.send_error(404)
@@ -2157,6 +2308,7 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                     import_url=payload.get("import_url"),
                     stream_url=payload.get("stream_url"),
                     tls_enabled=payload.get("tls_enabled"),
+                    language=payload.get("language"),
                     news_break_enabled=payload.get("news_break_enabled"),
                     news_break_mp3_folder=payload.get("news_break_mp3_folder"),
                     news_break_window_minutes=payload.get("news_break_window_minutes"),

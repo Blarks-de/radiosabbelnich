@@ -2951,3 +2951,155 @@ Nutzer hat es hier nochmal ausdrücklich bestätigt).
     Port danach). Testcontainer danach gestoppt (`--rm` hat ihn beim
     Stop automatisch entfernt), Temp-Verzeichnis gelöscht — am
     Produktivsystem bleibt nichts zurück.
+
+## 2026-08-05 — Zweisprachiges Web-Interface (Deutsch/Englisch)
+
+**Auslöser**: Nutzerwunsch, alle Benutzerdialoge des Web-Interfaces
+(Player- und Config-Seite) auf Deutsch und Englisch anzubieten,
+umschaltbar über die Config-Seite und per `.env`-Default.
+
+**Umsetzung**: neues Modul `i18n.py` mit `STRINGS` (nach Key gruppiert,
+beide Sprachen nebeneinander) und `DEFAULT_LANGUAGE` (aus `UI_LANGUAGE`
+in `.env`, Fallback `"de"` bei fehlendem/ungültigem Wert). Kein
+Duplizieren der ~1300 Zeilen `_PAGE_HTML`/`_CONFIG_PAGE_HTML` in
+`webui.py` pro Sprache: die Templates bleiben EIN Quelltext mit
+`data-i18n`/`data-i18n-html`/`data-i18n-title`/`data-i18n-placeholder`/
+`data-i18n-aria-label`-Attributen für statisches Markup und `t('key',
+vars)`-Aufrufen für JS-seitige Dialoge (`alert()`/`confirm()`/
+`showMsg()`/dynamisch gebaute Listenelemente). Ein injiziertes
+`<script>` (`const I18N = {...}; function t(...)`) plus ein
+`applyStaticI18n()`, der beim Laden einmal synchron über alle
+`[data-i18n*]`-Elemente läuft, ersetzt die Texte noch vor dem ersten
+Repaint — kein sichtbares Umspringen der Sprache. Pro Sprache wird beim
+Modul-Import einmal ein fertig gerendertes Byte-Paar vorberechnet
+(`_PAGE_HTML_BYTES`/`_CONFIG_PAGE_HTML_BYTES`, analog zu
+`_MANIFEST_JSON_BYTES`), `do_GET` wählt nur per `state.language`-Lookup
+aus — kein Pro-Request-Stringersatz.
+
+`language` ist ein normales `settings_store`-Feld (Default aus
+`i18n.DEFAULT_LANGUAGE`, validiert gegen `i18n.LANGUAGES`), läuft über
+denselben request/pop-Reload-Zyklus wie `tls_enabled`/`stream_url` und
+ist damit spätestens einen Hauptloop-Tick (~1s) nach dem Speichern
+serverseitig aktiv — anders als `tls_enabled` aber OHNE Neustart des
+Containers, weil die Auswahl reiner Dict-Lookup ist, kein Socket-
+Rewrap. Die Config-Seite lädt sich nach dem Speichern trotzdem per
+`location.reload()` neu, weil das schon vorgerechnete Markup pro
+Sprache fest ist und ein Sprachwechsel ohne Reload sonst nur die JS-
+Strings, nicht aber z.B. server-seitig gewählte `<option>`-Reihenfolge
+o.ä. nachziehen würde (aktuell irrelevant, aber so keine stille
+Inkonsistenzquelle für später).
+
+Beim Modul-Import läuft `_check_i18n_coverage()`: ein Regex sammelt
+alle in beiden Templates verwendeten `data-i18n*`/`t('key'`-Keys und
+gleicht sie gegen `i18n.STRINGS` ab — fehlender Key wirft sofort beim
+Start (`AssertionError`), nicht erst als leerer Text im Browser. Erster
+Anlauf des Regex (`t\('([^']+)'` ohne Lookbehind) hat massenhaft
+Fehltreffer erzeugt, weil er in JEDEM Bezeichner matcht, der zufällig
+auf "t(" endet — `document.createElement('div')` (…**t(**'div'…),
+`s.split('{'…)` (spli**t(**'{'…). Fix: `(?<![A-Za-z0-9_])t\('` (Keys nur
+bei echtem `t(`-Funktionsaufruf, nicht als Substring in `createElement`/
+`split`/etc.).
+
+**Scope-Entscheidung** (mit Nutzer geklärt): nur Frontend-Text
+(`webui.py` + `i18n.py`) wird übersetzt. Backend-`ValueError`-Texte aus
+`settings_store.py`/`station_import.py`/`stations_store.py`, die im
+Browser als Fehlermeldung landen, bleiben deutsch — kein Fehlercode-
+Katalog in den Kernmodulen in diesem Durchgang.
+
+**`.env`**: `UI_LANGUAGE` in `env.example` ergänzt (Default `"de"`,
+gilt nur für eine Neuinstallation ohne bestehende `settings.json`,
+danach gewinnt immer der über `/config` gespeicherte Wert). `.env`
+selbst nicht angetastet (Nutzer-Konfigurationsdatei).
+
+**Docker**: `i18n.py` in die `COPY`-Liste des Dockerfiles eingetragen
+(siehe CLAUDE.md, "Docker-Besonderheiten" — sonst fehlt das Modul im
+Image).
+
+### Bewusst NICHT gemacht
+
+- Backend-Fehlermeldungen (ValueError-Texte) NICHT übersetzt — siehe
+  Scope-Entscheidung oben.
+- `manifest.json` (PWA-Name/`short_name`) und `<title>` NICHT
+  zweisprachig — Startbildschirm-Beschriftung fürs App-Icon, wird vom
+  Betriebssystem einmalig übernommen, keine Notwendigkeit gesehen, das
+  zu verkomplizieren.
+- Kein Live-Nachübersetzen des schon gerenderten Markups ohne Reload —
+  Sprachwechsel auf der Config-Seite triggert bewusst
+  `location.reload()`.
+
+### Verifiziert
+
+- `python3 -c "import webui"` — lief nach dem Regex-Fix ohne
+  `AssertionError` durch (siehe oben), bestätigt vollständige
+  Coverage aller in den Templates verwendeten i18n-Keys.
+- **Isoliert** (Kopie aller `.py`-Dateien + Wegwerf-`stations.json`/
+  `settings.json` in ein Temp-Verzeichnis, `--icecast-url` auf einen
+  nicht erreichbaren Test-Mount, `--webui-port 5099`, nach
+  CLAUDE.md-Testmuster): mit `UI_LANGUAGE=en` gestartet → `/` und
+  `/config` liefern `<html lang="en">`, das injizierte `I18N`-JSON
+  enthält die englischen Texte (`idx_stations_heading` → `"Stations"`,
+  `common_error` → `"Error: {msg}"`), `/api/config/settings` meldet
+  `language: "en"`. `POST /api/config/settings {"language":"de"}` →
+  nach ~1,5s liefert `/` wieder `<html lang="de">` (request/pop-Zyklus
+  bestätigt). `POST .../{"language":"fr"}` → korrekt `400` mit
+  `"language muss eine von ['de', 'en'] sein."`. Test-Prozess
+  anschließend beendet, Temp-Verzeichnis bleibt isoliert vom
+  Produktivsystem.
+- **Live am echten Deployment**: `docker compose up -d --build
+  radiozapper` (Nutzer-Zustimmung eingeholt) → Container startet
+  sauber durch (Vosk-Modell lädt, HTTPS aktiv wie zuvor, Sender spielt
+  an), `GET /api/config/settings` bestätigt `language: "de"` (kein
+  `UI_LANGUAGE` in der Produktiv-`.env` gesetzt → korrekter
+  Default-Fallback).
+
+## 2026-08-05 (Fortsetzung) — Kategorie "Unsortiert" auf der Config-Seite einklappbar
+
+**Auslöser**: Nutzerwunsch, die Kategorie "Unsortiert" hinter ein
+`<details>` zu packen — die füllt sich nach einem Import mit
+hunderten Sendern (siehe CLAUDE.md, "Config-Seite skaliert nicht auf
+mehrere hundert Sender" unter "Bekannte offene Punkte") und sprengt
+sonst die Seite optisch.
+
+**Umsetzung**: nur in `loadStations()`
+(`_CONFIG_PAGE_HTML`-Script in `webui.py`) geändert, nichts
+Serverseitiges. Für `cat === 'Unsortiert'` wird der bestehende
+`h2.category-header` (unverändert samt "Alle deaktivieren"-Knopf) in
+ein `<summary>` innerhalb eines neuen `<details class="category-
+details">` gepackt statt direkt in den Container gehängt; die
+Sender-`<ul>` folgt entsprechend als Kind von `<details>`. Alle
+anderen Kategorien bleiben unverändert direkt sichtbar. Auf/Zu-Zustand
+in modulweitem `unsortedExpanded` gemerkt und über den `toggle`-
+Event synchron gehalten — `loadStations()` baut die komplette
+Kategorie-Liste bei praktisch jeder Aktion (Haken setzen, Bearbeiten,
+Löschen, "Alle deaktivieren", …) neu auf, ohne dieses Merken würde ein
+gerade aufgeklapptes "Unsortiert" bei der nächsten Aktion sofort
+wieder zuklappen.
+
+Ein Stolperstein: der "Alle deaktivieren"-Knopf hängt jetzt (über den
+`h2`) innerhalb von `<summary>` — ein Klick darauf hätte ohne
+Gegenmaßnahme zusätzlich zum eigentlichen Knopf-Handler auch das
+`<details>` zu-/aufgeklappt (Browser-Default: jeder Klick irgendwo in
+`<summary>` toggelt). `ev.preventDefault()` im Klick-Handler des
+Knopfs unterdrückt das zuverlässig (verifiziert: `preventDefault()`
+auf dem Event during Bubbling unterdrückt die Default-Aktion des
+Vorfahren-Elements, hier das Toggle-Verhalten von `<summary>`).
+
+### Verifiziert
+
+- `python3 -m py_compile webui.py` + `python3 -c "import webui"` —
+  keine Syntaxfehler, i18n-Coverage-Check läuft weiter unverändert
+  durch (dieses Feature führt keine neuen i18n-Keys ein, reine
+  Struktur-/Layoutänderung).
+- **Isoliert** (Kopie aller `.py`-Dateien in ein Temp-Verzeichnis,
+  Wegwerf-`stations.json` mit 5 Sendern in "Unsortiert" + 1 in
+  "Lokal", `--webui-port 5098`, nach CLAUDE.md-Testmuster): `/config`
+  liefert 4 Fundstellen für `category-details` im HTML (Klasse selbst
+  + die 3 zugehörigen CSS-Regeln — Bestätigung, dass Markup und Styles
+  ausgeliefert werden), `/api/config/stations` bestätigt die 6 Test-
+  Sender über beide Kategorien korrekt. Test-Prozess anschließend
+  beendet.
+- Kein Browser-UI-Test in diesem Durchgang (keine Browser-Automation
+  in dieser Umgebung verfügbar) — Öffnen/Schließen-Verhalten und
+  Button-Klick-Verhalten sind Standard-`<details>`/`preventDefault()`-
+  Semantik, aber ein manueller Klicktest im echten Browser steht noch
+  aus.

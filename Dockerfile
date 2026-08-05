@@ -25,6 +25,7 @@ COPY station_import.py .
 COPY logging_setup.py .
 COPY news_break.py .
 COPY stt_filter.py .
+COPY i18n.py .
 COPY stations.json .
 COPY radiozapper.webp .
 COPY qrcode.js .

@@ -18,6 +18,8 @@ import logging
 import os
 import threading
 
+import i18n
+
 log = logging.getLogger("settings")
 
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
@@ -37,6 +39,12 @@ DEFAULTS = {
     # kann ein laufender ThreadingHTTPServer sein Socket nicht im laufenden
     # Betrieb neu einwickeln.
     "tls_enabled": False,
+    # Sprache des Web-Interfaces ("de"/"en", siehe i18n.py). Startwert kommt
+    # aus UI_LANGUAGE in .env (i18n.DEFAULT_LANGUAGE) -- gilt nur für eine
+    # Neuinstallation ohne bestehende settings.json (siehe _read_raw()).
+    # Einmal über /config geändert, gewinnt danach immer der hier
+    # gespeicherte Wert, exakt wie bei allen anderen Feldern hier.
+    "language": i18n.DEFAULT_LANGUAGE,
     "news_break": {
         "enabled": False,
         # Container-interner Pfad — siehe docker-compose.yml
@@ -136,7 +144,7 @@ def load() -> dict:
 
 
 def update(prebuffer_seconds=None, prebuffer_count=None, import_url=None,
-           stream_url=None, tls_enabled=None,
+           stream_url=None, tls_enabled=None, language=None,
            news_break_enabled=None, news_break_mp3_folder=None,
            news_break_window_minutes=None, news_break_enabled_hours=UNSET,
            stt_filter_enabled=None, stt_filter_engine=None,
@@ -205,6 +213,11 @@ def update(prebuffer_seconds=None, prebuffer_count=None, import_url=None,
             data["stream_url"] = stream_url
         if tls_enabled is not None:
             data["tls_enabled"] = bool(tls_enabled)
+        if language is not None:
+            language = str(language).strip().lower()
+            if language not in i18n.LANGUAGES:
+                raise ValueError(f"language muss eine von {sorted(i18n.LANGUAGES)} sein.")
+            data["language"] = language
 
         nb = data["news_break"]
         if news_break_enabled is not None:
