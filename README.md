@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="radiozapper.webp" alt="RadioZapper" width="700">
+  <img src="pics/radiozapper.webp" alt="RadioZapper" width="700">
 </p>
 
 # RadioZapper
@@ -362,12 +362,17 @@ zum Server verloren" statt einen eingefrorenen alten Zustand. Icons unter
 | `news_break.py` | Nachrichten-Pause: Zeitfenster-Logik + zufällige MP3-Auswahl |
 | `stt_filter.py` | STT-Sprachfilter: Vosk/Whisper-Engines, austauschbar, Zusatzsignal für die Switch-Entscheidung |
 | `i18n.py` | Übersetzungstabelle fürs Web-Interface (Deutsch/Englisch, siehe "Sprache des Web-Interfaces") |
-| `qrcode.js` | Vendorte QR-Code-Bibliothek (MIT, kazuhikoarase/qrcode-generator) fürs "📱 QR-Code"-Popup |
-| `manifest.json` | PWA-Manifest (Name, Icons, `display: standalone`) fürs "Zum Startbildschirm hinzufügen" |
-| `sw.js` | Service Worker: cached die statische Oberflächen-Hülle fürs Offline-Öffnen, kein Audio/API-Caching |
-| `icon-192.png`, `icon-512.png` | PWA-Icons fürs Installieren als App (aktuell Platzhalter) |
-| `favicon.ico` | Browser-Tab-Icon, quadratische Miniatur von `radiozapper.webp` |
-| `stations.json` | Senderliste (Name, URL, Kategorie, aktiv/inaktiv) |
+| `web/qrcode.js` | Vendorte QR-Code-Bibliothek (MIT, kazuhikoarase/qrcode-generator) fürs "📱 QR-Code"-Popup |
+| `web/manifest.json` | PWA-Manifest (Name, Icons, `display: standalone`) fürs "Zum Startbildschirm hinzufügen" |
+| `web/sw.js` | Service Worker: cached die statische Oberflächen-Hülle fürs Offline-Öffnen, kein Audio/API-Caching |
+| `pics/icon-192.png`, `pics/icon-512.png` | PWA-Icons fürs Installieren als App (aktuell Platzhalter) |
+| `pics/favicon.ico` | Browser-Tab-Icon, quadratische Miniatur von `radiozapper.webp` |
+| `pics/radiozapper.webp` | Banner-Grafik auf Player-/Config-Seite und in diesem README |
+| `data/stations.json` | Senderliste (Name, URL, Kategorie, aktiv/inaktiv) |
+| `data/settings.json` | Laufzeit-Einstellungen, siehe `settings_store.py` |
+| `data/fingerprints.db`, `data/fingerprint_clips/` | Fingerprint-Datenbank + gelernte Clip-Mitschnitte |
+| `data/logs/` | Rotierende Logdatei (siehe "Logging" unten) |
+| `data/news_mp3/`, `data/vosk-model-de/`, `data/whisper_cache/` | Standard-Mountziele für `NEWS_MP3_FOLDER`/`VOSK_MODEL_FOLDER`/faster-whisper-Cache (überschreibbar in `.env`) |
 | `docker-compose.yml` | Icecast + RadioZapper als zwei Services |
 | `check-radiozapper.sh` | Preflight-Check vor dem (ersten) Start: Docker, RAM/HD/Internet, `.env`, MP3-Ordner, Ports |
 | `run_radiozapper.sh` | Start-Skript: RAM/HD/Internet-Check + `docker compose up -d --build` |
@@ -386,7 +391,7 @@ einem Mono-Downmix, um Rechenzeit zu sparen.
 git clone <repo-url> RadioZapper
 cd RadioZapper
 cp env.example .env      # Passwörter/Hostname eintragen
-touch fingerprints.db    # muss als Datei existieren, siehe unten
+touch data/fingerprints.db    # muss als Datei existieren, siehe unten
 ./check-radiozapper.sh   # optional: prüft Docker/.env/MP3-Ordner/Ports vorab
 docker compose up -d --build
 ```
@@ -461,10 +466,10 @@ docker compose up -d --build radiozapper
 docker compose logs -f radiozapper
 
 # Vollständiges Debug-Log (VAD-Werte, Fingerprint-Details, HTTP-Requests)
-tail -f logs/radiozapper.log
+tail -f data/logs/radiozapper.log
 
 # Fingerprint-Mitschnitte anhören (nach einem "Zapping-Fehler"-Verdacht)
-ls fingerprint_clips/
+ls data/fingerprint_clips/
 ```
 
 ### Logging
@@ -473,12 +478,12 @@ Zwei Ziele mit unterschiedlichem Detailgrad:
 
 - **Konsole** (`docker compose logs`): nur Ereignisse, die man im Alltag
   sehen will — Senderwechsel, Fingerprint-Treffer, Warnungen, Fehler.
-- **`logs/radiozapper.log`**: *immer* auf DEBUG, unabhängig von der
+- **`data/logs/radiozapper.log`**: *immer* auf DEBUG, unabhängig von der
   Konsole. Pro Analysefenster die VAD-Wahrscheinlichkeit bzw. die
   Heuristik-Features, jeder Fingerprint-Vergleich mit Match-Stärke und
   Abstand zur Schwelle, jeder HTTP-Request des Web-Interfaces, jeder
   gestartete/gestorbene Hintergrund-Puffer. Rotierend (5 × 10 MB), auf
-  dem Host unter `logs/` gemountet — überlebt also Container-Neustarts.
+  dem Host unter `data/logs/` gemountet — überlebt also Container-Neustarts.
 
 Der Sinn der Trennung: wenn nachts etwas schiefgeht, will man die Details
 hinterher lesen können, ohne den Container vorher zufällig im richtigen
@@ -865,12 +870,17 @@ instead of a frozen stale state. The icons at `icon-192.png`/
 | `news_break.py` | News break: time-window logic + random MP3 selection |
 | `stt_filter.py` | STT speech filter: interchangeable Vosk/Whisper engines, additional signal for the switch decision |
 | `i18n.py` | Translation table for the web interface (German/English, see "Web interface language") |
-| `qrcode.js` | Vendored QR code library (MIT, kazuhikoarase/qrcode-generator) for the "📱 QR code" popup |
-| `manifest.json` | PWA manifest (name, icons, `display: standalone`) for "Add to home screen" |
-| `sw.js` | Service worker: caches the static UI shell for offline opening, no audio/API caching |
-| `icon-192.png`, `icon-512.png` | PWA icons for installing as an app (currently placeholders) |
-| `favicon.ico` | Browser tab icon, a square thumbnail of `radiozapper.webp` |
-| `stations.json` | Station list (name, URL, category, active/inactive) |
+| `web/qrcode.js` | Vendored QR code library (MIT, kazuhikoarase/qrcode-generator) for the "📱 QR code" popup |
+| `web/manifest.json` | PWA manifest (name, icons, `display: standalone`) for "Add to home screen" |
+| `web/sw.js` | Service worker: caches the static UI shell for offline opening, no audio/API caching |
+| `pics/icon-192.png`, `pics/icon-512.png` | PWA icons for installing as an app (currently placeholders) |
+| `pics/favicon.ico` | Browser tab icon, a square thumbnail of `radiozapper.webp` |
+| `pics/radiozapper.webp` | Banner graphic on the player/config page and in this README |
+| `data/stations.json` | Station list (name, URL, category, active/inactive) |
+| `data/settings.json` | Runtime settings, see `settings_store.py` |
+| `data/fingerprints.db`, `data/fingerprint_clips/` | Fingerprint database + learned clip recordings |
+| `data/logs/` | Rotating log file (see "Logging" below) |
+| `data/news_mp3/`, `data/vosk-model-de/`, `data/whisper_cache/` | Default mount targets for `NEWS_MP3_FOLDER`/`VOSK_MODEL_FOLDER`/the faster-whisper cache (overridable in `.env`) |
 | `docker-compose.yml` | Icecast + RadioZapper as two services |
 | `check-radiozapper.sh` | Preflight check before the (first) start: Docker, RAM/disk/internet, `.env`, MP3 folder, ports |
 | `run_radiozapper.sh` | Start script: RAM/disk/internet check + `docker compose up -d --build` |
@@ -889,7 +899,7 @@ mono downmix to save CPU time.
 git clone <repo-url> RadioZapper
 cd RadioZapper
 cp env.example .env      # enter passwords/hostname
-touch fingerprints.db    # must exist as a file, see below
+touch data/fingerprints.db    # must exist as a file, see below
 ./check-radiozapper.sh   # optional: pre-checks Docker/.env/MP3 folder/ports
 docker compose up -d --build
 ```
@@ -966,10 +976,10 @@ docker compose up -d --build radiozapper
 docker compose logs -f radiozapper
 
 # Full debug log (VAD values, fingerprint details, HTTP requests)
-tail -f logs/radiozapper.log
+tail -f data/logs/radiozapper.log
 
 # Listen to fingerprint recordings (after a suspected "zap error")
-ls fingerprint_clips/
+ls data/fingerprint_clips/
 ```
 
 ### Logging
@@ -979,12 +989,12 @@ Two destinations with different levels of detail:
 - **Console** (`docker compose logs`): only the events you want to see
   day-to-day — station switches, fingerprint matches, warnings,
   errors.
-- **`logs/radiozapper.log`**: *always* at DEBUG, independent of the
+- **`data/logs/radiozapper.log`**: *always* at DEBUG, independent of the
   console. Per analysis window, the VAD probability or heuristic
   features, every fingerprint comparison with match strength and
   distance to the threshold, every HTTP request to the web interface,
   every background buffer started/died. Rotating (5 × 10 MB), mounted
-  on the host under `logs/` — so it survives container restarts.
+  on the host under `data/logs/` — so it survives container restarts.
 
 The point of the split: if something goes wrong overnight, you want to
 be able to read the details afterwards, without having had to

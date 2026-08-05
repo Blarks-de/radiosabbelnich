@@ -3103,3 +3103,82 @@ Vorfahren-Elements, hier das Toggle-Verhalten von `<summary>`).
   Button-Klick-Verhalten sind Standard-`<details>`/`preventDefault()`-
   Semantik, aber ein manueller Klicktest im echten Browser steht noch
   aus.
+
+## 2026-08-05 (Fortsetzung 2) — Repo aufgeräumt: pics/, web/, data/
+
+**Auslöser**: Nutzerwunsch, das mit ~35 Einträgen überladene Root-
+Verzeichnis aufzuräumen — alles außer `*.py` in Unterordner. Scripts
+(`check-radiozapper.sh`/`run_radiozapper.sh`) sollten auf Nutzerwunsch
+im Root bleiben.
+
+**Umsetzung**: `pics/` (Bilder: `radiozapper.webp`, `favicon.ico`,
+`icon-192.png`, `icon-512.png`), `web/` (vom Webserver ausgelieferte,
+aber nicht-Bild-Assets: `qrcode.js`, `manifest.json`, `sw.js`), `data/`
+(alles Persistente/Laufzeitbezogene: `stations.json`, `settings.json`,
+`fingerprints.db`, `fingerprint_clips/`, `logs/`, `news_mp3/`,
+`vosk-model-de/`, `whisper_cache/`). `*.py`, `CLAUDE.md`, `README.md`,
+`SESSION.md`, `Dockerfile`, `docker-compose.yml`, `.env`/`env.example`,
+`.gitignore`, die Scripts sowie `v1/` bleiben am Root.
+
+Leitprinzip, um das Risiko für den laufenden Container klein zu
+halten: **Container-interne Pfade bleiben exakt wie vorher** (alles
+flach in `/app/`). `stations_store.STATIONS_FILE`,
+`settings_store.SETTINGS_FILE`, `radiozapper.FINGERPRINT_DB_FILE`/
+`FINGERPRINT_CLIPS_DIR`, `logging_setup.DEFAULT_LOG_FILE` und
+`webui._load_static()` berechnen ihren Pfad alle `__file__`-relativ
+zum jeweiligen `.py`-Modul — da die `.py`-Dateien am Root bleiben,
+war **keine einzige Zeile Python-Code zu ändern**. Geändert wurden
+ausschließlich: die Dockerfile-`COPY`-Quellpfade (Ziel bleibt `.`
+= `/app/`), die linke (Host-)Seite der `docker-compose.yml`-Volume-
+Mounts (rechte/Container-Seite unverändert) inkl. der
+`NEWS_MP3_FOLDER`/`VOSK_MODEL_FOLDER`-Fallback-Defaults, `env.example`,
+3 hartkodierte `./news_mp3`-Vergleichsstellen in `check-radiozapper.sh`,
+`.gitignore` (Präfix `data/` vor den weiterhin ignorierten
+Laufzeit-Pfaden — `data/stations.json`/`data/settings.json` bleiben
+bewusst getrackt), sowie README.md (DE+EN: Banner-`<img src>`,
+Setup-Befehle, Architektur-Tabelle) und CLAUDE.md (neuer Absatz zur
+Host-/Container-Pfad-Entkopplung, aktualisierte Einzeldatei-Bind-Mount-
+und TLS-Abschnitte).
+
+`stations.json`/`settings.json` per `git mv` verschoben (History
+erhalten). Die vier root-eigenen Laufzeit-Ordner (`logs/`, `news_mp3/`,
+`vosk-model-de/`, `whisper_cache/` — von Docker beim ersten Start als
+root angelegt) ließen sich als `blarks` nicht per normalem `mv`
+verschieben ("Keine Berechtigung", kein Sticky-Bit auf dem
+Repo-Wurzelverzeichnis als Erklärung gefunden, vermutlich eine
+Eigenheit dieses Docker-Setups). Passwortloses `sudo` ist auf diesem
+Host nicht eingerichtet. Workaround: ein Wegwerf-`alpine`-Container
+mit `-v /opt/docker/radiozapper:/repo` hat die vier `mv`-Befehle als
+root im Container ausgeführt — funktioniert, weil `blarks` in der
+`docker`-Gruppe ist, ganz ohne `sudo`-Passwort.
+
+Container wurde für den Umbau bewusst gestoppt (Nutzer-Zustimmung):
+`docker compose stop radiozapper` vor der Umsortierung, Icecast lief
+die ganze Zeit unverändert weiter, `docker compose up -d --build
+radiozapper` erst nach Abschluss aller Anpassungen.
+
+### Verifiziert
+
+- `docker compose config` vor dem Rebuild: alle Volume-Mount-Quellen
+  lösen korrekt zu `/opt/docker/radiozapper/data/...` auf, Ziele
+  unverändert bei `/app/...`. `NEWS_MP3_FOLDER_HOST` zeigt weiterhin
+  den echten Produktiv-SMB-Pfad (`/mnt/eimer/...`, aus `.env`,
+  unbetroffen von der Umsortierung), `VOSK_MODEL_FOLDER_HOST` korrekt
+  auf `./data/vosk-model-de` (dieser Wert hängt live am
+  Compose-Default, da `VOSK_MODEL_FOLDER` in der echten `.env` NICHT
+  gesetzt ist — mit dem alten Default hätte STT nach dem Neustart sein
+  Modell verloren).
+- **Live am echten Deployment**: nach `docker compose up -d --build
+  radiozapper` lädt das Vosk-Modell erfolgreich aus `/app/vosk-model-de`
+  (Log: "STT-Filter: Engine 'vosk' geladen"), Senderliste lädt
+  (`▶ Spiele: 105'5 Spreeradio 80er`), Nachrichten-Pause funktioniert
+  weiterhin end-to-end (spielt eine MP3 aus dem externen SMB-Pfad).
+  `GET /` und `GET /config` liefern `200`, `GET /radiozapper.webp`
+  liefert `200`/144950 Bytes (bestätigt `pics/radiozapper.webp` korrekt
+  in den Image-Build eingebunden), `GET /api/config/settings` liefert
+  lesbare Werte inkl. `language: "de"` (bestätigt `data/settings.json`
+  korrekt gemountet). `icecast-radiozapper` lief nachweislich
+  ununterbrochen durch (Container-Uptime nicht neu gestartet).
+- `git status` nach dem Umbau: alle Verschiebungen von getrackten
+  Dateien als `R` (Rename) erkannt, keine Lösch-/Neuanlage-Paare mit
+  Inhaltsverlust.

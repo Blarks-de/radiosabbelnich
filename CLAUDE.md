@@ -41,10 +41,10 @@ protokolliert.
 ```bash
 docker compose up -d --build radiozapper   # bauen + neustarten (Standard-Zyklus)
 docker compose logs -f radiozapper         # Konsole: nur Ereignisse (INFO)
-tail -f logs/radiozapper.log               # Volles DEBUG-Log, überlebt Neustarts
+tail -f data/logs/radiozapper.log          # Volles DEBUG-Log, überlebt Neustarts
 ```
 
-Ein frischer Clone braucht `cp env.example .env` **und `touch fingerprints.db`**:
+Ein frischer Clone braucht `cp env.example .env` **und `touch data/fingerprints.db`**:
 die DB ist als einzelne Datei gebindmountet und gitignored — fehlt sie, legt
 Docker ein Verzeichnis an und SQLite scheitert in einer Neustartschleife.
 
@@ -359,9 +359,22 @@ treffen, nicht z.B. eine neu aufgerufene Unterseite.
 
 ## Docker-Besonderheiten
 
-- `stations.json`, `settings.json` und `fingerprints.db` sind als **einzelne
-  Dateien** gebindmountet. Deshalb schreibt `stations_store._write()` direkt
-  statt über `os.replace()` — ein Rename über einen Mountpoint scheitert mit
+Host-Layout und Container-Layout sind bewusst entkoppelt: `*.py` liegen am
+Repo-Root, alles andere ist auf dem Host in `pics/` (Bilder), `web/`
+(vom Webserver ausgelieferte JS/JSON-Assets: `qrcode.js`/`manifest.json`/
+`sw.js`) und `data/` (Senderliste/Settings/Fingerprint-DB/Laufzeit-Ordner)
+aufgeteilt — im Container landet trotzdem alles flach in `/app/`
+(`_load_static()`/`STATIONS_FILE`/`SETTINGS_FILE`/`FINGERPRINT_DB_FILE`/
+`FINGERPRINT_CLIPS_DIR`/`DEFAULT_LOG_FILE` sind alle `__file__`-relativ
+zum jeweiligen `.py`-Modul, das am Root bleibt). Wer eine neue Datei
+hinzufügt: nur der **Host-Pfad** (Dockerfile-`COPY`-Quelle bzw. linke
+Seite eines `docker-compose.yml`-Volume-Mounts) folgt der Ordnerstruktur,
+das `.py`-seitige/Container-interne Ziel bleibt immer flach in `/app/`.
+
+- `stations.json`, `settings.json` und `fingerprints.db` liegen auf dem
+  Host unter `data/` und sind als **einzelne Dateien** gebindmountet.
+  Deshalb schreibt `stations_store._write()` direkt statt über
+  `os.replace()` — ein Rename über einen Mountpoint scheitert mit
   "Device or resource busy". Nicht auf "atomares Schreiben" umbauen.
 - Der Dockerfile kopiert jede `.py`-Datei **einzeln**: neue Module dort
   eintragen, sonst fehlen sie im Image.
@@ -416,7 +429,7 @@ wer hier etwas ändert, muss beide Hälften verstehen:
   also nicht gereicht.
 - Beide Mounts (Web-Interface UND Icecast) fallen ohne gesetzte
   `TLS_CERT_FILE`/`TLS_KEY_FILE` auf `/dev/null` zurück (`${TLS_CERT_FILE:-/dev/null}`)
-  statt auf eine Repo-Platzhalterdatei wie bei `NEWS_MP3_FOLDER`/`news_mp3`
+  statt auf eine Repo-Platzhalterdatei wie bei `NEWS_MP3_FOLDER`/`data/news_mp3`
   — `/dev/null` ist auf jedem Host immer ein gültiges Bind-Mount-Ziel und
   liefert 0 Byte, genau das, was die jeweiligen "ist überhaupt ein
   Zertifikat da?"-Prüfungen (`-s`-Test im Bash-Skript, `ssl.SSLError` im

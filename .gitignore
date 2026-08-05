@@ -2,9 +2,9 @@
 venv/
 __pycache__/
 *.pyc
-fingerprints.db
-fingerprint_clips/
-logs/
-news_mp3/
-vosk-model-de/
-whisper_cache/
+data/fingerprints.db
+data/fingerprint_clips/
+data/logs/
+data/news_mp3/
+data/vosk-model-de/
+data/whisper_cache/

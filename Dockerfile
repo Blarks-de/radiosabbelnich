@@ -26,14 +26,14 @@ COPY logging_setup.py .
 COPY news_break.py .
 COPY stt_filter.py .
 COPY i18n.py .
-COPY stations.json .
-COPY radiozapper.webp .
-COPY qrcode.js .
-COPY manifest.json .
-COPY sw.js .
-COPY icon-192.png .
-COPY icon-512.png .
-COPY favicon.ico .
+COPY data/stations.json .
+COPY pics/radiozapper.webp .
+COPY web/qrcode.js .
+COPY web/manifest.json .
+COPY web/sw.js .
+COPY pics/icon-192.png .
+COPY pics/icon-512.png .
+COPY pics/favicon.ico .
 
 # ICECAST_URL wird beim Start via docker-compose environment gesetzt,
 # z.B. icecast://source:PASSWORT@icecast-radiozapper:8000/mix.mp3

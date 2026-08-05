@@ -151,15 +151,15 @@ echo
 : "${WEBUI_PORT:=5000}"
 : "${ICECAST_PORT:=8000}"
 : "${ICECAST_SSL_PORT:=8443}"
-: "${NEWS_MP3_FOLDER:=./news_mp3}"
+: "${NEWS_MP3_FOLDER:=./data/news_mp3}"
 
 # ---------------------------------------------------------------------
 # 4. MP3-Ordner für die Nachrichten-Pause: eingetragen und nutzbar?
 # ---------------------------------------------------------------------
 echo "📻 MP3-Ordner (Nachrichten-Pause)"
 
-if [ "$NEWS_MP3_FOLDER" = "./news_mp3" ]; then
-    warn "NEWS_MP3_FOLDER nicht gesetzt (Default './news_mp3') -- Feature bleibt inaktiv, bis dort MP3s liegen oder ein eigener Pfad in .env eingetragen ist. Kein Fehler, das Feature ist optional."
+if [ "$NEWS_MP3_FOLDER" = "./data/news_mp3" ]; then
+    warn "NEWS_MP3_FOLDER nicht gesetzt (Default './data/news_mp3') -- Feature bleibt inaktiv, bis dort MP3s liegen oder ein eigener Pfad in .env eingetragen ist. Kein Fehler, das Feature ist optional."
 elif [ ! -d "$NEWS_MP3_FOLDER" ]; then
     fail "NEWS_MP3_FOLDER='$NEWS_MP3_FOLDER' existiert nicht (Tippfehler? SMB-Mount nicht eingehängt?)."
 elif [ ! -r "$NEWS_MP3_FOLDER" ]; then
