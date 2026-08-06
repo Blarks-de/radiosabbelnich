@@ -663,9 +663,15 @@ def main():
         # statt ~1x/Fenster), ein kombinierter Wert würde sprunghaft
         # wirken statt sich flüssig zu bewegen.
         state.set_speech_probability(prob)
+        # Einmal abrufen, für combine_label() (Switch-Logik) UND
+        # live_confidence() (STT-Balken im Web-Interface) -- beide sollen
+        # exakt denselben Befund sehen, nicht zwei zeitlich leicht
+        # versetzte last_verdict()-Aufrufe.
+        verdict = stt.last_verdict()
+        state.set_stt_probability(stt_filter.live_confidence(verdict, state.stt_filter_cfg))
         # Einzige Kopplungsstelle mit stt_filter.py -- ohne (frischen) STT-
         # Befund ist das ein No-Op, siehe combine_label()-Docstring.
-        return stt_filter.combine_label(label, stt.last_verdict(), state.stt_filter_cfg)
+        return stt_filter.combine_label(label, verdict, state.stt_filter_cfg)
 
     state = webui.SwitcherState()
     active = state.active_stations
@@ -1327,6 +1333,7 @@ def main():
                             f"match_clip{match['clip_id']}_{current['id']}_{ts}.wav",
                         )
                         state.set_last_fingerprint_clip(match["clip_id"], match["label"], current["id"])
+                        state.set_fingerprint_activity("match", match["label"])
                         log.info("🔁 Bekannter Jingle/Werbespot wiedererkannt: Clip #%d '%s' "
                                  "(schon %dx gehört, Match-Stärke %d)",
                                  match["clip_id"], match["label"], match["times_seen"],
@@ -1340,6 +1347,7 @@ def main():
                         save_fingerprint_debug_clip(
                             combined, SAMPLE_RATE, f"newclip_{current['id']}_{ts}.wav",
                         )
+                        state.set_fingerprint_activity("learned")
             else:
                 speech_streak = 0
                 speech_buffer = []

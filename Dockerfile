@@ -27,6 +27,7 @@ COPY news_break.py .
 COPY stt_filter.py .
 COPY i18n.py .
 COPY resource_monitor.py .
+COPY VERSION .
 COPY data/stations.json .
 COPY pics/radiozapper.webp .
 COPY web/qrcode.js .

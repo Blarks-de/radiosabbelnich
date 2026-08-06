@@ -3478,3 +3478,145 @@ Architektur-Vorschlag vermutet. `fingerprint_db_bytes`/`log_bytes`
 stimmten mit den realen Dateigrößen überein. `/config` lieferte HTTP 200
 mit dem neuen Ressourcen-Panel. `docker compose ps`: beide Container
 `Up`, kein Neustart-Loop.
+
+## 2026-08-06 (Fortsetzung 3) — Live-Statusanzeigen VAD/STT/Fingerprint (Teil 3)
+
+Zweiter Teil aus demselben Architektur-Vorschlag wie Teil 2 (siehe
+"Fortsetzung 2" oben) — Live-Statusanzeigen für die drei
+Erkennungsebenen auf der Player-Seite. Teil 1 (mehrsprachige STT) ist
+weiterhin nicht angefasst; die STT-Anzeige zeigt deshalb bewusst nur
+einen Prozentwert, kein Sprachkürzel.
+
+### Umsetzung
+
+- **VAD**: unverändert — das bestehende 🤥 Bullshitometer IST bereits die
+  VAD/Heuristik-Anzeige (siehe Architektur-Vorschlag oben), kein neuer
+  Code nötig.
+- **STT**: `stt_filter.py` bekommt `_fresh_confidence(verdict, cfg)` als
+  gemeinsame Basis für `combine_label()` (Switch-Logik, unverändertes
+  Verhalten) UND die neue `live_confidence(verdict, cfg)` (Web-UI) — statt
+  die Freshness-Altersprüfung zweimal leicht unterschiedlich zu
+  implementieren. `radiozapper.py`s `classify()`-Closure ruft
+  `stt.last_verdict()` jetzt genau einmal ab (statt potenziell zweimal)
+  und setzt `state.set_stt_probability(stt_filter.live_confidence(...))`
+  direkt neben dem bestehenden `set_speech_probability()`-Aufruf.
+- **Fingerprint**: neuer, von `set_last_fingerprint_clip()`/
+  `pop_last_fingerprint_clip()` GETRENNTER Setter
+  `state.set_fingerprint_activity(status, label=None)` (status: "match"/
+  "learned") — der bestehende pop-once-Mechanismus ist für den
+  "🛑 Zapping-Fehler"-Button reserviert und wird bei dessen Klick
+  konsumiert; ein zweiter Konsument (die Dauer-Anzeige, die bei jedem
+  Poll denselben Wert lesen will) hätte sich mit dem Button sonst den
+  Wert gegenseitig weggeschnappt. In `radiozapper.py` an beiden Stellen
+  im Fingerprint-Trigger-Block gesetzt (Treffer bzw. neu gelernter Clip).
+  `_build_status()` in `webui.py` wendet eine neue `FP_ACTIVITY_TTL`
+  (5s) an: ein Ereignis fällt serverseitig von selbst auf `null`
+  zurück, sobald es älter ist — das Frontend braucht dadurch keine
+  eigene Altersprüfung, `fingerprint_activity: null` heißt einfach
+  "idle" anzeigen. Bewusst KEIN "checking"-Zwischenzustand (ursprünglich
+  im Architektur-Vorschlag angedacht): `fp_db.match_or_learn()` läuft
+  synchron im Hauptloop und ist bei der aktuellen DB-Größe schnell genug,
+  dass ein sichtbarer "prüft gerade"-Zustand keinen echten Mehrwert
+  gehabt hätte, nur zusätzliche Zustandsverwaltung.
+- **Frontend** (`webui.py`, `_PAGE_HTML`): CSS von `#bs-meter-*`-IDs auf
+  gemeinsame `.meter-wrap`/`.meter-label`/`.meter-track`/`.meter-fill`-
+  Klassen umgestellt (IDs bleiben für JS-Zugriff erhalten, nur zusätzlich
+  Klassen) — der neue STT-Balken teilt sich dieselben Regeln, statt sie
+  zu duplizieren. Neuer `#fp-chip` (diskreter Zustand statt Balken:
+  `.state-match`/`.state-learned`/Default "idle", per CSS-Klasse
+  eingefärbt). JS in `applyStatus()` ergänzt: STT-Balken exakt wie das
+  Bullshitometer plus zusätzlichem eingefrorenen Zustand
+  (`stt_probability === null` → "STT aus"), Fingerprint-Chip liest
+  `data.fingerprint_activity` direkt (kein eigener Timer/keine eigene
+  Altersprüfung nötig, siehe TTL-Server-Logik oben).
+- i18n: neue Keys `idx_stt_meter_label`/`idx_stt_meter_off`/
+  `idx_fp_indicator_label`/`idx_fp_state_{idle,match,learned}` (de/en).
+
+### Verifiziert (isoliert, ohne den laufenden Produktiv-Container anzufassen)
+
+- `stt_filter.live_confidence()` direkt geprüft: `enabled=False` → `None`,
+  kein Verdict → `None`, frischer Verdict → korrekter Konfidenzwert
+  durchgereicht.
+- `webui.SwitcherState.set_fingerprint_activity()`/
+  `_fresh_fingerprint_activity()` direkt geprüft: künstlich auf 10s
+  gealtertes Ereignis (> `FP_ACTIVITY_TTL=5.0`) liefert korrekt `None`.
+- `webui.py` komplett importiert — `_check_i18n_coverage()` lief ohne
+  `AssertionError` durch (neue Keys stimmen mit den `data-i18n`/`t(...)`-
+  Verwendungen im Template überein).
+- `webui.start_server()` auf separatem Testport (15124) mit echtem
+  `SwitcherState` gestartet, `set_speech_probability(0.77)`/
+  `set_stt_probability(0.42)`/`set_fingerprint_activity('match', 'Werbejingle
+  Testclip')` manuell gesetzt: `GET /api/status` lieferte alle drei Werte
+  korrekt im JSON. `GET /` (Player-Seite) enthielt das neue Markup
+  (`stt-meter-wrap`/`stt-meter-fill`/`stt-meter-pct`/`fp-indicator-wrap`/
+  `fp-chip`) sowie die neue JS-Logik (`sttWrap`/`fpChip` im injizierten
+  Skript). Testprozess danach beendet, keine Auswirkung auf den
+  laufenden Produktiv-Container.
+
+### Bewusst NICHT gemacht
+
+Kein "checking"-Zwischenzustand für den Fingerprint-Chip (Begründung
+oben). Keine Sprachkennzeichnung am STT-Balken — hängt an Teil 1
+(mehrsprachige STT), der noch nicht umgesetzt ist; bis dahin zeigt der
+Balken nur den nackten Prozentwert.
+
+### Live deployt
+
+Nach Zustimmung des Nutzers: `docker compose up -d --build radiozapper`.
+Sauberer Start (Silero VAD + Vosk-STT geladen, kein Fehler/Traceback).
+`GET /api/status` direkt nach dem Start zeigte den Einfrier-Fall live und
+unabsichtlich in Aktion: der Container startete mitten in einer laufenden
+Nachrichten-Pause, `speech_probability`/`stt_probability` standen dadurch
+korrekt auf ihren Initialwerten (`0.0`/`null`), weil `classify()` während
+`news_break_active` gar nicht aufgerufen wird. Nach Ende der Pause (`GET
+/api/status` erneut abgefragt): `speech_probability=0.3757`,
+`stt_probability=0.8105`, `fingerprint_activity=null` — beide Balken
+liefern jetzt echte Werte vom laufenden Sender, exakt wie in der
+isolierten Verifikation vorhergesagt. `docker compose ps`: beide
+Container `Up`, kein Neustart-Loop.
+
+## 2026-08-06 (Fortsetzung 4) — Versionsnummer unter dem Banner-Bild
+
+Kurzer Nutzerwunsch zwischendurch: `VERSION` (Repo-Root) soll im
+Web-Interface sichtbar sein, nicht nur in der Datei.
+
+### Umsetzung
+
+- `VERSION` war bisher NICHT Teil des Docker-Images — `Dockerfile`
+  bekommt `COPY VERSION .`, landet flach in `/app/VERSION` wie alle
+  anderen `__file__`-relativ geladenen Dateien (siehe CLAUDE.md,
+  Docker-Besonderheiten).
+- `webui.py`: gleiches Lade-Muster wie `_BANNER_BYTES` oben im Modul —
+  einmalig beim Import gelesen (`_VERSION_STRING`), nicht pro Request.
+  Fehlt die Datei, bleibt die Zeile leer statt die Seite abstürzen zu
+  lassen (gleicher Fallback-Stil wie beim Banner-Bild).
+- `_render_i18n_variants()` bekommt einen dritten Platzhalter-Ersatz
+  (`%%VERSION%%` neben `%%LANG%%`/`%%I18N_JSON%%`) — der Versionsstring
+  ist sprachunabhängig, wird aber trotzdem nur einmal pro Sprache beim
+  Modul-Import ins vorgerechnete HTML eingesetzt statt pro Request,
+  exakt das bestehende Muster für beide Templates.
+  `<div class="version-tag">%%VERSION%%</div>` direkt unter
+  `<img class="banner">` auf BEIDEN Seiten (Player + Config) — kein
+  `data-i18n`, da reiner Klartext ohne Übersetzungsbedarf, taucht
+  deshalb auch nicht in `_check_i18n_coverage()` auf.
+
+### Verifiziert
+
+`webui`-Modul neu importiert, `_VERSION_STRING` zeigte den aktuellen
+Inhalt von `VERSION` (`v1.0.3 build 2026-08-06 10:35 Uhr`), das
+vorgerechnete `_PAGE_HTML_BYTES["de"]` enthielt
+`<img class="banner" ...><div class="version-tag">v1.0.3 build
+2026-08-06 10:35 Uhr</div>` direkt hintereinander.
+
+### Bewusst NICHT gemacht
+
+Keine Verlinkung/Historie (z.B. Link auf ein Changelog) — die Anzeige
+ist bewusst nur der aktuelle Versionsstring, wie in `VERSION` selbst
+auch nur eine Zeile steht.
+
+### Live deployt
+
+Nach Zustimmung des Nutzers: `docker compose up -d --build radiozapper`.
+Sauberer Start, kein Fehler/Traceback. `GET /` und `GET /config` zeigten
+beide `<div class="version-tag">v1.0.3 build 2026-08-06 10:35 Uhr</div>`
+direkt unter dem Banner-Bild. `docker compose ps`: beide Container `Up`.

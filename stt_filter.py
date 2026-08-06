@@ -263,6 +263,22 @@ class SttFilter:
             self.available = False
 
 
+def _fresh_confidence(verdict, cfg):
+    """Extrahiert die Konfidenz aus verdict, falls vorhanden UND noch
+    frisch genug (siehe FRESHNESS_FACTOR) -- sonst None. Gemeinsame Basis
+    für combine_label() (Switch-Logik) und live_confidence() (STT-Anzeige
+    im Web-Interface, siehe SESSION.md 2026-08-06) -- beide sollen exakt
+    denselben "kein Befund"-Begriff verwenden, nicht zwei leicht
+    unterschiedliche Altersschwellen."""
+    if verdict is None:
+        return None
+    confidence, _text, ts = verdict
+    max_age = cfg.get("sample_interval_seconds", 8.0) * FRESHNESS_FACTOR
+    if time.monotonic() - ts > max_age:
+        return None  # Befund zu alt -> wie "kein Befund"
+    return confidence
+
+
 def combine_label(label: str, verdict, cfg: dict) -> str:
     """Kombiniert das VAD/Heuristik-Ergebnis (`label`, "speech"/"music")
     mit dem letzten STT-Befund (siehe SttFilter.last_verdict()). Reine
@@ -285,16 +301,28 @@ def combine_label(label: str, verdict, cfg: dict) -> str:
       - "or": eines der beiden Signale reicht -- fängt mehr echte
         Moderation (auch was VAD verpasst), aber wieder anfälliger für
         den Gesangs-Fall, den "and" gerade lösen soll."""
-    if not cfg.get("enabled", False) or verdict is None:
+    if not cfg.get("enabled", False):
         return label
 
-    confidence, _text, ts = verdict
-    max_age = cfg.get("sample_interval_seconds", 8.0) * FRESHNESS_FACTOR
-    if time.monotonic() - ts > max_age:
-        return label  # Befund zu alt -> wie "kein Befund", s.o.
+    confidence = _fresh_confidence(verdict, cfg)
+    if confidence is None:
+        return label
 
     stt_label = "speech" if confidence >= cfg.get("confidence_threshold", 0.6) else "music"
     mode = cfg.get("combine_mode", "and")
     if mode == "or":
         return "speech" if (label == "speech" or stt_label == "speech") else "music"
     return "speech" if (label == "speech" and stt_label == "speech") else "music"
+
+
+def live_confidence(verdict, cfg: dict):
+    """Rohe STT-Konfidenz (0..1) für die Live-Anzeige im Web-Interface,
+    oder None, falls der Filter deaktiviert ist oder kein frischer Befund
+    vorliegt -- das Web-Interface friert die Anzeige dann grau ein (siehe
+    webui.py). Separate Funktion statt kombiniert mit combine_label():
+    letztere braucht denselben "kein Befund"-Fall für die Switch-Logik,
+    beide teilen sich deshalb _fresh_confidence() statt die Altersprüfung
+    zweimal leicht unterschiedlich zu implementieren."""
+    if not cfg.get("enabled", False):
+        return None
+    return _fresh_confidence(verdict, cfg)

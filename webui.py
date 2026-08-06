@@ -52,6 +52,19 @@ except OSError as _e:
     _BANNER_BYTES = None
     log.warning("⚠ Banner-Bild %s nicht lesbar (%s) — Seite läuft ohne.", _BANNER_PATH, _e)
 
+# Versionsstring aus VERSION (Repo-Root, siehe CLAUDE.md "Versionspflege")
+# -- rein informativ, unter dem Banner-Bild angezeigt. Gleiches
+# Lade-Muster wie oben: einmalig beim Modul-Import, kein Datei-Zugriff
+# pro Request.
+_VERSION_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "VERSION")
+try:
+    with open(_VERSION_PATH, "r", encoding="utf-8") as _f:
+        _VERSION_STRING = _f.read().strip()
+except OSError as _e:
+    _VERSION_STRING = ""
+    log.warning("⚠ VERSION-Datei %s nicht lesbar (%s) — Seite zeigt keine Versionsnummer.",
+                _VERSION_PATH, _e)
+
 # Vendorte QR-Code-Bibliothek (siehe qrcode.js) statt CDN-Einbindung: das
 # Web-Interface läuft laut CLAUDE.md nur im eigenen VPN, ein Client dort
 # hat nicht zwangsläufig Internetzugriff für ein <script src="cdn...">.
@@ -128,6 +141,8 @@ class SwitcherState:
         self._stt_filter_cfg = dict(settings_store.DEFAULTS["stt_filter"])
         self._stt_status = {"engine": None, "available": False, "error": None}
         self._speech_probability = 0.0
+        self._stt_probability = None  # siehe set_stt_probability()
+        self._fp_activity = None  # {"status", "label", "ts"} oder None, siehe set_fingerprint_activity()
         self.reload()
 
     def reload(self):
@@ -350,6 +365,45 @@ class SwitcherState:
     def speech_probability(self) -> float:
         with self._lock:
             return self._speech_probability
+
+    def set_stt_probability(self, value):
+        """Vom Hauptloop in derselben classify()-Closure wie
+        set_speech_probability() aufgerufen — rohe STT-Konfidenz (0..1)
+        oder None (siehe stt_filter.live_confidence(): Filter aus oder
+        kein frischer Befund) fürs STT-Live-Anzeige im Web-Interface.
+        Gleiches Einfrier-Verhalten wie beim Bullshitometer: bleibt
+        unverändert, solange classify() nicht aufgerufen wird (News-Break/
+        Sabbelfilter aus), das Frontend blendet über news_break_active/
+        filter_enabled aus."""
+        with self._lock:
+            self._stt_probability = value
+
+    @property
+    def stt_probability(self):
+        with self._lock:
+            return self._stt_probability
+
+    def set_fingerprint_activity(self, status: str, label: str = None):
+        """status: "match" (bekannter Clip wiedererkannt) oder "learned"
+        (neuer Clip gelernt, kein Treffer) — fürs Fingerprint-Live-Icon
+        auf der Player-Seite. Bewusst GETRENNT von
+        set_last_fingerprint_clip()/pop_last_fingerprint_clip(): die sind
+        für den "Zapping-Fehler"-Button reserviert und werden beim Klick
+        konsumiert (pop) — ein zweiter Konsument (die Live-Anzeige, die
+        bei jedem Poll denselben Wert lesen will) würde sich mit dem
+        Button den Wert sonst gegenseitig wegschnappen."""
+        with self._lock:
+            self._fp_activity = {"status": status, "label": label, "ts": time.monotonic()}
+
+    @property
+    def fingerprint_activity_raw(self):
+        """Roh (ungefiltert nach Alter) — _build_status() wendet die
+        FP_ACTIVITY_TTL-Frische-Prüfung an, siehe dort. Getrennter Getter
+        statt die Prüfung hier einzubauen, damit _build_status() (das den
+        aktuellen Zeitpunkt kennt) die Entscheidung trifft, nicht dieser
+        reine Datenzugriff."""
+        with self._lock:
+            return dict(self._fp_activity) if self._fp_activity else None
 
     @property
     def filter_enabled(self) -> bool:
@@ -622,6 +676,22 @@ def _fetch_now_playing(station: dict, timeout: float = 3):
     return title
 
 
+# Wie lange ein Fingerprint-Ereignis (Treffer/gelernt) in der Live-Anzeige
+# sichtbar bleibt, bevor sie auf "idle" zurückfällt -- ohne das würde ein
+# einmaliger Treffer für immer als "🔴 Treffer" stehen bleiben (anders als
+# der Bullshitometer/STT-Balken, die bei jedem Analysefenster neu gesetzt
+# werden, ist ein Fingerprint-Ereignis ein einmaliger Zeitpunkt, kein
+# Dauerwert).
+FP_ACTIVITY_TTL = 5.0
+
+
+def _fresh_fingerprint_activity(state: SwitcherState):
+    act = state.fingerprint_activity_raw
+    if act is None or (time.monotonic() - act["ts"]) > FP_ACTIVITY_TTL:
+        return None
+    return {"status": act["status"], "label": act["label"]}
+
+
 def _build_status(state: SwitcherState, icecast_cfg: dict) -> dict:
     current = state.current_station()
     active = state.active_stations
@@ -650,6 +720,8 @@ def _build_status(state: SwitcherState, icecast_cfg: dict) -> dict:
         "news_break_active": state.news_break_active,
         "stt_status": state.stt_status,
         "speech_probability": state.speech_probability,
+        "stt_probability": state.stt_probability,
+        "fingerprint_activity": _fresh_fingerprint_activity(state),
         "version": state.version,
     }
 
@@ -729,20 +801,27 @@ _PAGE_HTML = """<!doctype html>
     border: 1px solid #999; background: none; color: inherit; cursor: pointer;
   }
   #player { width: 100%; margin-top: 1rem; }
-  #bs-meter-wrap { margin-top: 1rem; }
-  #bs-meter-label {
+  .meter-wrap { margin-top: 1rem; }
+  .meter-label {
     display: flex; justify-content: space-between; font-size: .8rem; color: #888;
     margin-bottom: .3rem;
   }
-  #bs-meter-track {
+  .meter-track {
     height: 1rem; border-radius: .6rem; background: #8882; overflow: hidden;
     border: 1px solid #8884;
   }
-  #bs-meter-fill {
+  .meter-fill {
     height: 100%; width: 0%; background: #2ecc71;
     transition: width .5s ease, background-color .5s ease, opacity .3s ease;
   }
-  #bs-meter-wrap.paused #bs-meter-fill { opacity: .3; }
+  .meter-wrap.paused .meter-fill { opacity: .3; }
+  #fp-chip {
+    display: inline-block; padding: .25rem .7rem; border-radius: 1rem; font-size: .85rem;
+    background: #8882; border: 1px solid #8884; color: inherit;
+    transition: background-color .3s ease, border-color .3s ease, color .3s ease;
+  }
+  #fp-chip.state-match { background: #c0392b; border-color: #c0392b; color: #fff; }
+  #fp-chip.state-learned { background: #27ae60; border-color: #27ae60; color: #fff; }
   ul#stations { list-style: none; padding: 0; display: grid; gap: .5rem; }
   ul#stations li button {
     width: 100%; text-align: left; padding: .6rem .8rem; font-size: 1rem;
@@ -756,6 +835,7 @@ _PAGE_HTML = """<!doctype html>
   #meta { color: #888; font-size: .8rem; margin-top: 2rem; }
   a.config-link { display: inline-block; margin-top: 1rem; font-size: .9rem; }
   img.banner { width: 100%; height: auto; display: block; border-radius: .5rem; margin-bottom: 1rem; }
+  .version-tag { text-align: center; font-size: .7rem; color: #888; margin: -.6rem 0 1rem; }
   h1.sr-only {
     position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
     overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
@@ -789,6 +869,7 @@ _PAGE_HTML = """<!doctype html>
 </head>
 <body>
 <img class="banner" src="/radiozapper.webp" alt="RadioZapper">
+<div class="version-tag">%%VERSION%%</div>
 <h1 class="sr-only">RadioZapper</h1>
 <div id="current" data-i18n="common_loading">Lade …</div>
 <div id="now-playing"></div>
@@ -825,14 +906,31 @@ _PAGE_HTML = """<!doctype html>
 </div>
 <div id="action-msg"></div>
 
-<div id="bs-meter-wrap">
-  <div id="bs-meter-label">
+<div id="bs-meter-wrap" class="meter-wrap">
+  <div class="meter-label">
     <span data-i18n="idx_bs_meter_label">🤥 Bullshitometer</span>
     <span id="bs-meter-pct">–</span>
   </div>
-  <div id="bs-meter-track">
-    <div id="bs-meter-fill"></div>
+  <div class="meter-track">
+    <div id="bs-meter-fill" class="meter-fill"></div>
   </div>
+</div>
+
+<div id="stt-meter-wrap" class="meter-wrap">
+  <div class="meter-label">
+    <span data-i18n="idx_stt_meter_label">🗣 STT</span>
+    <span id="stt-meter-pct">–</span>
+  </div>
+  <div class="meter-track">
+    <div id="stt-meter-fill" class="meter-fill"></div>
+  </div>
+</div>
+
+<div id="fp-indicator-wrap" class="meter-wrap">
+  <div class="meter-label">
+    <span data-i18n="idx_fp_indicator_label">🔎 Fingerprint</span>
+  </div>
+  <span id="fp-chip" data-i18n="idx_fp_state_idle">⚪ Idle</span>
 </div>
 
 <h2 data-i18n="idx_stations_heading">Sender</h2>
@@ -979,6 +1077,49 @@ function applyStatus(data) {
     const hue = Math.max(0, 120 - pct * 1.2);
     bsFill.style.backgroundColor = `hsl(${hue}, 70%, 45%)`;
     bsWrap.classList.remove('paused');
+  }
+
+  // STT-Balken: gleiches Muster wie das Bullshitometer, aber ein
+  // zusätzlicher eingefrorener Zustand -- der STT-Filter kann unabhängig
+  // vom Sabbelfilter aus sein oder (noch) keinen frischen Befund haben
+  // (stt_probability dann null, siehe stt_filter.live_confidence()).
+  const sttWrap = document.getElementById('stt-meter-wrap');
+  const sttFill = document.getElementById('stt-meter-fill');
+  const sttPct = document.getElementById('stt-meter-pct');
+  if (data.news_break_active) {
+    sttPct.textContent = t('idx_news_break');
+    sttWrap.classList.add('paused');
+  } else if (data.filter_enabled === false) {
+    sttPct.textContent = t('idx_filter_off');
+    sttWrap.classList.add('paused');
+  } else if (data.stt_probability === null || data.stt_probability === undefined) {
+    sttPct.textContent = t('idx_stt_meter_off');
+    sttWrap.classList.add('paused');
+  } else {
+    const pct = Math.round(data.stt_probability * 100);
+    sttPct.textContent = pct + '%';
+    sttFill.style.width = pct + '%';
+    const hue = Math.max(0, 120 - pct * 1.2);
+    sttFill.style.backgroundColor = `hsl(${hue}, 70%, 45%)`;
+    sttWrap.classList.remove('paused');
+  }
+
+  // Fingerprint-Chip: kein Dauerwert wie die beiden Balken oben, sondern
+  // ein diskretes Ereignis (Treffer/gelernter Clip), das der Server nur
+  // FP_ACTIVITY_TTL Sekunden lang meldet (siehe webui.py) -- danach liefert
+  // fingerprint_activity von selbst wieder null, die Anzeige fällt auf
+  // "idle" zurück, ohne dass das Frontend eine eigene Altersprüfung braucht.
+  const fpChip = document.getElementById('fp-chip');
+  const fpAct = data.fingerprint_activity;
+  fpChip.classList.remove('state-match', 'state-learned');
+  if (fpAct && fpAct.status === 'match') {
+    fpChip.textContent = t('idx_fp_state_match', {label: fpAct.label || t('common_unknown')});
+    fpChip.classList.add('state-match');
+  } else if (fpAct && fpAct.status === 'learned') {
+    fpChip.textContent = t('idx_fp_state_learned');
+    fpChip.classList.add('state-learned');
+  } else {
+    fpChip.textContent = t('idx_fp_state_idle');
   }
 
   // Player-Quelle nur einmal setzen, nicht bei jedem Poll -> sonst würde
@@ -1255,6 +1396,7 @@ _CONFIG_PAGE_HTML = """<!doctype html>
   }
   h1 { font-size: 1.4rem; }
   img.banner { width: 100%; height: auto; display: block; border-radius: .5rem; margin-bottom: 1rem; }
+  .version-tag { text-align: center; font-size: .7rem; color: #888; margin: -.6rem 0 1rem; }
   a.back { display: inline-block; margin-bottom: 1rem; }
   h2 {
     font-size: 1.05rem; margin-top: 2rem; border-bottom: 1px solid #8884;
@@ -1377,6 +1519,7 @@ _CONFIG_PAGE_HTML = """<!doctype html>
 </head>
 <body>
 <img class="banner" src="/radiozapper.webp" alt="RadioZapper">
+<div class="version-tag">%%VERSION%%</div>
 <a class="back" href="/" data-i18n="cfg_back_link">← zurück zum Player</a>
 <h1 data-i18n="cfg_heading">⚙ Sender verwalten</h1>
 
@@ -2154,7 +2297,8 @@ def _render_i18n_variants(template: str, template_name: str) -> dict:
     variants = {}
     for lang in i18n.LANGUAGES:
         strings_json = json.dumps({k: v[lang] for k, v in i18n.STRINGS.items()}, ensure_ascii=False)
-        html = template.replace("%%LANG%%", lang).replace("%%I18N_JSON%%", strings_json)
+        html = (template.replace("%%LANG%%", lang).replace("%%I18N_JSON%%", strings_json)
+                .replace("%%VERSION%%", _VERSION_STRING))
         variants[lang] = html.encode("utf-8")
     return variants
 

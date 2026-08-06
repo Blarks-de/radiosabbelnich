@@ -274,6 +274,9 @@ Einstellung deutsch.
 
 Erreichbar unter `http://<host>:5000/`:
 
+- Unter dem Banner-Bild steht klein die aktuell laufende Version
+  (`VERSION` im Repo-Root, siehe Versionspflege in `CLAUDE.md`) — auf der
+  Player- und der Config-Seite.
 - **Aktueller Sender + "Jetzt läuft"** — Titel/Interpret, falls der
   Sender ICY-Metadaten oder eine bekannte Alternativ-Quelle liefert
 - **Eingebetteter Player** — direkt im Browser mithören, ohne extra
@@ -307,6 +310,17 @@ Erreichbar unter `http://<host>:5000/`:
   live in Prozent, aktualisiert alle 3s. Rein informativ (nicht klickbar)
   — friert grau ein, während Nachrichten-Pause läuft oder der
   Sabbelfilter aus ist, weil dann gar nicht klassifiziert wird.
+- **🗣 STT-Balken** — gleiche Optik wie das Bullshitometer, zeigt aber
+  die rohe Konfidenz des STT-Sprachfilters (siehe eigener Abschnitt
+  oben), nicht die von VAD/Heuristik. Friert zusätzlich grau ein
+  ("STT aus"), wenn der STT-Filter selbst deaktiviert ist oder noch kein
+  frischer Befund vorliegt — unabhängig vom Sabbelfilter-Zustand, da der
+  STT-Filter eine eigene An/Aus-Einstellung hat.
+- **🔎 Fingerprint-Anzeige** — anders als die beiden Balken oben kein
+  Dauerwert, sondern ein kurz aufblitzendes Ereignis: 🔴 "Treffer:
+  &lt;Name&gt;" bei einer erkannten Werbung/Jingle (löst den automatischen
+  Wechsel aus), 🟢 "Gelernt" bei einem neuen, noch unbekannten Clip.
+  Fällt 5s nach dem letzten Ereignis von selbst auf ⚪ "Idle" zurück.
 
 Aktueller Sender, News-Break-Status und Sabbelfilter-Zustand kommen nicht
 nur per Intervall-Polling (alle 3s), sondern zusätzlich über einen
@@ -805,6 +819,9 @@ invalid setting) stay German regardless of this setting.
 
 Reachable at `http://<host>:5000/`:
 
+- The currently deployed version is shown in small text below the
+  banner image (`VERSION` at the repo root, see version tracking in
+  `CLAUDE.md`) — on both the player and config page.
 - **Current station + "now playing"** — title/artist, if the station
   provides ICY metadata or a known alternative source
 - **Embedded player** — listen right in the browser, no extra
@@ -837,6 +854,17 @@ Reachable at `http://<host>:5000/`:
   percent, updated every 3s. Purely informational (not clickable) —
   freezes gray while a news break is running or the chatter filter is
   off, because nothing is being classified then.
+- **🗣 STT bar** — same look as the bullshit-o-meter, but shows the raw
+  confidence of the STT speech filter (see its own section above)
+  instead of VAD/heuristic. Also freezes gray ("STT off") when the STT
+  filter itself is disabled or no fresh reading is available yet —
+  independent of the chatter filter state, since the STT filter has its
+  own on/off setting.
+- **🔎 Fingerprint indicator** — unlike the two bars above, not a
+  continuous value but a briefly flashing event: 🔴 "Match: &lt;name&gt;"
+  on a recognized ad/jingle (triggers the automatic switch), 🟢 "Learned"
+  on a new, previously unknown clip. Falls back to ⚪ "Idle" on its own
+  5s after the last event.
 
 Current station, news-break status and chatter-filter state arrive not
 just via interval polling (every 3s) but additionally via long polling
