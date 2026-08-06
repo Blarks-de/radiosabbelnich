@@ -334,6 +334,43 @@ Sample-Tick erneut das Dateisystem anfasst — `SttFilter.language_status()`
 legt diesen Zustand für die Config-Seite offen (✅/⚠ pro Sprache in der
 "🌐 STT-Sprachen"-Tabelle).
 
+**Kalibrierungs-Wizard (Teil 1b, seit 2026-08-06)**: `SwitcherState`
+hält dafür `_calibration` (Sprache/Stufe/beide Sample-Listen) — bewusst
+OHNE request/pop, obwohl sonst überall in diesem Bereich üblich (siehe
+"Ein Prozess, zwei Akteure" oben): eine Kalibrierungs-Session berührt
+keinen der Player-kritischen Zustände (`source`/`current`/Streak-
+Buchhaltung), für die request/pop eigentlich da ist. Der Webserver-
+Thread schreibt `_calibration` direkt lock-geschützt (Start/Stufenwechsel/
+Stop), der Hauptloop liest `calibration_language` bei jedem Tick UND
+hängt per `add_calibration_sample()` an dieselbe Session an — beide
+Seiten können sich dabei nicht in die Quere kommen, weil der Hauptloop
+die Session nie komplett ersetzt, nur ergänzt.
+
+Ist eine Session aktiv, ERZWINGT der Hauptloop ihre Sprache als STT-
+Zielsprache (statt `resolve_stt_language()` der aktuellen Kategorie) UND
+pausiert die komplette Switch-/Streak-Logik für diesen Tick (`continue`
+direkt nach `classify()`) — sonst könnte ein durch die erzwungene
+Kalibrierungssprache verfälschtes `combine_label()`-Ergebnis mitten in
+der Kalibrierung einen automatischen Wechsel auslösen (der Test-Sender
+gehört ja u.U. gar nicht zu der Kategorie, die normalerweise diese
+Sprache hätte). Der Wizard schaltet selbst NIEMALS einen Sender um — das
+bleibt manuell über die Player-Seite, ganz bewusst kein zusätzlicher
+Audio-Pfad oder eine zweite `StreamSource` nur fürs Kalibrieren, sondern
+Wiederverwendung der ohnehin laufenden STT-Sampling-Pipeline des gerade
+gespielten Senders.
+
+`stt_filter.suggest_confidence_threshold(speech_samples, music_samples)`
+ist die einzige, serverseitig einmal implementierte Vorschlagsformel
+(Grenze zwischen `max(music_samples)` und `min(speech_samples)`, mit
+`_THRESHOLD_MARGIN_RATIO=0.7` Richtung Sprache-Seite gewichtet) — die
+Config-Seite pollt `GET /api/config/stt-calibration/status`
+(`_build_calibration_status()` in webui.py), das den Vorschlag bei jedem
+Poll neu berechnet, statt eine zweite JS-Implementierung der Formel zu
+pflegen. "Übernehmen" nutzt bewusst den bestehenden
+`/api/config/stt-languages`-Upsert-Endpoint statt eines eigenen "apply"-
+Endpoints — eine Sprache mit neuer Schwelle speichern ist derselbe
+Vorgang wie manuell in der "🌐 STT-Sprachen"-Tabelle.
+
 - **Sampling läuft kontinuierlich, unabhängig vom aktuellen VAD-Label**
   (nicht nur während erkannter Sprache) — sonst wäre `combine_mode="or"`
   wirkungslos: der bräuchte STT-Urteile auch für Fenster, die VAD als
@@ -540,13 +577,15 @@ ursprüngliche Startwert, aber klar/langsam gesungener Schlager bleibt
 eine bekannte Schwachstelle (~20% falsch-positive Konfidenz trotz
 Schwelle). Whisper wurde noch gar nicht gegen echtes Audio getestet.
 Die Mehrsprachigkeit (Kategorie → Sprache, siehe STT-Sprachfilter-
-Abschnitt oben) ist als Datenmodell/Engine-Plumbing umgesetzt und die
-Sprachen-Verwaltung in der Config-Seite manuell bedienbar — der im
-Architektur-Vorschlag skizzierte GEFÜHRTE Kalibrierungs-Wizard (Sender
-kurz mithören lassen, Schwelle automatisch vorschlagen) ist bewusst noch
-NICHT gebaut ("Teil 1b"); bis dahin muss `confidence_threshold` für jede
-zusätzliche Sprache weiterhin manuell nach der im README beschriebenen
-Methode ermittelt werden, wie bisher nur für Deutsch geschehen.
+Abschnitt oben) inklusive geführtem Kalibrierungs-Wizard ist umgesetzt —
+`suggest_confidence_threshold()`s Vorschlagsformel (Marge zwischen dem
+höchsten gemessenen Musik-Wert und dem niedrigsten gemessenen
+Sprache-Wert) ist bislang nur an den ursprünglichen DE-Messwerten
+(Deutschlandfunk/Schlager, siehe oben) plausibilisiert, nicht an einer
+zweiten Sprache in echtem Betrieb verifiziert — bei sehr kleinen
+Sample-Zahlen (wenige Minuten Kalibrierung) bleibt der Vorschlag
+entsprechend grob, die Web-UI weist bei überlappenden Verteilungen
+zumindest per Warnung darauf hin.
 Das Playout-Delay (siehe Prebuffering-Abschnitt oben) schützt Hörer nur
 bei Wechseln zu vorgewärmten Sendern — bei einem frischen Wechsel
 (außerhalb der nächsten `prebuffer_count` Sender oder im Notfall) läuft

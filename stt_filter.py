@@ -477,3 +477,44 @@ def live_language(verdict, cfg: dict, expected_language: str):
         return None
     fresh = _fresh_verdict(verdict, cfg, expected_language)
     return expected_language if fresh else None
+
+
+# Anteil der Lücke zwischen music_max und speech_min, den der Vorschlag von
+# music_max aus Richtung speech_min einnimmt -- 0.7 heißt: 70% des Wegs
+# Richtung Sprache-Minimum, 30% Sicherheitsabstand nach unten Richtung
+# Musik-Maximum. Kein magischer Wert aus der Theorie, sondern grob dem
+# nachempfunden, wie der ursprüngliche DE-Default (0.75) relativ zu den
+# gemessenen 0.83 (Sprache-Minimum) und 0.38 (Musik-Schnitt) lag (siehe
+# README/SESSION.md) -- näher an der Sprache-Seite, weil combine_mode="and"
+# (Default) ohnehin zusätzlich gegen Musik-Fehlalarme absichert, ein zu
+# niedriger Schwellwert aber echte Moderation verpassen würde.
+_THRESHOLD_MARGIN_RATIO = 0.7
+
+
+def suggest_confidence_threshold(speech_samples, music_samples):
+    """Schlägt aus zwei Listen gemessener STT-Konfidenzwerte (Sprache-Test
+    bzw. Musik-Test derselben Sprache, siehe Kalibrierungs-Wizard in
+    webui.py) einen confidence_threshold vor -- reine Funktion, dieselbe
+    Methode, mit der der ursprüngliche DE-Default (0.75) von Hand
+    hergeleitet wurde (siehe README): eine Schwelle irgendwo zwischen dem
+    höchsten gemessenen Musik-Wert und dem niedrigsten gemessenen
+    Sprache-Wert trennt die beiden Verteilungen im gemessenen Sample
+    perfekt.
+
+    Gibt (threshold, clean_separation) zurück. clean_separation ist False,
+    wenn sich die beiden Verteilungen im gemessenen Sample ÜBERLAPPEN
+    (kein Wert trennt beide sauber) -- dann ist der Vorschlag nur der
+    Mittelwert beider Mittelwerte, ein Kompromiss ohne Garantie, und die
+    Web-UI zeigt dafür eine Warnung statt den Vorschlag unkommentiert zu
+    übernehmen."""
+    speech_min = min(speech_samples)
+    music_max = max(music_samples)
+    if speech_min > music_max:
+        gap = speech_min - music_max
+        threshold = music_max + _THRESHOLD_MARGIN_RATIO * gap
+        clean = True
+    else:
+        threshold = (sum(speech_samples) / len(speech_samples)
+                     + sum(music_samples) / len(music_samples)) / 2
+        clean = False
+    return round(max(0.0, min(1.0, threshold)), 2), clean

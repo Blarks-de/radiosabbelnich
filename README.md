@@ -239,6 +239,41 @@ und den resultierenden Container-Pfad (`/app/vosk-model-en`) als
 Modellpfad bei "🌐 STT-Sprachen" eintragen — danach `docker compose up -d
 --build radiozapper`, damit der neue Mount aktiv wird.
 
+### Kalibrierungs-Wizard
+
+Statt `confidence_threshold` blind zu raten, gibt es auf der Config-Seite
+unterhalb von "🏷 Kategorie-Sprachen" den Abschnitt "🧪
+Schwellwert-Kalibrierung" — er reproduziert dieselbe Methode, mit der
+ursprünglich der Deutsch-Default (0.75) hergeleitet wurde (siehe oben),
+nur geführt statt manuell aus den Logs abgelesen:
+
+1. Sprachcode eintragen (bei Vosk muss die Sprache vorher mit Modellpfad
+   unter "🌐 STT-Sprachen" angelegt sein, bei Whisper nicht nötig) und
+   "🧪 Kalibrierung starten" klicken. Voraussetzung: STT-Filter und
+   Sabbelfilter sind aktiv (sonst sampelt STT gar nicht, siehe oben).
+2. Manuell auf der Player-Seite einen Sender mit garantiert echtem
+   Sprachtext dieser Sprache anschalten (z.B. eine Nachrichtenwelle) und
+   ein paar Minuten laufen lassen — die Wizard-Seite zeigt die Sample-Zahl
+   sowie Konfidenz-Minimum/Maximum/Mittelwert live (Poll alle 2s).
+3. Auf "🎵 Musik-Stufe" umschalten und manuell auf einen Musiksender
+   derselben Sprache wechseln, erneut ein paar Minuten sammeln lassen.
+4. Sobald beide Stufen Samples haben, erscheint ein Vorschlag (Grenze
+   zwischen dem höchsten gemessenen Musik-Wert und dem niedrigsten
+   gemessenen Sprache-Wert, mit Sicherheitsmarge Richtung Sprache-Seite)
+   — "Übernehmen" speichert ihn direkt als `confidence_threshold` der
+   Sprache. Trennen sich Sprache und Musik im gemessenen Sample NICHT
+   sauber (Überlappung), zeigt der Vorschlag eine Warnung statt ihn
+   unkommentiert zu übernehmen — dann helfen meist mehr Samples oder ein
+   anderer Test-Sender.
+
+**Wichtig**: Die Kalibrierung schaltet selbst NICHTS um — welcher Sender
+gerade läuft, entscheidet ausschließlich die Player-Seite. Während einer
+laufenden Kalibrierung ist außerdem die automatische Sender-Umschaltung
+komplett pausiert (nicht nur für die Kalibrierungs-Sprache), damit ein
+durch die erzwungene Test-Sprache verfälschtes STT-Ergebnis nicht mitten
+in der Kalibrierung einen Wechsel auslöst — der laufende Sender bleibt
+also stehen, bis die Kalibrierung beendet wird.
+
 ### Konfiguration im Detail
 
 Konfiguriert wird das über den `stt_filter`-Block in `settings.json`
@@ -834,6 +869,40 @@ line to `docker-compose.yml`, e.g.:
 and enter the resulting container path (`/app/vosk-model-en`) as the
 model path under "🌐 STT-Sprachen" — then `docker compose up -d --build
 radiozapper` so the new mount takes effect.
+
+### Calibration wizard
+
+Instead of guessing `confidence_threshold`, the config page has a "🧪
+Schwellwert-Kalibrierung" section below "🏷 Kategorie-Sprachen" — it
+reproduces the same method originally used to derive the German default
+(0.75, see above), just guided instead of reading it off the logs by
+hand:
+
+1. Enter a language code (for Vosk, the language must already be set up
+   with a model path under "🌐 STT-Sprachen" first; not needed for
+   Whisper) and click "🧪 Start calibration". Requirement: the STT filter
+   and chatter filter must be active (otherwise STT doesn't sample at
+   all, see above).
+2. Manually switch to a station with guaranteed real speech in that
+   language on the player page (e.g. a news channel) and let it run for
+   a few minutes — the wizard page shows the sample count as well as
+   confidence min/max/average live (polled every 2s).
+3. Switch to the "🎵 Musik-Stufe" and manually switch to a music station
+   in the same language, again let it collect for a few minutes.
+4. Once both stages have samples, a suggestion appears (the boundary
+   between the highest measured music value and the lowest measured
+   speech value, with a safety margin toward the speech side) — "Apply"
+   saves it directly as that language's `confidence_threshold`. If speech
+   and music don't separate cleanly in the measured sample (overlap), the
+   suggestion shows a warning instead of being applied silently — usually
+   more samples or a different test station help.
+
+**Important**: calibration itself never switches anything — which
+station is playing is decided exclusively on the player page. While a
+calibration is running, automatic station switching is also completely
+paused (not just for the calibration language), so that an STT result
+distorted by the forced test language can't trigger a switch mid-
+calibration — the running station stays put until calibration ends.
 
 ### Configuration in detail
 

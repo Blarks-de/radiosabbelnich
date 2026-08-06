@@ -278,6 +278,53 @@ STRINGS = {
     "cfg_stt_cat_lang_default": {"de": "(Standard: Deutsch)", "en": "(default: German)"},
     "cfg_stt_cat_lang_saved": {"de": "Kategorie-Sprache gespeichert.", "en": "Category language saved."},
 
+    "cfg_stt_calib_heading": {"de": "🧪 Schwellwert-Kalibrierung", "en": "🧪 Threshold calibration"},
+    "cfg_stt_calib_hint": {
+        "de": ('Ermittelt einen Vorschlag für <code>confidence_threshold</code> einer Sprache, '
+               'nach derselben Methode wie die ursprüngliche Deutsch-Kalibrierung (siehe README): '
+               'erst ein paar Minuten einen Sender mit garantiert echtem Sprachtext dieser Sprache '
+               'mithören lassen, dann einen Musiksender derselben Sprache. Sender dafür manuell auf '
+               'der <a href="/">Player-Seite</a> auswählen — die Kalibrierung selbst schaltet nichts '
+               'um. Voraussetzung: STT-Filter und Sabbelfilter oben sind aktiv. Für Vosk muss die '
+               'Sprache mit Modellpfad bereits in "🌐 STT-Sprachen" angelegt sein (bei Whisper nicht '
+               'nötig).'),
+        "en": ('Determines a suggestion for a language\'s <code>confidence_threshold</code>, using '
+               'the same method as the original German calibration (see README): first listen in on '
+               'a station with guaranteed real speech in that language for a few minutes, then a '
+               'music station in the same language. Select stations for this manually on the '
+               '<a href="/">player page</a> — calibration itself never switches anything. '
+               'Requirement: the STT filter and chatter filter above must be active. For Vosk, the '
+               'language must already be set up with a model path under "🌐 STT-Sprachen" (not '
+               'needed for Whisper).'),
+    },
+    "cfg_stt_calib_start_btn": {"de": "🧪 Kalibrierung starten", "en": "🧪 Start calibration"},
+    "cfg_stt_calib_active_label": {"de": "Kalibriere:", "en": "Calibrating:"},
+    "cfg_stt_calib_stage_speech_btn": {"de": "🗣 Sprache-Stufe", "en": "🗣 Speech stage"},
+    "cfg_stt_calib_stage_music_btn": {"de": "🎵 Musik-Stufe", "en": "🎵 Music stage"},
+    "cfg_stt_calib_stop_btn": {"de": "Abbrechen", "en": "Cancel"},
+    "cfg_stt_calib_col_speech": {"de": "🗣 Sprache-Samples", "en": "🗣 Speech samples"},
+    "cfg_stt_calib_col_music": {"de": "🎵 Musik-Samples", "en": "🎵 Music samples"},
+    "cfg_stt_calib_no_samples": {"de": "noch keine Samples", "en": "no samples yet"},
+    "cfg_stt_calib_summary": {
+        "de": "{count} Sample(s), Konfidenz min {min} / max {max} / Ø {mean}",
+        "en": "{count} sample(s), confidence min {min} / max {max} / avg {mean}",
+    },
+    "cfg_stt_calib_suggestion_clean": {
+        "de": "✅ Vorschlag: {threshold} (Sprache und Musik trennen sauber im gemessenen Sample)",
+        "en": "✅ Suggestion: {threshold} (speech and music separate cleanly in the measured sample)",
+    },
+    "cfg_stt_calib_suggestion_warn": {
+        "de": "⚠ Vorschlag: {threshold} — Sprache und Musik überlappen sich im gemessenen Sample, "
+              "kein sauberer Trennwert gefunden. Mehr Samples sammeln oder Sender prüfen.",
+        "en": "⚠ Suggestion: {threshold} — speech and music overlap in the measured sample, no clean "
+              "separating value found. Collect more samples or check the stations.",
+    },
+    "cfg_stt_calib_apply_btn": {"de": "Übernehmen", "en": "Apply"},
+    "cfg_stt_calib_applied": {"de": "Schwellwert übernommen.", "en": "Threshold applied."},
+    "cfg_stt_calib_samples_summary": {"de": "Letzte Samples anzeigen", "en": "Show recent samples"},
+    "cfg_stt_calib_no_text": {"de": "(kein Text erkannt)", "en": "(no text detected)"},
+    "cfg_stt_calib_lang_required": {"de": "Sprachcode darf nicht leer sein.", "en": "Language code must not be empty."},
+
     "cfg_fingerprint_heading": {"de": "🗑 Fingerprint-Datenbank", "en": "🗑 Fingerprint database"},
     "cfg_fingerprint_hint": {
         "de": ('Löscht alle gelernten Jingle-/Werbespot-Clips (nicht '

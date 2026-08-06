@@ -33,6 +33,7 @@ import resource_monitor
 import settings_store
 import station_import
 import stations_store
+import stt_filter
 
 log = logging.getLogger("webui")
 
@@ -41,6 +42,13 @@ log = logging.getLogger("webui")
 # Prebuffering sie nie zu Gesicht bekommen. Nur SwitcherState.current_station()
 # kennt sie, um dem Web-Interface während der Pause etwas Sinnvolles zu zeigen.
 NEWS_BREAK_STATION_ID = "__news_break__"
+
+# Deckel pro Stufe (Sprache/Musik) im STT-Kalibrierungs-Wizard (siehe
+# SwitcherState.add_calibration_sample()) -- gegen unbegrenztes Wachstum,
+# falls eine Session vergessen im Hintergrund weiterläuft. Bei
+# sample_interval_seconds=8s (Default) entspricht das ~13 Minuten
+# Sampling pro Stufe, reichlich für eine Kalibrierung.
+MAX_CALIBRATION_SAMPLES = 100
 
 # Einmalig beim Modul-Import gelesen (statt bei jedem Request von der
 # Platte) — kleines statisches Asset, ändert sich nicht zur Laufzeit.
@@ -141,6 +149,8 @@ class SwitcherState:
         self._stt_filter_cfg = dict(settings_store.DEFAULTS["stt_filter"])
         self._stt_status = {"engine": None, "available": False, "error": None}
         self._stt_language_status = {}  # lang -> Fehlertext|None, siehe set_stt_language_status()
+        self._calibration = None  # {"language", "stage", "speech_samples", "music_samples"} oder None
+        self._calibration_last_ts = None  # Dedup-Timestamp, siehe add_calibration_sample()
         self._speech_probability = 0.0
         self._stt_probability = None  # siehe set_stt_probability()
         self._stt_language = None  # siehe set_stt_language()
@@ -362,6 +372,75 @@ class SwitcherState:
     def stt_language_status(self) -> dict:
         with self._lock:
             return dict(self._stt_language_status)
+
+    # ---- STT-Kalibrierungs-Wizard (Teil 1b, siehe SESSION.md 2026-08-06) ----
+    #
+    # Bewusst KEIN request/pop wie bei source/current/Streak-Buchhaltung
+    # (siehe CLAUDE.md): eine Kalibrierungs-Session berührt keinen der
+    # Player-kritischen Zustände, für die dieses Muster da ist -- sie ist
+    # ein eigenständiger, isolierter Datentopf, den der Webserver-Thread
+    # direkt (lock-geschützt) schreiben und der Hauptloop direkt lesen UND
+    # ergänzen darf, ohne dass beide Seiten sich in die Quere kommen
+    # können. Der Hauptloop überschreibt _calibration nie komplett, nur
+    # add_calibration_sample() hängt an; der Webserver setzt/leert es nie
+    # während der Hauptloop mitten in add_calibration_sample() steckt (Lock).
+
+    def start_calibration(self, language: str):
+        """Startet (oder startet neu) eine Kalibrierungs-Session für
+        `language`, Stufe "speech". Der Hauptloop erzwingt ab dem
+        nächsten Tick `language` als STT-Zielsprache (statt der
+        kategoriebasierten Auflösung) und pausiert währenddessen die
+        automatische Switch-Logik komplett (siehe radiozapper.py) --
+        sonst könnte ein durch die erzwungene Sprache verfälschtes
+        combine_label()-Ergebnis mitten in der Kalibrierung einen
+        Wechsel auslösen."""
+        with self._lock:
+            self._calibration = {"language": language, "stage": "speech",
+                                  "speech_samples": [], "music_samples": []}
+            self._calibration_last_ts = None
+
+    def set_calibration_stage(self, stage: str):
+        """stage: "speech" oder "music". No-Op, falls gerade keine Session
+        läuft (z.B. Doppelklick/veraltete Seite)."""
+        with self._lock:
+            if self._calibration is not None:
+                self._calibration["stage"] = stage
+                self._calibration_last_ts = None  # neue Stufe -> nächster Verdict zählt frisch
+
+    def stop_calibration(self):
+        with self._lock:
+            self._calibration = None
+            self._calibration_last_ts = None
+
+    @property
+    def calibration_language(self):
+        """None, solange keine Session läuft -- vom Hauptloop bei JEDEM
+        Tick gelesen, um zu entscheiden, ob die Sprachauflösung über die
+        Sender-Kategorie überschrieben werden muss (siehe start_calibration())."""
+        with self._lock:
+            return self._calibration["language"] if self._calibration else None
+
+    def add_calibration_sample(self, confidence: float, text: str, ts: float):
+        """Vom Hauptloop nach jedem STT-Sample aufgerufen (auch wenn
+        gerade keine Kalibrierung läuft -- No-Op dann, siehe unten).
+        `ts` dedupliziert: last_verdict() liefert über mehrere Haupt-
+        loop-Ticks denselben (noch nicht durch ein neues Sample ersetzten)
+        Befund zurück, ohne die Dedup-Prüfung würde derselbe Sample-Wert
+        mehrfach gezählt. Auf MAX_CALIBRATION_SAMPLES pro Stufe gedeckelt
+        -- gegen unbegrenztes Wachstum, falls eine Session vergessen im
+        Hintergrund weiterläuft."""
+        with self._lock:
+            if self._calibration is None or ts == self._calibration_last_ts:
+                return
+            self._calibration_last_ts = ts
+            key = "speech_samples" if self._calibration["stage"] == "speech" else "music_samples"
+            samples = self._calibration[key]
+            if len(samples) < MAX_CALIBRATION_SAMPLES:
+                samples.append({"confidence": confidence, "text": text})
+
+    def calibration_snapshot(self):
+        with self._lock:
+            return dict(self._calibration) if self._calibration else None
 
     def set_speech_probability(self, value: float):
         """Vom Hauptloop nach jeder Klassifikation eines Analysefensters
@@ -718,6 +797,31 @@ def _fresh_fingerprint_activity(state: SwitcherState):
     if act is None or (time.monotonic() - act["ts"]) > FP_ACTIVITY_TTL:
         return None
     return {"status": act["status"], "label": act["label"]}
+
+
+def _build_calibration_status(state: SwitcherState) -> dict:
+    """Snapshot der laufenden Kalibrierungs-Session (Teil 1b) plus, sobald
+    beide Stufen mindestens einen Sample haben, dem berechneten
+    Schwellwert-Vorschlag (siehe stt_filter.suggest_confidence_threshold())
+    -- serverseitig berechnet statt in JS dupliziert, damit es nur EINE
+    Implementierung der Vorschlagsformel gibt."""
+    snap = state.calibration_snapshot()
+    if snap is None:
+        return {"active": False}
+    result = {
+        "active": True,
+        "language": snap["language"],
+        "stage": snap["stage"],
+        "speech_samples": snap["speech_samples"],
+        "music_samples": snap["music_samples"],
+        "suggestion": None,
+    }
+    if snap["speech_samples"] and snap["music_samples"]:
+        speech_conf = [s["confidence"] for s in snap["speech_samples"]]
+        music_conf = [s["confidence"] for s in snap["music_samples"]]
+        threshold, clean = stt_filter.suggest_confidence_threshold(speech_conf, music_conf)
+        result["suggestion"] = {"threshold": threshold, "clean_separation": clean}
+    return result
 
 
 def _build_status(state: SwitcherState, icecast_cfg: dict) -> dict:
@@ -1533,6 +1637,30 @@ _CONFIG_PAGE_HTML = """<!doctype html>
   form#stt-lang-add-form #stt-lang-vosk-path { flex: 1; min-width: 10rem; }
   form#stt-lang-add-form #stt-lang-threshold { width: 5rem; }
   form#stt-lang-add-form button { padding: .5rem 1rem; font-size: .9rem; cursor: pointer; }
+  section#stt-calib-section {
+    margin-top: 1.5rem; padding: 1rem; border: 1px solid #8884; border-radius: .5rem;
+  }
+  #stt-calib-idle .fields { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+  #stt-calib-idle input {
+    width: 6rem; padding: .4rem; font-size: .9rem; box-sizing: border-box;
+  }
+  #stt-calib-idle button, #stt-calib-active button {
+    padding: .5rem 1rem; font-size: .9rem; cursor: pointer;
+  }
+  #stt-calib-stage-buttons { display: flex; flex-wrap: wrap; gap: .5rem; margin: .6rem 0; }
+  #stt-calib-stage-buttons button.active-stage {
+    border-color: #2a7a4a; background: #2a7a4a33; font-weight: 600;
+  }
+  table#stt-calib-summary-table { width: 100%; border-collapse: collapse; font-size: .9rem; margin: .5rem 0; }
+  table#stt-calib-summary-table td { padding: .3rem .4rem; border-bottom: 1px solid #8884; }
+  #stt-calib-suggestion {
+    margin-top: .8rem; padding: .8rem; border: 1px solid #2a7a4a; border-radius: .4rem;
+  }
+  #stt-calib-suggestion.warn { border-color: #d33; }
+  #stt-calib-samples-details { margin-top: .6rem; font-size: .85rem; }
+  #stt-calib-samples-list {
+    font-size: .8rem; color: #888; max-height: 10rem; overflow-y: auto; padding-left: 1.2rem;
+  }
   form#import-form {
     margin-top: 1.5rem; padding: 1rem; border: 1px solid #8884; border-radius: .5rem;
     display: grid; gap: .6rem;
@@ -1771,6 +1899,48 @@ _CONFIG_PAGE_HTML = """<!doctype html>
     Sender welcher Kategorie geprüft wird. Kategorien ohne Auswahl gelten als
     Deutsch.</p>
   <table id="stt-cat-lang-table"><tbody id="stt-cat-lang-tbody"></tbody></table>
+</section>
+
+<section id="stt-calib-section">
+  <h2 style="margin-top:0" data-i18n="cfg_stt_calib_heading">🧪 Schwellwert-Kalibrierung</h2>
+  <p class="hint" data-i18n-html="cfg_stt_calib_hint">Ermittelt einen Vorschlag für
+    <code>confidence_threshold</code> einer Sprache, nach derselben Methode wie die
+    ursprüngliche Deutsch-Kalibrierung (siehe README): erst ein paar Minuten einen
+    Sender mit garantiert echtem Sprachtext dieser Sprache mithören lassen, dann
+    einen Musiksender derselben Sprache. Sender dafür manuell auf der
+    <a href="/">Player-Seite</a> auswählen — die Kalibrierung selbst schaltet nichts
+    um. Voraussetzung: STT-Filter und Sabbelfilter oben sind aktiv. Für Vosk muss die
+    Sprache mit Modellpfad bereits in "🌐 STT-Sprachen" angelegt sein (bei Whisper
+    nicht nötig).</p>
+
+  <div id="stt-calib-idle">
+    <div class="fields">
+      <input type="text" id="stt-calib-lang" data-i18n-placeholder="cfg_stt_lang_code_placeholder" placeholder="z.B. en">
+      <button type="button" id="btn-stt-calib-start" data-i18n="cfg_stt_calib_start_btn">🧪 Kalibrierung starten</button>
+    </div>
+  </div>
+
+  <div id="stt-calib-active" hidden>
+    <p><span data-i18n="cfg_stt_calib_active_label">Kalibriere:</span>
+       <strong id="stt-calib-active-lang"></strong></p>
+    <div id="stt-calib-stage-buttons">
+      <button type="button" id="btn-stt-calib-stage-speech" data-i18n="cfg_stt_calib_stage_speech_btn">🗣 Sprache-Stufe</button>
+      <button type="button" id="btn-stt-calib-stage-music" data-i18n="cfg_stt_calib_stage_music_btn">🎵 Musik-Stufe</button>
+      <button type="button" id="btn-stt-calib-stop" data-i18n="cfg_stt_calib_stop_btn">Abbrechen</button>
+    </div>
+    <table id="stt-calib-summary-table">
+      <tr><td data-i18n="cfg_stt_calib_col_speech">🗣 Sprache-Samples</td><td id="stt-calib-speech-summary">–</td></tr>
+      <tr><td data-i18n="cfg_stt_calib_col_music">🎵 Musik-Samples</td><td id="stt-calib-music-summary">–</td></tr>
+    </table>
+    <div id="stt-calib-suggestion" hidden>
+      <p id="stt-calib-suggestion-text"></p>
+      <button type="button" id="btn-stt-calib-apply" data-i18n="cfg_stt_calib_apply_btn">Übernehmen</button>
+    </div>
+    <details id="stt-calib-samples-details">
+      <summary data-i18n="cfg_stt_calib_samples_summary">Letzte Samples anzeigen</summary>
+      <ul id="stt-calib-samples-list"></ul>
+    </details>
+  </div>
 </section>
 
 <section id="fingerprint-section">
@@ -2425,13 +2595,134 @@ async function loadResources() {
   }
 }
 
+let lastCalibSnapshot = null;
+
+function formatConfidenceSummary(samples) {
+  if (!samples.length) return t('cfg_stt_calib_no_samples');
+  const confs = samples.map(s => s.confidence);
+  const min = Math.min(...confs), max = Math.max(...confs);
+  const mean = confs.reduce((a, b) => a + b, 0) / confs.length;
+  return t('cfg_stt_calib_summary', {
+    count: samples.length, min: min.toFixed(2), max: max.toFixed(2), mean: mean.toFixed(2),
+  });
+}
+
+function renderCalibration(s) {
+  lastCalibSnapshot = s;
+  const idle = document.getElementById('stt-calib-idle');
+  const active = document.getElementById('stt-calib-active');
+  if (!s.active) {
+    idle.hidden = false;
+    active.hidden = true;
+    return;
+  }
+  idle.hidden = true;
+  active.hidden = false;
+  document.getElementById('stt-calib-active-lang').textContent = s.language;
+
+  document.getElementById('btn-stt-calib-stage-speech').classList.toggle('active-stage', s.stage === 'speech');
+  document.getElementById('btn-stt-calib-stage-music').classList.toggle('active-stage', s.stage === 'music');
+
+  document.getElementById('stt-calib-speech-summary').textContent = formatConfidenceSummary(s.speech_samples);
+  document.getElementById('stt-calib-music-summary').textContent = formatConfidenceSummary(s.music_samples);
+
+  const suggestionBox = document.getElementById('stt-calib-suggestion');
+  if (s.suggestion) {
+    suggestionBox.hidden = false;
+    suggestionBox.classList.toggle('warn', !s.suggestion.clean_separation);
+    const key = s.suggestion.clean_separation ? 'cfg_stt_calib_suggestion_clean' : 'cfg_stt_calib_suggestion_warn';
+    document.getElementById('stt-calib-suggestion-text').textContent = t(key, {threshold: s.suggestion.threshold});
+  } else {
+    suggestionBox.hidden = true;
+  }
+
+  // Nur die Samples der GERADE aktiven Stufe anzeigen, jüngste zuerst --
+  // die andere Stufe bleibt in ihrer eigenen Zusammenfassungszeile oben
+  // sichtbar, muss hier nicht doppelt aufgelistet werden.
+  const currentSamples = s.stage === 'speech' ? s.speech_samples : s.music_samples;
+  document.getElementById('stt-calib-samples-list').innerHTML = currentSamples.slice(-15).reverse()
+    .map((sample) => `<li>${sample.confidence.toFixed(2)} — ${esc(sample.text || t('cfg_stt_calib_no_text'))}</li>`)
+    .join('');
+}
+
+async function pollCalibration() {
+  try {
+    renderCalibration(await api('/api/config/stt-calibration/status'));
+  } catch (e) {
+    // Rein informativ -- kein Fehlerhinweis auf der ganzen Config-Seite.
+  }
+}
+
+document.getElementById('btn-stt-calib-start').addEventListener('click', async () => {
+  const language = document.getElementById('stt-calib-lang').value.trim().toLowerCase();
+  if (!language) {
+    showMsg(t('cfg_stt_calib_lang_required'), true);
+    return;
+  }
+  try {
+    await api('/api/config/stt-calibration/start', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({language}),
+    });
+    pollCalibration();
+  } catch (e) {
+    showMsg(t('common_error', {msg: e.message}), true);
+  }
+});
+
+async function setCalibStage(stage) {
+  try {
+    await api('/api/config/stt-calibration/stage', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({stage}),
+    });
+    pollCalibration();
+  } catch (e) {
+    showMsg(t('common_error', {msg: e.message}), true);
+  }
+}
+document.getElementById('btn-stt-calib-stage-speech').addEventListener('click', () => setCalibStage('speech'));
+document.getElementById('btn-stt-calib-stage-music').addEventListener('click', () => setCalibStage('music'));
+
+document.getElementById('btn-stt-calib-stop').addEventListener('click', async () => {
+  try {
+    await api('/api/config/stt-calibration/stop', {method: 'POST'});
+    pollCalibration();
+  } catch (e) {
+    showMsg(t('common_error', {msg: e.message}), true);
+  }
+});
+
+document.getElementById('btn-stt-calib-apply').addEventListener('click', async () => {
+  if (!lastCalibSnapshot || !lastCalibSnapshot.suggestion) return;
+  try {
+    // Bestehender Upsert-Endpoint statt eines eigenen "apply" -- eine
+    // Sprache mit neuer Schwelle speichern ist exakt derselbe Vorgang wie
+    // manuell in der "🌐 STT-Sprachen"-Tabelle, nur mit vorausgefüllten
+    // Werten aus der Kalibrierung.
+    await api('/api/config/stt-languages', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        lang_code: lastCalibSnapshot.language,
+        confidence_threshold: lastCalibSnapshot.suggestion.threshold,
+      }),
+    });
+    showMsg(t('cfg_stt_calib_applied'), false);
+    loadSettings();
+  } catch (e) {
+    showMsg(t('common_error', {msg: e.message}), true);
+  }
+});
+
 loadStations();
 loadSettings();
 loadResources();
+pollCalibration();
 // Nur relevant, solange die Config-Seite offen ist -- kein Long-Poll nötig,
 // das ist kein zeitkritischer Wert (anders als der Bullshitometer auf der
 // Player-Seite).
 setInterval(loadResources, 5000);
+setInterval(pollCalibration, 2000);
 
 // Falls die Seite neu geladen wird, während ein Import noch läuft (z.B.
 // nach einem Reload), sofort den Fortschritt abfragen und ggf. weiter pollen.
@@ -2630,6 +2921,8 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                 self._send_json(data)
             elif self.path == "/api/config/import/status":
                 self._send_json(import_state.snapshot())
+            elif self.path == "/api/config/stt-calibration/status":
+                self._send_json(_build_calibration_status(state))
             elif self.path == "/api/resources":
                 self._send_json(res_mon.snapshot())
             else:
@@ -2664,6 +2957,12 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                 self._handle_stt_language_action()
             elif self.path == "/api/config/stt-category-language":
                 self._handle_set_category_language()
+            elif self.path == "/api/config/stt-calibration/start":
+                self._handle_calibration_start()
+            elif self.path == "/api/config/stt-calibration/stage":
+                self._handle_calibration_stage()
+            elif self.path == "/api/config/stt-calibration/stop":
+                self._handle_calibration_stop()
             elif self.path == "/api/config/import/start":
                 self._handle_import_start()
             else:
@@ -2769,6 +3068,43 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                 self._send_json({"ok": True})
             except ValueError as e:
                 self._send_json({"ok": False, "error": str(e)}, status=400)
+
+        def _handle_calibration_start(self):
+            # Voraussetzungen NICHT automatisch gesetzt (z.B. Sabbelfilter
+            # stillschweigend aktivieren) -- der Nutzer soll bewusst
+            # entscheiden, den Player kurz für die Kalibrierung zu nutzen,
+            # siehe Hinweistext auf der Config-Seite.
+            payload = self._read_json_body()
+            language = (payload.get("language") or "").strip().lower()
+            if not language:
+                self._send_json({"ok": False, "error": "Sprachcode darf nicht leer sein."}, status=400)
+                return
+            if not state.stt_filter_cfg.get("enabled", False):
+                self._send_json({"ok": False, "error": "STT-Filter ist deaktiviert — oben zuerst aktivieren."},
+                                 status=400)
+                return
+            if not state.filter_enabled:
+                self._send_json({"ok": False, "error": "Sabbelfilter ist aus — STT sampelt sonst nicht."},
+                                 status=400)
+                return
+            state.start_calibration(language)
+            log.info("🧪 Kalibrierung gestartet: Sprache '%s', Stufe 'speech'.", language)
+            self._send_json({"ok": True})
+
+        def _handle_calibration_stage(self):
+            payload = self._read_json_body()
+            stage = payload.get("stage")
+            if stage not in ("speech", "music"):
+                self._send_json({"ok": False, "error": "stage muss 'speech' oder 'music' sein."}, status=400)
+                return
+            state.set_calibration_stage(stage)
+            log.info("🧪 Kalibrierung: Stufe gewechselt zu '%s'.", stage)
+            self._send_json({"ok": True})
+
+        def _handle_calibration_stop(self):
+            state.stop_calibration()
+            log.info("🧪 Kalibrierung beendet.")
+            self._send_json({"ok": True})
 
         def _handle_fingerprint_clear(self):
             # "Clip-DB leeren"-Knopf: löscht ALLE gelernten Fingerprint-

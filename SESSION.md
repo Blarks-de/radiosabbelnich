@@ -3781,3 +3781,148 @@ kurz danach bestätigte `stt_language: "de"`,
 `stt_probability: 0.321038`, `_stt_language_status: {"de": null}`
 (erfolgreich geladen, kein Fehler). `docker compose ps`: beide Container
 `Up`, kein Neustart-Loop.
+
+## 2026-08-06 (Fortsetzung 6) — Geführter STT-Kalibrierungs-Wizard (Teil 1b)
+
+Letzter Teil aus dem ursprünglichen Architektur-Vorschlag (siehe
+"Fortsetzung 2/3/5" oben) — der in Teil 1a bewusst zurückgestellte
+zweistufige Kalibrierungs-Wizard.
+
+### Kernentscheidung: kein eigener Audio-Pfad, Wiederverwendung der laufenden STT-Pipeline
+
+Statt eine zweite, vom Player entkoppelte `StreamSource` nur fürs
+Kalibrieren aufzubauen (hätte einen Großteil von `StreamSource`s
+ffmpeg-Pipe-Komplexität dupliziert und `webui.py`s Grenze "kein
+Player-Zustand außerhalb request/pop" verletzt), hängt sich die
+Kalibrierung an die ohnehin laufende STT-Sampling-Pipeline des GERADE
+gespielten Senders — der Nutzer schaltet manuell auf der Player-Seite um
+(Sprache-Testsender, dann Musik-Testsender), der Wizard sammelt nur mit.
+Zwei Konsequenzen, die das erzwingen:
+
+- Die erwartete Sprache muss während einer Session ERZWUNGEN werden
+  (nicht mehr über `resolve_stt_language(current["category"], …)`
+  aufgelöst) — sonst würde z.B. ein deutscher Nachrichtensender beim
+  Kalibrieren von "en" weiterhin als "de" gesampelt.
+- Die automatische Switch-Logik muss für die Dauer der Session komplett
+  PAUSIERT werden (nicht nur die Kalibrierungs-Sprache betreffend) —
+  sonst könnte ein durch die erzwungene Sprache verfälschtes
+  `combine_label()`-Ergebnis mitten in der Kalibrierung einen Wechsel
+  auslösen, während der Nutzer gerade bewusst auf einem Testsender bleiben
+  will.
+
+### Umsetzung
+
+- **`stt_filter.py`**: `suggest_confidence_threshold(speech_samples,
+  music_samples)` — reine Funktion, reproduziert die Methode, mit der der
+  ursprüngliche DE-Default (0.75) von Hand hergeleitet wurde: Schwelle =
+  `music_max + 0.7 × (speech_min − music_max)`, sofern `speech_min >
+  music_max` (saubere Trennung im Sample). Bei Überlappung: Mittelwert
+  beider Mittelwerte als Kompromiss, mit `clean_separation=False`-Flag für
+  eine Warnung in der UI statt eines unkommentierten Vorschlags.
+- **`webui.py` `SwitcherState`**: neue Kalibrierungs-Session
+  (`start_calibration()`/`set_calibration_stage()`/`stop_calibration()`/
+  `calibration_language`-Property/`add_calibration_sample()`/
+  `calibration_snapshot()`) — bewusst OHNE request/pop (sonst
+  durchgängiges Muster in dieser Datei), weil keine der Player-kritischen
+  Zustände betroffen sind, für die das Muster da ist; Webserver-Thread
+  schreibt direkt lock-geschützt, Hauptloop liest+ergänzt direkt, siehe
+  ausführliche Begründung im neuen `CLAUDE.md`-Abschnitt.
+  `add_calibration_sample()` dedupliziert über den Verdict-Timestamp
+  (sonst würde derselbe STT-Sample über mehrere Hauptloop-Ticks hinweg
+  mehrfach gezählt) und deckelt auf `MAX_CALIBRATION_SAMPLES=100` pro
+  Stufe (gegen unbegrenztes Wachstum, falls eine Session vergessen
+  weiterläuft).
+- **`radiozapper.py`**: Hauptloop erzwingt `stt_lang =
+  state.calibration_language`, sofern gesetzt, UND springt direkt nach
+  `classify()` per `continue` zur nächsten Iteration, wenn eine Session
+  aktiv ist (Streak-Zählung/Fingerprint-Trigger/`do_switch()` werden für
+  diesen Tick komplett übersprungen). `classify()` speist jeden neuen,
+  zur aktuellen Kalibrierungssprache passenden Verdict in
+  `state.add_calibration_sample()` ein.
+- **`webui.py` API**: `POST /api/config/stt-calibration/start`
+  (validiert: Sprachcode nicht leer, STT-Filter UND Sabbelfilter aktiv),
+  `POST .../stage` (`"speech"`/`"music"`), `POST .../stop`,
+  `GET .../status` (`_build_calibration_status()` berechnet den
+  Vorschlag bei JEDEM Poll neu aus den bisherigen Samples — keine
+  zweite Formel-Implementierung in JS). "Übernehmen" nutzt bewusst den
+  bestehenden `/api/config/stt-languages`-Upsert-Endpoint statt eines
+  eigenen "apply"-Endpoints.
+- **Config-Seite**: neue Sektion "🧪 Schwellwert-Kalibrierung" unterhalb
+  von "🏷 Kategorie-Sprachen" — Sprachcode-Eingabe + Start-Button (Idle-
+  Zustand), danach Stufen-Buttons (aktive Stufe optisch hervorgehoben),
+  Live-Zusammenfassung pro Stufe (Count/Min/Max/Mittelwert, Poll alle
+  2s), aufklappbare Liste der letzten 15 Samples (Konfidenz + erkannter
+  Text) der aktiven Stufe, Vorschlags-Box (grün bei sauberer Trennung,
+  rot umrandet bei Überlappungs-Warnung) mit Übernehmen-Button.
+- **Doku**: `CLAUDE.md`-STT-Abschnitt um die Wizard-Architektur ergänzt,
+  "Bekannte offene Punkte" aktualisiert (Wizard nicht mehr offen, dafür
+  Hinweis, dass die Vorschlagsformel bisher nur an den DE-Messwerten
+  plausibilisiert ist). `README.md` (DE+EN): neuer Abschnitt
+  "Kalibrierungs-Wizard" mit Schritt-für-Schritt-Anleitung und dem
+  wichtigen Hinweis, dass die Kalibrierung selbst nichts umschaltet und
+  die automatische Umschaltung währenddessen pausiert.
+
+### Verifiziert (isoliert, temp-Verzeichnis + separater Testport, ohne den laufenden Produktiv-Container anzufassen)
+
+- `stt_filter.suggest_confidence_threshold()` direkt getestet: saubere
+  Trennung (Sprache 0.83–0.95, Musik 0.25–0.42) → Schwelle innerhalb der
+  Lücke, `clean_separation=True`; überlappende Verteilungen →
+  `clean_separation=False`.
+- `SwitcherState`-Kalibrierungsmethoden direkt getestet: Dedup über
+  Timestamp (gleicher Verdict zählt nur einmal), Stufenwechsel trennt
+  Sample-Listen korrekt, `_build_calibration_status()` liefert den
+  erwarteten Vorschlag, `stop_calibration()` räumt vollständig auf,
+  `MAX_CALIBRATION_SAMPLES`-Deckel greift bei 100 Samples (bei 120
+  hinzugefügten).
+- End-to-End über echtes HTTP (temp-Verzeichnis, Testport 15300/15301):
+  Start OHNE aktivierten STT-Filter → korrekt abgelehnt ("STT-Filter ist
+  deaktiviert"); STT-Filter aktiviert (per `/api/config/settings` +
+  simuliertem `state.reload()`, da in diesem isolierten Test kein
+  Hauptloop läuft, der `pop_reload_request()` sonst automatisch
+  anwendet); Start danach erfolgreich; `GET .../status` lieferte
+  korrekten Snapshot; leerer Sprachcode UND ungültige Stufe → korrekt
+  abgelehnt; Config-Seite (`GET /config`) enthielt alle neuen
+  Markup-IDs (`stt-calib-section`/`stt-calib-idle`/`stt-calib-active`/
+  `btn-stt-calib-start`/`btn-stt-calib-apply`/`stt-calib-samples-list`).
+  `_check_i18n_coverage()` beim Modul-Import ohne `AssertionError`
+  durchgelaufen. Testprozesse/-verzeichnis danach entfernt, keine
+  Auswirkung auf den laufenden Produktiv-Container.
+
+### Bewusst NICHT gemacht
+
+Kein automatisches Umschalten auf einen Test-Sender durch den Wizard
+selbst (bewusst passiv, siehe Kernentscheidung oben) — der Nutzer nutzt
+dafür die bestehende Player-Seite. Keine feste Mindest-Sample-Zahl pro
+Stufe (der Nutzer entscheidet selbst, wann "genug" gesammelt wurde,
+anhand der Live-Zusammenfassung) — kein hartkodiertes Timing/keine
+hartkodierte Zielzahl. Die Vorschlagsformel wurde NICHT an einer echten
+zweiten Sprache in Produktion verifiziert, nur an den ursprünglichen
+DE-Messwerten plausibilisiert (siehe CLAUDE.md).
+
+### Live deployt
+
+Nach Zustimmung des Nutzers: `docker compose up -d --build radiozapper`.
+Sauberer Start, Migration griff erneut korrekt, Vosk-Modell lazy nach
+Ende der Nachrichten-Pause geladen — alles wie in "Fortsetzung 5"
+bereits verifiziert.
+
+Kalibrierungs-Wizard live gegen den echten Sender getestet (105'5
+Spreeradio 80er lief bereits, keine Umschaltung dafür nötig): Start für
+Sprache "de" → `🧪 Kalibrierung gestartet` im Log, Status-Endpoint
+zeigte binnen ~23s sieben Samples (Confidence 0/leerer Text — der
+80er-Sender bringt gerade keine deutsche Sprache, inhaltlich plausibel,
+technisch zeigt es aber, dass das Sampling korrekt lief). **Wichtigster
+Befund**: `current_name` blieb während der gesamten aktiven Session
+unverändert ("105'5 Spreeradio 80er") — die Switch-Pause griff wie
+vorgesehen, kein automatischer Wechsel trotz laufender Klassifikation.
+Stufenwechsel zu "music" → Log zeigte `Stufe gewechselt zu 'music'`,
+Speech-Samples blieben in der Session erhalten (7 Samples weiterhin
+sichtbar). Stop → Log zeigte `Kalibrierung beendet`, Status danach
+`{"active": false}`, normale Wiedergabe (`current_name`/
+`news_break_active`) unverändert korrekt. Keine Fehler/Tracebacks im
+Log über den gesamten Testzeitraum. `docker compose ps`: beide
+Container `Up`, kein Neustart-Loop.
+
+Damit ist der gesamte ursprüngliche Architektur-Vorschlag (Resource-
+Monitoring, Live-Statusanzeigen, mehrsprachige STT inkl.
+Kalibrierungs-Wizard) vollständig umgesetzt und live verifiziert.

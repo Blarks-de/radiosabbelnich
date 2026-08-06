@@ -678,6 +678,15 @@ def main():
         # einem expliziten reload() -- deshalb hier bei jedem Tick mit
         # aktualisieren, günstig (max. MAX_LOADED_VOSK_LANGUAGES Einträge).
         state.set_stt_language_status(stt.language_status())
+        # Kalibrierungs-Wizard (Teil 1b): No-Op, solange keine Session
+        # läuft (siehe add_calibration_sample()). Nur Befunde IN der
+        # gerade erzwungenen Kalibrierungssprache zählen -- verdict kann
+        # trotz stt_lang == calibration_language noch einen ALTEN Befund
+        # einer anderen Sprache enthalten (kurz nach dem Start), der
+        # Sprachabgleich hier verhindert, dass der in die falsche
+        # Kalibrierungsstufe einsortiert wird.
+        if verdict is not None and verdict[3] == stt_lang:
+            state.add_calibration_sample(verdict[0], verdict[1], verdict[2])
         # Einzige Kopplungsstelle mit stt_filter.py -- ohne (frischen,
         # sprachlich passenden) STT-Befund ist das ein No-Op, siehe
         # combine_label()-Docstring.
@@ -1324,12 +1333,29 @@ def main():
             # Sprache der AKTUELLEN Sender-Kategorie -- einmal pro Durchlauf
             # aufgelöst, gilt sowohl fürs Sampling-Ziel unten als auch für
             # classify() (Verdict-Interpretation), siehe deren Docstrings.
-            stt_lang = settings_store.resolve_stt_language(current["category"], state.stt_filter_cfg)
+            # Läuft gerade eine Kalibrierungs-Session (Teil 1b, siehe
+            # webui.py/SwitcherState), erzwingt sie ihre Zielsprache statt
+            # der Kategorie-Auflösung -- der Nutzer schaltet dafür manuell
+            # auf einen Test-Sender dieser Sprache.
+            calibration_lang = state.calibration_language
+            stt_lang = (calibration_lang if calibration_lang is not None
+                        else settings_store.resolve_stt_language(current["category"], state.stt_filter_cfg))
             if now_stt - last_stt_sample_at >= state.stt_filter_cfg["sample_interval_seconds"]:
                 last_stt_sample_at = now_stt
                 stt.sample_async(np.concatenate(stt_ring), SAMPLE_RATE, stt_lang, state.stt_filter_cfg)
 
             label = classify(pcm, stt_lang)
+
+            if calibration_lang is not None:
+                # Kalibrierung läuft: STT sampelt oben normal weiter (dafür
+                # ist classify() gerade gelaufen), aber die automatische
+                # Switch-Logik bleibt komplett unangetastet -- sonst könnte
+                # ein durch die erzwungene Kalibrierungs-Sprache verfälschtes
+                # combine_label()-Ergebnis mitten in der Kalibrierung einen
+                # Wechsel auslösen (der Test-Sender ist ja evtl. gar nicht in
+                # der Kategorie, die normalerweise zu dieser Sprache gehört).
+                continue
+
             now = time.time()
 
             if now - last_switch_time < COOLDOWN_AFTER_SWITCH:
