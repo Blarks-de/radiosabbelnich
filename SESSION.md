@@ -3386,3 +3386,95 @@ Minuten. Kontroll-Mitschnitt direkt vom Produktiv-Mount
 Wall-Clock (+2,5s), deckt sich mit dem isoliert gemessenen
 Connect-Burst-Überschuss, kein Hinweis auf Drift. Container läuft
 stabil weiter (`docker compose ps`: Up, kein Neustart-Loop).
+
+## 2026-08-06 (Fortsetzung 2) — Ressourcen-Snapshot im Config-Menü
+
+Erster von drei Teilen aus einem größeren, vorab gemeinsam bewerteten
+Architektur-Vorschlag (mehrsprachige STT-Erkennung, Resource-Monitoring,
+Live-Statusanzeigen) — hier nur Teil 2, bewusst zuerst, da unabhängig von
+den anderen beiden und am schnellsten nutzbar.
+
+### Umsetzung
+
+- Neues Modul `resource_monitor.py` (reine Domänenlogik, kein Bezug zu
+  `StreamSource`/`SwitcherState`, analog zu `news_break.py`/`stt_filter.py`):
+  `ResourceMonitor` hält `psutil.Process`-Handles über mehrere
+  `snapshot()`-Aufrufe hinweg am Leben (Python-Hauptprozess UND ffmpeg-
+  Kindprozesse, `children(recursive=True)`) — `cpu_percent(interval=None)`
+  liefert laut psutil-Doku beim JEWEILS ERSTEN Aufruf pro Process-Objekt
+  einen bedeutungslosen Wert, ein Cache pro PID ist deshalb notwendig,
+  nicht nur eine Optimierung. Neu auftauchende ffmpeg-Kinder liefern im
+  Snapshot ihrer ersten Sichtung deshalb bewusst 0% CPU, erst ab dem
+  nächsten Poll-Intervall einen echten Wert. Disk-Werte (Fingerprint-DB,
+  Logdatei inkl. `.1`/`.2`/…-Rotation, Whisper-Modell-Cache) sind einfache
+  `os.path.getsize()`/`os.walk()`-Summen, kein psutil nötig.
+- `webui.py`: `ResourceMonitor` wird einmal pro Server-Instanz in
+  `make_handler()` angelegt (Closure, gleiches Muster wie `import_state`)
+  — RAM/CPU sind reine Lesewerte, die den Player-Zustand nicht berühren,
+  deshalb bewusst NICHT über `SwitcherState`/request-pop geführt (analog
+  zum `host_paths`-Muster, siehe CLAUDE.md). Neuer Endpoint
+  `GET /api/resources`. Config-Seite bekommt eine neue Sektion mit einer
+  kleinen Tabelle (RAM gesamt + Aufschlüsselung Python/ffmpeg, CPU gesamt,
+  Anzahl ffmpeg-Prozesse, DB-/Log-/Whisper-Cache-Größe), gepollt per
+  `setInterval` alle 5s — bewusst kein Long-Poll wie beim Bullshitometer
+  auf der Player-Seite, da nur relevant, solange die Config-Seite offen ist
+  und kein zeitkritischer Wert.
+- `radiozapper.py`: `log_path` (Rückgabewert von `logging_setup.setup()`,
+  vorher nur lokal verwendet) wird jetzt zusätzlich an
+  `webui.start_server()` durchgereicht, damit die Logdatei-Größe
+  überhaupt bekannt ist.
+- `Dockerfile`: `psutil` zur pip-install-Zeile ergänzt, `resource_monitor.py`
+  als neues Modul einzeln kopiert (siehe CLAUDE.md, Docker-Besonderheiten).
+- i18n: neue Keys `cfg_resources_*` (de/en) für Überschrift, Hinweistext
+  und Tabellen-Labels.
+
+### Verifiziert (isoliert, ohne den laufenden Produktiv-Container anzufassen)
+
+- `resource_monitor.ResourceMonitor` direkt in einem Python-Interpreter
+  gegen die echten `data/fingerprints.db`/`data/logs/radiozapper.log`
+  getestet, dabei einen `sleep 5`-Kindprozess als ffmpeg-Stellvertreter
+  erzeugt: 1. Snapshot zeigt das Kind sofort mit `ffmpeg_count=1`, aber
+  `ffmpeg_cpu_percent=0.0` (Priming, wie erwartet); 2. Snapshot 1,2s später
+  liefert `main_cpu_percent=38.6`; 3. Snapshot nach Prozessende zeigt
+  `ffmpeg_count=0` — der Cache wirft gestorbene PIDs korrekt raus, kein
+  unbegrenztes Wachstum. Disk-Werte stimmten mit echten Dateigrößen
+  überein (Fingerprint-DB 26.009.600 Bytes, Log 26.619.980 Bytes).
+- `webui.py` komplett importiert (`python3 -c "import webui"`) — die
+  beim Modul-Import laufende `_check_i18n_coverage()` ist dabei
+  durchgelaufen, ohne den neuen `cfg_resources_*`-Keys zu widersprechen
+  (kein `AssertionError`).
+- `webui.start_server()` auf einem separaten Testport (15123, nicht der
+  Produktivport 5000) mit echtem `SwitcherState` (liest `data/stations.json`
+  nur lesend, keine Schreiboperation) gestartet: `GET /api/resources`
+  lieferte ein plausibles JSON (`main_rss_bytes`, `total_cpu_percent`,
+  Disk-Größen wie oben), `GET /config` lieferte HTTP 200 mit dem neuen
+  `id="resource-section"`-Markup und `loadResources`-Aufruf im injizierten
+  Skript. Testprozess danach beendet, keine Auswirkung auf den laufenden
+  Produktiv-Container (`radiozapper`/`icecast-radiozapper`, beide vorher
+  wie nachher `Up`).
+
+### Bewusst NICHT gemacht
+
+Noch nicht gebaut/deployt (`docker compose up -d --build radiozapper`) —
+das ändert den laufenden Container und damit kurzzeitig den Live-Stream,
+soll erst nach expliziter Zustimmung des Nutzers passieren. Kein
+Caching des Whisper-Cache-Verzeichnis-Scans (`os.walk()` bei jedem Poll)
+— für die üblichen paar Modell-Dateien unkritisch, bei sehr großen Caches
+ggf. später nachrüstbar. Teile 1 (mehrsprachige STT) und 3
+(Live-Statusanzeigen VAD/STT/Fingerprint) aus dem Architektur-Vorschlag
+absichtlich noch nicht angefasst.
+
+### Live deployt
+
+Nach Zustimmung des Nutzers: `docker compose up -d --build radiozapper`.
+Sauberer Start (Silero VAD + Vosk-STT geladen, kein Fehler/Traceback),
+Web-Interface läuft auf Port 5000. `GET /api/resources` gegen den echten
+Container: `main_rss_bytes=328294400` (Python-Hauptprozess inkl. Silero/
+Vosk-Modellen), `ffmpeg_count=7` (laufender Sender + Prebuffer-Kandidaten
+gemäß `prebuffer_count=5`, plus News-Break/Übergangs-Overhead),
+`ffmpeg_rss_bytes=373907456`, macht in Summe knapp 700MB — bestätigt,
+dass die ffmpeg-Kinder tatsächlich den größeren Anteil ausmachen, wie im
+Architektur-Vorschlag vermutet. `fingerprint_db_bytes`/`log_bytes`
+stimmten mit den realen Dateigrößen überein. `/config` lieferte HTTP 200
+mit dem neuen Ressourcen-Panel. `docker compose ps`: beide Container
+`Up`, kein Neustart-Loop.

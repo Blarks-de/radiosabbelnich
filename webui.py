@@ -29,6 +29,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import fingerprint
 import i18n
+import resource_monitor
 import settings_store
 import station_import
 import stations_store
@@ -1362,6 +1363,13 @@ _CONFIG_PAGE_HTML = """<!doctype html>
     padding: .6rem 1rem; font-size: 1rem; cursor: pointer; border-radius: .4rem;
     border: 1px solid #c33; color: #c33; background: none;
   }
+  section#resource-section {
+    margin-top: 1.5rem; padding: 1rem; border: 1px solid #8884; border-radius: .5rem;
+  }
+  table#resource-table { width: 100%; border-collapse: collapse; font-size: .9rem; margin-top: .5rem; }
+  table#resource-table td { padding: .3rem 0; border-bottom: 1px solid #8882; }
+  table#resource-table td.label { color: #888; }
+  table#resource-table td.value { text-align: right; font-variant-numeric: tabular-nums; }
   #msg { margin-top: 1rem; font-size: .9rem; min-height: 1.2em; }
   #msg.error { color: #d33; }
   #msg.ok { color: #2a7a4a; }
@@ -1541,6 +1549,21 @@ _CONFIG_PAGE_HTML = """<!doctype html>
   <p class="hint" data-i18n-html="cfg_fingerprint_hint">Löscht alle gelernten Jingle-/Werbespot-Clips (nicht
     die Senderliste). Danach lernt die Erkennung wieder bei Null.</p>
   <button type="button" id="btn-clear-fingerprints" data-i18n="cfg_fingerprint_clear_btn">Clip-DB leeren</button>
+</section>
+
+<section id="resource-section">
+  <h2 style="margin-top:0" data-i18n="cfg_resources_heading">💾 Ressourcen-Verbrauch</h2>
+  <p class="hint" data-i18n="cfg_resources_hint">Aktueller Verbrauch von RadioZapper selbst (nicht des Hosts),
+    alle 5 Sekunden aktualisiert.</p>
+  <table id="resource-table">
+    <tr><td class="label" data-i18n="cfg_resources_ram_total">RAM gesamt</td><td class="value" id="res-ram-total">–</td></tr>
+    <tr><td class="label" data-i18n="cfg_resources_ram_breakdown">davon Python / ffmpeg</td><td class="value" id="res-ram-breakdown">–</td></tr>
+    <tr><td class="label" data-i18n="cfg_resources_cpu_total">CPU gesamt</td><td class="value" id="res-cpu-total">–</td></tr>
+    <tr><td class="label" data-i18n="cfg_resources_ffmpeg_count">Laufende ffmpeg-Prozesse</td><td class="value" id="res-ffmpeg-count">–</td></tr>
+    <tr><td class="label" data-i18n="cfg_resources_fingerprint_db">Fingerprint-DB</td><td class="value" id="res-fingerprint-db">–</td></tr>
+    <tr><td class="label" data-i18n="cfg_resources_log">Logdatei (inkl. Rotation)</td><td class="value" id="res-log">–</td></tr>
+    <tr><td class="label" data-i18n="cfg_resources_whisper_cache">Whisper-Modell-Cache</td><td class="value" id="res-whisper-cache">–</td></tr>
+  </table>
 </section>
 
 <div id="msg"></div>
@@ -2058,8 +2081,37 @@ document.getElementById('btn-clear-fingerprints').addEventListener('click', asyn
   }
 });
 
+function formatBytes(n) {
+  if (!n) return '0 MB';
+  const mb = n / (1024 * 1024);
+  return (mb >= 1000 ? (mb / 1024).toFixed(2) + ' GB' : mb.toFixed(1) + ' MB');
+}
+
+async function loadResources() {
+  try {
+    const r = await api('/api/resources');
+    document.getElementById('res-ram-total').textContent = formatBytes(r.total_rss_bytes);
+    document.getElementById('res-ram-breakdown').textContent =
+      formatBytes(r.main_rss_bytes) + ' / ' + formatBytes(r.ffmpeg_rss_bytes);
+    document.getElementById('res-cpu-total').textContent = r.total_cpu_percent.toFixed(1) + ' %';
+    document.getElementById('res-ffmpeg-count').textContent = r.ffmpeg_count;
+    document.getElementById('res-fingerprint-db').textContent = formatBytes(r.fingerprint_db_bytes);
+    document.getElementById('res-log').textContent = formatBytes(r.log_bytes);
+    document.getElementById('res-whisper-cache').textContent = formatBytes(r.whisper_cache_bytes);
+  } catch (e) {
+    // Rein informatives Panel -- ein Fehlschlag hier soll den Rest der
+    // Config-Seite nicht als Fehler melden (gleiches Muster wie die
+    // STT-Statuszeile in loadSettings()).
+  }
+}
+
 loadStations();
 loadSettings();
+loadResources();
+// Nur relevant, solange die Config-Seite offen ist -- kein Long-Poll nötig,
+// das ist kein zeitkritischer Wert (anders als der Bullshitometer auf der
+// Player-Seite).
+setInterval(loadResources, 5000);
 
 // Falls die Seite neu geladen wird, während ein Import noch läuft (z.B.
 // nach einem Reload), sofort den Fortschritt abfragen und ggf. weiter pollen.
@@ -2117,7 +2169,7 @@ _CONFIG_PAGE_HTML_BYTES = _render_i18n_variants(_CONFIG_PAGE_HTML, "_CONFIG_PAGE
 
 
 def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: str,
-                  host_paths: dict = None):
+                  host_paths: dict = None, log_file_path: str = None):
     """Baut eine BaseHTTPRequestHandler-Subklasse mit state/icecast_cfg im
     Closure — so bleibt der Handler selbst zustandslos und threadsicher.
 
@@ -2130,6 +2182,11 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
     host_paths = host_paths or {}
 
     import_state = ImportState()
+    # Einmalig pro Server-Instanz statt pro Request, analog zu import_state:
+    # ResourceMonitor hält psutil-Process-Handles über Requests hinweg am
+    # Leben, damit cpu_percent() über die Zeit aussagekräftige Deltas liefert
+    # statt bei jedem Request neu bei 0.0 anzufangen (siehe resource_monitor.py).
+    res_mon = resource_monitor.ResourceMonitor(fingerprint_db_path, log_file_path)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
@@ -2248,6 +2305,8 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                 self._send_json(data)
             elif self.path == "/api/config/import/status":
                 self._send_json(import_state.snapshot())
+            elif self.path == "/api/resources":
+                self._send_json(res_mon.snapshot())
             else:
                 self.send_error(404)
 
@@ -2543,9 +2602,11 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
 
 def start_server(port: int, state: SwitcherState, icecast_cfg: dict,
                   fingerprint_db_path: str, tls_cert_file: str = None,
-                  tls_key_file: str = None, host_paths: dict = None) -> ThreadingHTTPServer:
+                  tls_key_file: str = None, host_paths: dict = None,
+                  log_file_path: str = None) -> ThreadingHTTPServer:
     httpd = ThreadingHTTPServer(("0.0.0.0", port),
-                                 make_handler(state, icecast_cfg, fingerprint_db_path, host_paths))
+                                 make_handler(state, icecast_cfg, fingerprint_db_path,
+                                              host_paths, log_file_path))
     scheme = "http"
     if tls_cert_file and tls_key_file:
         try:

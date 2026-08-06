@@ -706,7 +706,7 @@ def main():
         }
         httpd = webui.start_server(args.webui_port, state, icecast_cfg, args.fingerprint_db,
                                     tls_cert_file=tls_cert, tls_key_file=tls_key,
-                                    host_paths=host_paths)
+                                    host_paths=host_paths, log_file_path=log_path)
 
     source = StreamSource(SAMPLE_RATE)
     current = active[0]  # aktuell gespielter Sender (dict: id/name/url/category/enabled)

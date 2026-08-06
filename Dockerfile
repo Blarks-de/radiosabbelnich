@@ -3,7 +3,7 @@ FROM python:3.12-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir numpy silero-vad-lite vosk faster-whisper
+RUN pip install --no-cache-dir numpy silero-vad-lite vosk faster-whisper psutil
 
 # silero-vad-lite's .so verlangt einen ausführbaren Stack, den der Kernel
 # auf diesem Host beim dlopen() verweigert -> ohne Patch fällt die
@@ -26,6 +26,7 @@ COPY logging_setup.py .
 COPY news_break.py .
 COPY stt_filter.py .
 COPY i18n.py .
+COPY resource_monitor.py .
 COPY data/stations.json .
 COPY pics/radiozapper.webp .
 COPY web/qrcode.js .

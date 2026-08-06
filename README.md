@@ -336,6 +336,12 @@ Poll-Tick.
   Trigger, kein Auto-Import.
 - **🗑 Clip-DB leeren** (auf der Config-Seite) — löscht alle gelernten
   Fingerprint-Clips (nicht die Senderliste), mit Sicherheitsabfrage.
+- **💾 Ressourcen-Verbrauch** (auf der Config-Seite) — RAM (Python-Prozess
+  + alle ffmpeg-Kindprozesse zusammen sowie einzeln aufgeschlüsselt), CPU,
+  Anzahl laufender ffmpeg-Prozesse sowie Festplattenverbrauch von
+  Fingerprint-DB, Logdatei (inkl. rotierter Backups) und Whisper-Modell-
+  Cache — jeweils nur RadioZapper selbst, nicht der ganze Host. Alle 5s
+  aktualisiert.
 - **📰 Nachrichten-Pause** (auf der Config-Seite, oberhalb der Senderliste)
   — siehe eigener Abschnitt oben.
 - **🗣 STT-Sprachfilter** (auf der Config-Seite) — siehe eigener Abschnitt
@@ -860,6 +866,11 @@ appears within milliseconds instead of waiting for the next poll tick.
 - **🗑 Clear clip DB** (on the config page) — deletes all learned
   fingerprint clips (not the station list), with a confirmation
   prompt.
+- **💾 Resource usage** (on the config page) — RAM (Python process +
+  all ffmpeg child processes combined, plus a breakdown), CPU, number
+  of running ffmpeg processes, and disk usage of the fingerprint DB,
+  log file (including rotated backups), and Whisper model cache — all
+  for RadioZapper itself, not the whole host. Refreshed every 5s.
 - **📰 News break** (on the config page, above the station list) — see
   its own section above.
 - **🗣 STT speech filter** (on the config page) — see its own section

@@ -243,6 +243,19 @@ STRINGS = {
     },
     "cfg_fingerprint_clear_btn": {"de": "Clip-DB leeren", "en": "Clear clip DB"},
 
+    "cfg_resources_heading": {"de": "💾 Ressourcen-Verbrauch", "en": "💾 Resource usage"},
+    "cfg_resources_hint": {
+        "de": "Aktueller Verbrauch von RadioZapper selbst (nicht des Hosts), alle 5 Sekunden aktualisiert.",
+        "en": "Current usage of RadioZapper itself (not the host), refreshed every 5 seconds.",
+    },
+    "cfg_resources_ram_total": {"de": "RAM gesamt", "en": "Total RAM"},
+    "cfg_resources_ram_breakdown": {"de": "davon Python / ffmpeg", "en": "of which Python / ffmpeg"},
+    "cfg_resources_cpu_total": {"de": "CPU gesamt", "en": "Total CPU"},
+    "cfg_resources_ffmpeg_count": {"de": "Laufende ffmpeg-Prozesse", "en": "Running ffmpeg processes"},
+    "cfg_resources_fingerprint_db": {"de": "Fingerprint-DB", "en": "Fingerprint DB"},
+    "cfg_resources_log": {"de": "Logdatei (inkl. Rotation)", "en": "Log file (incl. rotation)"},
+    "cfg_resources_whisper_cache": {"de": "Whisper-Modell-Cache", "en": "Whisper model cache"},
+
     "cfg_language_heading": {"de": "🌐 Sprache", "en": "🌐 Language"},
     "cfg_language_hint": {
         "de": ('Sprache der Web-Oberfläche (Player- und Config-Seite). Wirkt '
