@@ -31,6 +31,12 @@ Icecast neu aus. Überblick und Feature-Beschreibung: `README.md`.
     Punkte unten.
 - Commit-Messages: die neueren sind Englisch, ältere Deutsch — am jeweils
   letzten Commit orientieren.
+- **Versionspflege (seit 2026-08-06)**: `VERSION` am Repo-Root, Format
+  `vMAJOR.MINOR.PATCH build YYYY-MM-DD HH:MM Uhr`. Start war `v1.0.0`.
+  Jede Änderung, die committet wird, erhöht PATCH um `+0.0.1` und trägt
+  Datum/Uhrzeit des Commits nach, bis der Nutzer explizit etwas anderes
+  vorgibt (z.B. einen MINOR/MAJOR-Sprung). Vor jedem Commit prüfen/
+  nachziehen, wie bei SESSION.md/README.md oben.
 
 ## Betrieb und Deployment
 
@@ -137,14 +143,41 @@ Watchdog, siehe unten).
 wird getauscht, der Hörer merkt keinen Verbindungsabbruch. Analyse ist Mono,
 Ausstrahlung Stereo; wer am Audio-Pfad arbeitet, muss beide Seiten bedienen.
 
-### Prebuffering: Quellen wandern, nicht Daten
+### Prebuffering + Playout-Delay: Quellen wandern, nicht Daten
 
 `PrebufferedSource` hält pro Sender eine eigene `StreamSource` plus Reader-
-Thread und einen Ringpuffer der letzten Sekunden. Beim Wechsel gibt
-`promote()` sowohl die gepufferten Samples als auch die **weiterlaufende
+Thread und einen Ringpuffer der letzten `prebuffer_seconds` Sekunden
+(Fenster-genau: zwei parallele Deques mit `maxlen`, kein konkateniertes
+Array). Beim Wechsel gibt `promote()` sowohl die gepufferte Fenster-Liste
+(`[(mono, stereo), ...]`, älteste zuerst) als auch die **weiterlaufende
 Quelle** zurück, die der Hauptloop übernimmt.
 
-Drei harte Regeln:
+Seit 2026-08-06 ist dieser Puffer nicht mehr nur ein Vorrat für die
+Wechsel-Übergabe, sondern gleichzeitig ein echtes **Playout-Delay** für
+den GERADE laufenden Sender: `main()` hält dafür eine eigene Deque
+(`playout`, nicht dieselbe wie die der Hintergrund-Kandidaten), die pro
+Durchlauf über `push_and_drain()` bedient wird — ein frisch gelesenes
+Fenster hinten anhängen, klassifizieren (das passiert dadurch VOR der
+Ausgabe, nicht danach), und nur falls die Deque über `prebuffer_seconds`
+hinausgewachsen ist, das älteste Fenster abziehen und ausgeben. Ein Push,
+höchstens ein Pop pro Durchlauf — dadurch bleibt die Ausgabe im selben
+Realzeit-Takt wie vorher, keine Schübe.
+
+Ein Wechsel zu einem vorgewärmten Kandidaten übernimmt dessen komplette
+Fenster-Liste **auf einen Schlag** als neue `playout`-Deque
+(`adopt_windows()`) — die Deque steht damit sofort auf Zieltiefe, Drain
+läuft ab dem nächsten Fenster ohne Lücke weiter, kein Bridge-Timing nötig
+(die alte `promote_bridge()`/`stereo_tail()`-Mechanik ist damit
+komplett entfallen). Ein Wechsel zu einem NICHT vorgewärmten Sender
+(`reset_playout()`) schaltet stattdessen auf reinen Passthrough (kein
+Delay, sofortige Ausgabe wie vor 2026-08-06) — ein lückenloser Übergang
+von 0 auf volle Verzögerung ist ohne Zeitdehnung nicht möglich (siehe
+SESSION.md-Eintrag zur Einführung), deshalb bewusst nicht versucht. Diese
+Fälle sind selten (nur außerhalb der nächsten `prebuffer_count` Sender in
+der Rotation oder im Notfall, wenn alle Kandidaten-Puffer selbst tot
+sind) und bewusst als Grenze akzeptiert, nicht als Bug.
+
+Drei harte Regeln bei `PrebufferedSource` selbst:
 
 1. **Eine Pipe hat genau einen Leser.** `promote()`/`stop()` joinen den
    Reader-Thread; überlebt er den Join, wird die Quelle als `dead` markiert
@@ -152,18 +185,29 @@ Drei harte Regeln:
 2. **`pb.stop()` blockiert den Hauptloop** (bis ~9 s pro Quelle, weil es auf
    ein laufendes `read_window()` wartet). `sync_prebuffer()` läuft einmal pro
    Durchlauf — dort keine weiteren blockierenden Operationen einbauen.
-3. **Nie den ganzen Puffer ausstrahlen.** Beim Übernehmen geht nur die
-   Bridge raus: so viel Audio, wie seit dem letzten `write_audio()`
-   Wall-Clock-Zeit vergangen ist (`promote_bridge()` + `stereo_tail()`).
-   Sonst wandert pro Wechsel bis zu `prebuffer_seconds` zusätzliche Audio in
-   die Ausstrahlung, der Hörer rutscht kumulativ hinter Live und Icecasts
-   Client-Queue läuft über. **Audio verlässt den Prozess ausschließlich über
-   `write_audio()`** — `output.write()` direkt aufzurufen bricht die
-   Zeitrechnung.
+3. **Audio verlässt den Prozess ausschließlich über `write_audio()`**
+   (aufgerufen aus `push_and_drain()` bzw. direkt aus `quick_forward()`
+   im Passthrough-Fall) — `output.write()` direkt aufzurufen umgeht die
+   Playout-Deque komplett.
 
 `sync_prebuffer()` startet gestorbene Puffer **nicht** selbst neu, sondern gibt
 deren IDs zurück; der Hauptloop sperrt sie. Sonst gäbe es bei einer dauerhaft
 toten URL einen ffmpeg-Spawn pro Sekunde.
+
+Ändert sich `prebuffer_seconds`/`prebuffer_count` über `/config` während
+die `playout`-Deque primed ist, wird sie verworfen (Reset auf
+Passthrough) statt auf die neue Zieltiefe umgerechnet — aus demselben
+Grund wie oben (kein gapless Übergang zwischen zwei Zieltiefen). Das
+Delay baut sich beim nächsten Wechsel zu einem vorgewärmten Sender neu
+auf. Die Nachrichten-Pause (`start_news_break_mp3()`) resettet die Deque
+ebenfalls explizit: die MP3 ist keine `PrebufferedSource`-Quelle und
+während `news_break_active` wird ohnehin nicht klassifiziert (siehe
+News-Break-Abschnitt unten) — Passthrough ist dort also nicht nur
+technisch nötig, sondern auch inhaltlich richtig. Dadurch verschiebt
+sich der hörbare Beginn/Ende eines Nachrichten-Fensters um bis zu
+`prebuffer_seconds` gegenüber der tatsächlichen :00/:30, falls der
+Sender vorher mit vollem Delay lief — `window_minutes` selbst bleibt
+unangetastet.
 
 ### Watchdog gegen tote Sender
 
@@ -456,3 +500,9 @@ Sample (Deutschlandfunk + 3 Schlager-Sender, siehe SESSION.md) kalibriert
 ursprüngliche Startwert, aber klar/langsam gesungener Schlager bleibt
 eine bekannte Schwachstelle (~20% falsch-positive Konfidenz trotz
 Schwelle). Whisper wurde noch gar nicht gegen echtes Audio getestet.
+Das Playout-Delay (siehe Prebuffering-Abschnitt oben) schützt Hörer nur
+bei Wechseln zu vorgewärmten Sendern — bei einem frischen Wechsel
+(außerhalb der nächsten `prebuffer_count` Sender oder im Notfall) läuft
+der Sender bis zum nächsten warmen Wechsel ohne Delay/Vorausschau,
+bewusst in Kauf genommen statt eines gapless-Übergangs, der ohne
+Zeitdehnung nicht möglich ist.

@@ -68,7 +68,7 @@ log = logging.getLogger("radiozapper")
 
 SAMPLE_RATE = 44100          # Hz, für Analyse & Wiedergabe
 WINDOW_SECONDS = 1.0         # Länge eines Analysefensters
-CONSECUTIVE_SPEECH_TO_SWITCH = 5   # so viele Sprache-Fenster in Folge -> umschalten (VAD ist zuverlässiger als die Heuristik, daher kürzer als vorher)
+CONSECUTIVE_SPEECH_TO_SWITCH = 3   # so viele Sprache-Fenster in Folge -> umschalten (VAD ist zuverlässiger als die Heuristik, daher kürzer als vorher; von 5 auf 3 gesenkt, um die Reaktionszeit auf Moderation zu verkürzen -- siehe SESSION.md)
 COOLDOWN_AFTER_SWITCH = 8.0  # Sekunden Ruhe nach einem Switch, bevor wieder geschaltet wird
 STREAM_READ_TIMEOUT = 8.0    # max. Wartezeit pro Analysefenster, bevor eine Quelle als tot gilt
                               # (verhindert, dass ein hängender Sender den Loop für immer blockiert)
@@ -114,7 +114,7 @@ BASS_RATIO_MUSIC_VETO = 0.22
 # Fingerprinting: nach so vielen Sekunden Sprache am Stück wird der Clip
 # gefingerprintet und gegen die DB bekannter Jingles/Ads geprüft. Muss
 # kleiner als CONSECUTIVE_SPEECH_TO_SWITCH sein, sonst hat's keinen Vorteil.
-FINGERPRINT_TRIGGER_SECONDS = 3
+FINGERPRINT_TRIGGER_SECONDS = 2
 FINGERPRINT_DB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fingerprints.db")
 
 # Jeder Fingerprint-Check (Treffer oder neu gelernter Clip) wird zusätzlich
@@ -406,14 +406,21 @@ class PrebufferedSource:
             self._thread = None
 
     def promote(self):
-        """Stoppt den Hintergrund-Thread und gibt (mono, stereo, source)
-        zurück: die gepufferten Sekunden als fertige Arrays plus die
-        weiterlaufende StreamSource zur Übernahme durch den Aufrufer."""
+        """Stoppt den Hintergrund-Thread und gibt (windows, source) zurück:
+        `windows` ist die gepufferte Fenster-Liste als [(mono, stereo), ...]
+        in chronologischer Reihenfolge (älteste zuerst -- so, wie die
+        Playout-Deque im Hauptloop sie beim Wechsel direkt übernehmen kann,
+        siehe adopt_windows()/push_and_drain() in main()), plus die
+        weiterlaufende StreamSource zur Übernahme durch den Aufrufer.
+
+        Bewusst keine konkatenierten Arrays mehr (anders als früher): die
+        Fenster-Granularität bleibt erhalten, damit ein Wechsel die Deque
+        ohne erneutes Zerschneiden (und ohne die stereo_tail()-Frame-
+        Grenzen-Problematik erneut einzuführen) übernehmen kann."""
         self._join()
         with self._lock:
-            mono = np.concatenate(self._mono_windows) if self._mono_windows else np.array([], dtype=np.int16)
-            stereo = np.concatenate(self._stereo_windows) if self._stereo_windows else np.array([], dtype=np.int16)
-        return mono, stereo, self.source
+            windows = list(zip(self._mono_windows, self._stereo_windows))
+        return windows, self.source
 
     def stop(self):
         """Verwirft die Quelle komplett (z.B. weil sie nicht mehr zu den
@@ -502,28 +509,6 @@ class IcecastOutput:
             self.proc.wait(timeout=5)
 
 
-def stereo_tail(stereo: np.ndarray, seconds: float, sample_rate: int) -> np.ndarray:
-    """Die letzten `seconds` Sekunden eines interleaved Stereo-Puffers, sauber
-    auf einer Frame-Grenze abgeschnitten (sonst verrutschen L und R
-    gegeneinander und der Kanal kippt für den Rest des Streams).
-
-    Wird beim Übernehmen eines Hintergrund-Puffers gebraucht: dort darf NICHT
-    der komplette Puffer an den Output gehen, siehe write_audio()/Bridge in
-    main().
-
-    Frame-Grenze heißt hier: gezählt wird ab Array-ANFANG (gerade Indizes =
-    linker Kanal). Ein simples stereo[-n:] reicht nicht — endet der Puffer mit
-    einem angefangenen Halb-Frame (möglich, wenn ein read_window() in einen
-    Timeout lief und mit ungerader Sample-Zahl zurückkam), landet der Schnitt
-    auf einem ungeraden Index und ab da sind links und rechts vertauscht."""
-    if seconds <= 0 or stereo.size < 2:
-        return stereo[:0]
-    avail_frames = stereo.size // 2   # angefangenes Halb-Frame am Ende ignorieren
-    take = min(int(sample_rate * seconds), avail_frames)
-    if take <= 0:
-        return stereo[:0]
-    start = (avail_frames - take) * 2
-    return stereo[start:start + take * 2]
 
 
 def alive_stations(active: list, dead_until: dict, keep_id: str = None) -> list:
@@ -744,69 +729,95 @@ def main():
     log.info("⏱  Puffere die nächsten %d Sender %.0fs im Voraus.",
              len(prebuffer), state.prebuffer_seconds)
 
-    # Zeitpunkt, bis zu dem Audio an den Output rausgegangen ist. Einziger
-    # Schreibpfad ist write_audio() -- daran hängt die Bridge-Berechnung beim
-    # Übernehmen eines Hintergrund-Puffers (siehe promote_bridge()).
-    last_output_at = time.monotonic()
-
     def write_audio(pcm: np.ndarray):
-        """Einziger Weg, Audio an den Output zu geben. Führt nebenbei Buch,
-        wann zuletzt geschrieben wurde."""
-        nonlocal last_output_at
+        """Einziger Weg, Audio an den Output zu geben."""
         if pcm.size:
             output.write(pcm)
-            last_output_at = time.monotonic()
 
-    def promote_bridge(buf_stereo: np.ndarray) -> np.ndarray:
-        """Beim Übernehmen eines Hintergrund-Puffers: NUR das Stück, das die
-        Lücke seit dem letzten geschriebenen Audio überbrückt — nicht den
-        ganzen Puffer.
+    # Playout-Verzögerung für den AKTUELL laufenden Sender (Timeshift, damit
+    # Erkennung vor der Hörer-Ausgabe passieren kann, nicht danach -- siehe
+    # SESSION.md-Eintrag zur Einführung dieses Mechanismus). `playout` ist
+    # eine Deque von (mono, stereo)-Fenstern, `playout_primed` sagt, ob sie
+    # gerade auf Zieltiefe gehalten wird (True) oder im Passthrough-Modus
+    # läuft (False, kein Delay -- siehe push_and_drain()).
+    playout = collections.deque()
+    playout_primed = False
 
-        Warum das wichtig ist: der Puffer hält bis zu prebuffer_seconds (per
-        Default 10s) vor. Die früher hier übliche Variante "kompletten Puffer
-        auf einen Schlag an den Encoder" hat pro Wechsel bis zu 10 Sekunden
-        Audio zusätzlich in die Ausstrahlung geschoben. Gemessen am
-        laufenden Betrieb: 87,6s Audio in 75s Wall-Clock (224 statt 192
-        kbit/s). Folgen: der Hörer rutscht mit jedem Zap weiter hinter Live
-        (kumulativ, das holt nichts wieder auf), hört die letzten Sekunden
-        doppelt (einmal vom alten, einmal vom neuen Sender), und Icecasts
-        Client-Queue (default 512 KB ~ 21s bei 192 kbit/s) läuft bei ein
-        paar schnellen Wechseln über -> Hörer fliegen raus.
+    def playout_target_windows() -> int:
+        return max(1, round(state.prebuffer_seconds / WINDOW_SECONDS))
 
-        Richtig ist, genau so viel Audio nachzuschieben, wie seit dem letzten
-        Schreiben Wall-Clock-Zeit vergangen ist: dann bleibt die
-        Audio-Zeitachse deckungsgleich mit der echten Zeit. Der Puffer ist
-        damit das, was er sein sollte -- ein Vorrat für die Dauer der
-        Übergabe (promote()/join/Klassifikation), nicht ein Schwall alter
-        Audio. Genau dafür ist prebuffer_seconds die Obergrenze: es puffert
-        so lange, wie ein Wechsel maximal dauern darf, ohne dass eine Lücke
-        entsteht."""
-        bridge = time.monotonic() - last_output_at
-        tail = stereo_tail(buf_stereo, bridge, SAMPLE_RATE)
-        log.debug("Puffer-Übergabe: %.2fs Lücke zu überbrücken, %.2fs aus dem "
-                  "Puffer geschrieben (%.1fs vorhanden)",
-                  bridge, tail.size / 2 / SAMPLE_RATE, buf_stereo.size / 2 / SAMPLE_RATE)
-        return tail
+    def push_and_drain(mono: np.ndarray, stereo: np.ndarray):
+        """Einziger Weg, ein frisch gelesenes Analysefenster des aktuellen
+        Senders Richtung Hörer zu bringen.
+
+        Unprimed (Passthrough, z.B. nach einem frischen/nicht vorgepufferten
+        Wechsel, siehe switch_to_station()/do_switch()): sofort schreiben,
+        exakt wie vor Einführung des Delays -- kein Vorlauf, aber auch keine
+        Lücke oder doppeltes Audio, siehe CLAUDE.md-Abschnitt zum Playout-
+        Delay ("bewusst NICHT gemacht": kein lückenloser Übergang von 0 auf
+        volle Verzögerung, das ist ohne Zeitdehnung nicht möglich).
+
+        Primed: `mono`/`stereo` werden nur ans Ende der Deque gehängt (die
+        Klassifikation im Hauptloop passiert auf genau diesem frisch
+        gepushten Fenster, also VOR der Ausgabe). Erst wenn die Deque über
+        die Zieltiefe hinauswächst, wird das jeweils älteste Fenster
+        abgezogen und ausgegeben -- ein Push, höchstens ein Pop pro
+        Durchlauf, damit die Ausgabe im selben Realzeit-Takt bleibt wie
+        heute (kein Schub wie vor dem 2026-08-03-Fix)."""
+        nonlocal playout
+        if not playout_primed:
+            write_audio(stereo)
+            return
+        playout.append((mono, stereo))
+        if len(playout) > playout_target_windows():
+            _, old_stereo = playout.popleft()
+            write_audio(old_stereo)
+
+    def adopt_windows(windows: list):
+        """Übernimmt die Fenster-Liste eines PrebufferedSource.promote()
+        komplett als neue Playout-Deque und aktiviert den Delay (primed).
+        Der Kandidat wurde bereits `state.prebuffer_seconds` lang im
+        Hintergrund gefüllt (siehe sync_prebuffer()/PREBUFFER_SECONDS) --
+        die Deque steht also schon auf Zieltiefe, Drain über
+        push_and_drain() läuft ab dem nächsten Fenster ohne Lücke weiter."""
+        nonlocal playout, playout_primed
+        playout = collections.deque(windows)
+        playout_primed = True
+
+    def reset_playout():
+        """Verwirft die Playout-Deque und schaltet auf Passthrough (kein
+        Delay) -- für frische Wechsel ohne vorgewärmten Puffer, siehe
+        push_and_drain()."""
+        nonlocal playout, playout_primed
+        playout = collections.deque()
+        playout_primed = False
 
     def quick_forward(seconds: float = 0.3):
-        """Nach einem direkten Sender-Wechsel (manuell oder erzwungen durch
-        einen Config-Reload) sofort einen kurzen Schnipsel lesen und an den
-        Output weiterreichen, statt bis zum nächsten vollen
-        WINDOW_SECONDS-Analysefenster zu warten. Ohne das vergehen nach
-        einem Wechsel spürbar mehrere Sekunden, bis überhaupt neue Audio
-        bei Icecast/Hörern ankommt — nicht weil die Verbindung zur neuen
-        Quelle lange dauert (die steht meist in <1s), sondern weil
-        read_window() sonst erst ein volles 1-Sekunden-Fenster sammelt,
-        bevor write_audio() überhaupt aufgerufen wird."""
+        """Nach einem direkten Sender-Wechsel OHNE vorgewärmten Puffer
+        (manuell oder erzwungen durch einen Config-Reload) sofort einen
+        kurzen Schnipsel lesen und direkt an den Output weiterreichen,
+        statt bis zum nächsten vollen WINDOW_SECONDS-Analysefenster zu
+        warten. Ohne das vergehen nach einem Wechsel spürbar mehrere
+        Sekunden, bis überhaupt neue Audio bei Icecast/Hörern ankommt —
+        nicht weil die Verbindung zur neuen Quelle lange dauert (die steht
+        meist in <1s), sondern weil read_window() sonst erst ein volles
+        1-Sekunden-Fenster sammelt, bevor etwas geschrieben wird.
+
+        Geht bewusst direkt über write_audio(), nicht über
+        push_and_drain(): reset_playout() hat den Passthrough-Modus schon
+        aktiviert, dieser Schnipsel wäre ohnehin sofort wieder raus."""
         _, stereo = source.read_window(seconds)
         write_audio(stereo)
 
     def switch_to_station(station: dict) -> str:
         """Wechselt auf `station` — nutzt einen laufenden Hintergrund-
-        Puffer falls vorhanden (sofortiger Übergang, die Lücke wird aus dem
-        Puffer überbrückt — siehe promote_bridge()), sonst frischer
-        Connect + quick_forward(). Aktualisiert `source`, gibt
-        aber KEIN state.set_current()/Logmeldung aus — das bleibt Sache der
+        Puffer falls vorhanden (sofortiger, nahtloser Übergang MIT vollem
+        Playout-Delay: die Fenster-Liste des Kandidaten wird komplett als
+        neue Playout-Deque übernommen, siehe adopt_windows()), sonst
+        frischer Connect + quick_forward() im Passthrough-Modus (siehe
+        reset_playout()/push_and_drain() -- kein Delay für diesen Fall,
+        bewusste Grenze, siehe CLAUDE.md). Aktualisiert `source`, gibt aber
+        KEIN state.set_current()/Logmeldung aus — das bleibt Sache der
         Aufrufer, die je nach Situation unterschiedliche Meldungen
         ausgeben. Gibt zurück, ob der Puffer genutzt werden konnte.
 
@@ -819,7 +830,7 @@ def main():
         stream_failures = 0
         pb = prebuffer.pop(station["id"], None)
         if pb is not None:
-            mono, stereo, adopted_source = pb.promote()
+            windows, adopted_source = pb.promote()
             if pb.dead:
                 adopted_source.stop()
                 log.warning("⚠ Puffer von '%s' war tot — verbinde stattdessen frisch.",
@@ -827,8 +838,19 @@ def main():
             else:
                 source.stop()
                 source = adopted_source
-                write_audio(promote_bridge(stereo))
-                return "prebuffered" if mono.size else "prebuffered-empty"
+                if windows:
+                    adopt_windows(windows)
+                    return "prebuffered"
+                # Kandidat existierte, hat aber noch kein einziges Fenster
+                # gesammelt (Puffer gerade erst gestartet) -- Passthrough
+                # statt primed-mit-leerer-Deque: sonst entstünde eine
+                # künstliche Lücke, bis sich die Deque erst wieder auf
+                # Zieltiefe gefüllt hat. Kein quick_forward() nötig, die
+                # Verbindung steht schon -- der nächste reguläre
+                # read_window() im Hauptloop liefert von selbst.
+                reset_playout()
+                return "prebuffered-empty"
+        reset_playout()
         source.start(station["url"])
         quick_forward()
         return "fresh"
@@ -906,6 +928,13 @@ def main():
         if path is None:
             return False
         news_break_last_file = os.path.basename(path)
+        # Playout-Deque leeren/unprimed: eine evtl. noch gefüllte Deque vom
+        # PAUSIERTEN Sender darf nicht mit MP3-Fenstern vermischt werden
+        # (siehe push_and_drain()). Während der Pause wird ohnehin nicht
+        # klassifiziert (s.u.), ein Delay hätte hier keinen Nutzen --
+        # Passthrough ist also auch inhaltlich richtig, nicht nur technisch
+        # nötig.
+        reset_playout()
         # realtime=True ist hier PFLICHT, nicht optional -- siehe
         # StreamSource.start()-Docstring. StreamSource.start() räumt die
         # alte Verbindung (den pausierten Sender bzw. die vorige MP3)
@@ -961,7 +990,7 @@ def main():
 
             pb = prebuffer.pop(candidate["id"], None)
             if pb is not None:
-                buf_mono, buf_stereo, candidate_source = pb.promote()
+                windows, candidate_source = pb.promote()
                 if pb.dead:
                     # Quelle ist im Hintergrund gestorben. Früher wurde ein
                     # leerer Puffer mangels Audio als "music" durchgewunken
@@ -972,7 +1001,7 @@ def main():
                     log.warning("   ... '%s' liefert im Puffer nichts mehr — für %.0f Min. "
                                 "aus der Rotation.", candidate["name"], STATION_DEAD_COOLDOWN / 60)
                     continue
-                tail = buf_mono[-int(SAMPLE_RATE * WINDOW_SECONDS):] if buf_mono.size else buf_mono
+                tail = windows[-1][0] if windows else np.array([], dtype=np.int16)
                 if not tail.size:
                     # Puffer noch leer (gerade erst gestartet) — kein Grund,
                     # den Sender zu verdächtigen, aber auch keine Grundlage
@@ -988,19 +1017,21 @@ def main():
                         source = candidate_source
                         state.set_current(current["id"])
                         stream_failures = 0
-                        write_audio(promote_bridge(buf_stereo))
-                        log.info("▶ Spiele: %s (aus Puffer, nahtlos)", current["name"])
+                        adopt_windows(windows)
+                        log.info("▶ Spiele: %s (aus Puffer, nahtlos, %.0fs Playout-Delay)",
+                                 current["name"], state.prebuffer_seconds)
                         last_switch_time = time.time()
                         break
                     candidate_source.stop()
                     log.info("   ... auch Sprache (gepuffert), probiere nächsten Sender.")
                     continue
 
+            reset_playout()
             current = candidate
             source.start(current["url"])
             state.set_current(current["id"])
             stream_failures = 0
-            log.info("▶ Spiele: %s", current["name"])
+            log.info("▶ Spiele: %s (frisch, ohne Playout-Delay)", current["name"])
             last_switch_time = time.time()
             time.sleep(1.5)
             probe_mono, probe_stereo = source.read_window(WINDOW_SECONDS)
@@ -1063,7 +1094,17 @@ def main():
                     for pb in prebuffer.values():
                         pb.stop()
                     prebuffer.clear()
-                    log.info("⏱  Puffer-Einstellungen geändert: %d Sender × %.0fs.",
+                    # Die aktuell laufende Playout-Deque hält auf die ALTE
+                    # Zieltiefe ausgelegten Inhalt -- ein gapless Umstellen
+                    # auf die neue Tiefe ist ohne Zeitdehnung nicht möglich
+                    # (siehe CLAUDE.md, Abschnitt Playout-Delay). Reset auf
+                    # Passthrough statt Drift/Fehlverhalten: kurzer,
+                    # seltener Vorgang (nur bei tatsächlicher Änderung der
+                    # Einstellung über /config), Delay baut sich beim
+                    # nächsten warmen Wechsel wieder neu auf.
+                    if playout_primed:
+                        reset_playout()
+                    log.info("⏱  Puffer-/Delay-Einstellungen geändert: %d Sender × %.0fs.",
                              state.prebuffer_count, state.prebuffer_seconds)
                 active = state.active_stations
                 active_ids = {s["id"] for s in active}
@@ -1227,7 +1268,16 @@ def main():
 
             stream_failures = 0
 
-            write_audio(pcm_stereo)
+            # push_and_drain() statt write_audio(): normalerweise (primed)
+            # geht pcm/pcm_stereo NUR in die Playout-Deque, ausgegeben wird
+            # das ältere Fenster vom Deque-Kopf -- die Klassifikation
+            # weiter unten läuft dadurch auf Audio, das der Hörer erst in
+            # bis zu state.prebuffer_seconds bekommt (siehe adopt_windows()/
+            # push_and_drain() oben). Während der Nachrichten-Pause ist
+            # playout_primed False (siehe start_news_break_mp3()) -- dann
+            # ist das hier ein reines Passthrough wie vor Einführung des
+            # Delays, kein Sonderfall nötig.
+            push_and_drain(pcm, pcm_stereo)
 
             if news_break_active:
                 # Keine automatische Erkennung während der Nachrichten-

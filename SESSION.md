@@ -3182,3 +3182,207 @@ radiozapper` erst nach Abschluss aller Anpassungen.
 - `git status` nach dem Umbau: alle Verschiebungen von getrackten
   Dateien als `R` (Rename) erkannt, keine Lösch-/Neuanlage-Paare mit
   Inhaltsverlust.
+
+## 2026-08-06 — Reaktionszeit auf Moderation verkürzt (Missverständnis "Timeshift-Puffer" aufgeklärt)
+
+Auslöser: Nutzer beobachtete bis zu 5s Verzögerung zwischen Sprachbeginn
+und Wegzappen und vermutete, der `prebuffer_seconds`-Puffer (10s) solle
+eigentlich als echtes Hörer-Delay wirken — Analyse also der Ausstrahlung
+zeitlich voraus sein, damit VOR dem Hörer erkannt und geschaltet wird.
+
+### Befund
+
+`prebuffer_seconds`/`PrebufferedSource` betrifft ausschließlich die
+*nächsten Kandidaten-Sender* im Hintergrund (Vorrat für einen unterbrechungs-
+freien Wechsel dorthin, siehe "Prebuffer-Burst"-Eintrag oben) — der aktuell
+laufende Sender bekommt dadurch **keinerlei** zusätzliche Verzögerung.
+Zeitkette pro Analysefenster in `main()`: `read_window()` →
+`write_audio(pcm_stereo)` (Icecast-Ausgabe) → erst danach `classify(pcm)`.
+Die Analyse läuft also auf Audio, das der Hörer bereits bekommen hat; ein
+Vorausschau-Mechanismus existiert nicht und war auch nie so gebaut. Die
+beobachteten 5s waren exakt `CONSECUTIVE_SPEECH_TO_SWITCH = 5` × `WINDOW_SECONDS
+= 1.0s` — die Mindestzahl aufeinanderfolgender "speech"-Fenster, bevor
+`do_switch()` feuert.
+
+Ein echtes Hörer-Delay (Ausgabe absichtlich N Sekunden hinter der Quelle,
+Analyse auf dem noch nicht gesendeten Fenster) wurde bewusst NICHT gebaut:
+genau dieses Muster wurde am 2026-08-03 aus gutem Grund entfernt (siehe
+"Prebuffer-Burst" oben) — kumulative Hörer-Drift, doppelt gesendetes Audio,
+Icecast-Queue-Overflow. Das wieder einzuführen wäre ein deutlich größerer
+Eingriff, der dieselben Probleme neu lösen müsste.
+
+### Umsetzung
+
+Nutzer entschied sich für die risikoärmere Alternative: reine
+Reaktionszeit-Verkürzung statt neuer Delay-Architektur.
+
+- `CONSECUTIVE_SPEECH_TO_SWITCH`: 5 → 3 (`radiozapper.py:71`).
+- `FINGERPRINT_TRIGGER_SECONDS`: 3 → 2 (`radiozapper.py:117`), damit die
+  Invariante "muss kleiner als `CONSECUTIVE_SPEECH_TO_SWITCH` sein, sonst
+  kein Vorteil" (Kommentar direkt daneben) weiterhin mit Marge gilt.
+
+### Bewusst NICHT gemacht
+
+Kein echtes Hörer-Delay eingebaut (s.o. — expliziter Nutzerentscheid gegen
+die aufwändigere Option). `prebuffer_seconds` unverändert gelassen, da es
+mit dem eigentlichen Problem nichts zu tun hatte.
+
+### Verifiziert
+
+- `python3 -c "import ast; ast.parse(...)"` gegen `radiozapper.py`: syntaktisch ok.
+- `docker compose up -d --build radiozapper`: Image baut durch, Container
+  neu gestartet, Icecast lief währenddessen unberührt weiter.
+- Log direkt nach dem Neustart: VAD ("Silero VAD") und STT ("Engine
+  'vosk' geladen") laden erfolgreich, Wiedergabe startet ("▶ Spiele:
+  105'5 Spreeradio 80er"), Puffer-Start-Meldung ("Puffere die nächsten 5
+  Sender 10s im Voraus") wie gewohnt, kurz danach ein regulärer
+  automatischer Switch ("🎙 Moderation erkannt ... → aus Puffer, nahtlos").
+  Kein Absturz, kein Fehler beim Laden der neuen Konstanten.
+- Kein Langzeit-Vergleich der Falsch-Positiv-Rate bei 3 statt 5 Fenstern
+  gemessen (bräuchte längere Beobachtung über mehrere Sender/Tageszeiten) —
+  bei Bedarf in einer Folgesitzung nachholen.
+
+## 2026-08-06 (Fortsetzung) — Echtes Playout-Delay statt reiner Reaktionszeit-Verkürzung
+
+Auslöser: die 5→3-Verkürzung von vorhin senkt nur die Reaktionszeit,
+verhindert aber nicht, dass der Hörer die Sprache VOR dem Switch bereits
+hört (siehe Befund im vorigen Eintrag: `write_audio()` lief schon immer
+vor `classify()`). Nutzer wollte das ernsthaft angehen: ein echtes
+Playout-Delay, das die Erkennung vor die Hörer-Ausgabe zieht. Zielgröße
+laut Nutzer: bis zu 30s akzeptabel (Musik, nicht latenzkritisch),
+gestartet wird konservativ mit dem bestehenden 8-10s-Bereich.
+
+### Entscheidung: vereinheitlichtes Deque-Design statt zweier Mechanismen
+
+Nach Durchsprache mehrerer Optionen mit dem Nutzer (Architektur-Skizze,
+Fragen zu Icecast-Queue/Watchdog/News-Break/Aufwand) fiel die Wahl auf
+Option A: `PrebufferedSource` (Kandidaten-Vorwärmung) und ein neues,
+aktives Playout-Delay für den laufenden Sender teilen sich dieselbe
+Grundidee (Fenster-Deque fester Tiefe) und denselben Konfigwert
+(`prebuffer_seconds`/`prebuffer_count`), statt zwei getrennte Systeme zu
+pflegen. Ein Wechsel zu einem vorgewärmten Kandidaten tauscht die
+Playout-Deque dadurch komplett aus (`adopt_windows()`), kein
+Bridge-Timing mehr nötig — die alte `promote_bridge()`/`stereo_tail()`-
+Mechanik (siehe "Prebuffer-Burst"-Eintrag von 2026-08-03) ist komplett
+entfallen, nicht nur ersetzt.
+
+**Mathematisch bewusst NICHT versucht**: ein lückenloser Übergang von
+Delay=0 auf Delay=`prebuffer_seconds` ohne Zeitdehnung/Pitch-Manipulation
+ist unmöglich (jedes gapless System mit fester Fenstergröße hat
+zwangsläufig konstantes Delay — ein wachsendes Delay braucht entweder
+Lücken oder doppelt gesendetes Audio). Deshalb: Wechsel zu einem
+vorgewärmten Sender läuft sofort mit vollem Delay (Deque schon auf
+Zieltiefe), Wechsel zu einem NICHT vorgewärmten Sender läuft komplett
+OHNE Delay (Passthrough, exakt das alte Verhalten) bis zum nächsten
+warmen Wechsel. Das deckt praktisch alle Fälle ab, weil `do_switch()`
+und manuelle Klicks fast immer einen der `prebuffer_count` vorgewärmten
+Sender treffen.
+
+### Umsetzung (`radiozapper.py`)
+
+- `PrebufferedSource.promote()` gibt jetzt `(windows, source)` zurück
+  (Fenster-Liste `[(mono, stereo), ...]`, älteste zuerst) statt
+  konkatenierter Arrays — Fenster-Granularität bleibt erhalten, damit
+  eine Playout-Deque sie direkt übernehmen kann.
+- Neu in `main()`: `playout` (Deque), `playout_primed` (Flag),
+  `playout_target_windows()` (liest `state.prebuffer_seconds` live),
+  `push_and_drain()` (einziger Weg für ein frisch gelesenes Fenster des
+  aktuellen Senders: primed → anhängen + klassifizieren + ggf. ältestes
+  Fenster abziehen und ausgeben; unprimed → sofort schreiben),
+  `adopt_windows()` (kompletter Deque-Tausch bei warmem Wechsel),
+  `reset_playout()` (Passthrough bei kaltem Wechsel).
+- `write_audio(pcm_stereo)` direkt nach `read_window()` im Hauptloop
+  ersetzt durch `push_and_drain(pcm, pcm_stereo)` — Klassifikation
+  (VAD/Heuristik/STT-Sampling/Fingerprint) läuft dadurch unverändert auf
+  `pcm`, aber dieses Fenster ist jetzt das FRISCH gepushte, nicht das
+  gerade ausgestrahlte.
+- `switch_to_station()`/`do_switch()`: warmer Fall ruft `adopt_windows()`
+  statt `write_audio(promote_bridge(...))`; kalter Fall ruft
+  `reset_playout()` vor dem Neuverbinden.
+- `start_news_break_mp3()` ruft `reset_playout()`, bevor die MP3 startet
+  — sonst würde die Deque des pausierten Senders mit MP3-Fenstern
+  vermischt. Während der Pause wird ohnehin nicht klassifiziert, Delay
+  hätte dort keinen Nutzen.
+- Reload-Zweig (`state.pop_reload_request()`): bei geänderten
+  `prebuffer_seconds`/`prebuffer_count` wird zusätzlich zu den
+  Kandidaten-Puffern jetzt auch die (falls primed) laufende
+  Playout-Deque verworfen — aus demselben Grund wie oben kein gapless
+  Umrechnen auf die neue Zieltiefe möglich.
+- `promote_bridge()`/`stereo_tail()` komplett entfernt (nicht nur
+  auskommentiert) — mit dem Deque-Tausch gibt es keine Bridge-Berechnung
+  mehr, `last_output_at` war dadurch ebenfalls überflüssig.
+
+### Verifiziert (isoliert, temp-Verzeichnis + separater Icecast-Mount `rztest.mp3`)
+
+Testmuster wie in CLAUDE.md beschrieben: alle `.py` in ein Temp-
+Verzeichnis kopiert, eigene `stations.json` (Radio Bob/1LIVE/SWR3 +
+Deutschlandfunk als vierter Sender für den kalten Pfad)/`settings.json`,
+`--webui-port 5099` für API-gesteuerte Tests, gegen `rztest.mp3` auf dem
+laufenden Produktiv-Icecast gestreamt (eigener Mount, Hörer unbetroffen).
+Silero-VAD auf dem Host nicht verfügbar (bekannt, siehe CLAUDE.md) —
+lief auf der Signal-Heuristik.
+
+- **Warmer Wechsel**: 4× manueller Switch über `/api/switch` auf jeweils
+  vorgewärmte Kandidaten → jedes Mal sofort `🎛 Manuell umgeschaltet auf:
+  X (aus Puffer)`, kein Fehler, `[feat]`-Klassifikation lief im
+  ~1s-Takt ohne Unterbrechung weiter.
+- **Kalter Wechsel**: 4. Sender (Deutschlandfunk) bewusst außerhalb von
+  `prebuffer_count=2` platziert, manueller Switch dorthin →
+  `🎛 Manuell umgeschaltet auf: SWR3` (ohne "aus Puffer"-Zusatz, Reaktion
+  in ~0,6s dank `quick_forward()`), Klassifikation lief danach normal im
+  ~1s-Takt weiter, kein Gap, kein Crash.
+- **Drift-Messung** (Kontrollmuster wie beim 2026-08-03-Fix):
+  Kontrollmessung ohne Wechsel: 32,4s Audio in 30s Wall-Clock (+2,4s,
+  deckt sich mit Icecasts bekanntem `burst-on-connect`, nicht mit
+  echtem Drift). Messung MIT 3 Wechseln über 40s: 42,5s Audio (+2,5s) —
+  praktisch identischer Überschuss trotz dreier Wechsel. Damit: **kein
+  kumulativer Drift durch Wechsel**, der Puffer-Tausch verhält sich wie
+  gewollt (im Gegensatz zum 2026-08-03-Bug, der pro Wechsel bis zu 10s
+  zusätzlich addierte).
+- **Settings-Reload zur Laufzeit**: `prebuffer_seconds` per
+  `/api/config/settings` erst im unprimed (8→4s), dann im primed
+  Zustand (4→6s) geändert → beide Male sauberes
+  `⏱ Puffer-/Delay-Einstellungen geändert: N Sender × Xs`, danach
+  neu vorgewärmte Kandidaten mit korrekter neuer Fenster-Zahl im Log
+  (`Puffer gestartet: ... (6 Fenster à 1.0s)`), Klassifikation lief beim
+  Reset (primed-Fall) ohne Unterbrechung im ~1s-Takt weiter, kein Crash.
+- **Nachrichten-Pause**: mit synthetischer Test-MP3 (6s Sinuston) und
+  `window_minutes` erst 15 (aktives Fenster), dann live auf 0,1
+  reduziert → `📰 Nachrichten-Pause: spiele 'test.mp3'`, korrektes
+  Nachladen bei MP3-Ende innerhalb des noch laufenden Fensters (3×
+  "nächste MP3"), danach `📰 Nachrichten-Pause-Fenster abgelaufen —
+  zurück zu: 1LIVE`, Klassifikation lief danach normal weiter (u.a. ein
+  reales `SPEECH`-Label auf 1LIVE beobachtet, unabhängig bestätigt: die
+  automatische Erkennung funktioniert nach dem Resume).
+- Gesamtes Testlog (`grep -iE "error|traceback|exception"`, STT-Warnung
+  wegen fehlendem `silero_vad_lite` ausgenommen): keine Treffer über alle
+  drei Testläufe.
+
+### Bewusst NICHT gemacht
+
+Kein gapless Ramp-Up von 0 auf volle Verzögerung (mathematisch ohne
+Zeitdehnung nicht möglich, s.o.) — frische Wechsel bleiben dauerhaft ohne
+Delay, bis der nächste warme Wechsel passiert. Kein automatisches
+"Nachwärmen" eines lange laufenden, kalt gestarteten Senders (würde beim
+Aktivieren des Delays denselben Sprung-Bug reproduzieren, den der
+2026-08-03-Fix beseitigt hat). Live-Messung mit echter Sprache/Moderation
+(wann genau relativ zur Ausgabe erkannt wird) nicht durchgeführt — dafür
+bräuchte es einen Sender mit garantierter Moderation im Testfenster,
+schwer reproduzierbar; die Zeitkette selbst (push vor pop, Klassifikation
+auf `pcm` vor der Verzögerung) ist aber durch Code-Review + die
+Drift-Messung ausreichend abgesichert.
+
+### Live deployt
+
+Nach Zustimmung des Nutzers: `docker compose up -d --build radiozapper`.
+Startet sauber mit Silero VAD + Vosk-STT, sofort ein realer
+Fingerprint-Treffer beim Start ("🔁 Bekannter Jingle/Werbespot
+wiedererkannt: Clip #859") löste einen automatischen Wechsel aus —
+Log zeigt neu `▶ Spiele: 1LIVE (aus Puffer, nahtlos, 10s Playout-Delay)`,
+bestätigt den warmen Pfad unter echter Last (Silero statt Heuristik,
+reale Sender statt Testmount). Keine Fehler/Tracebacks in den ersten
+Minuten. Kontroll-Mitschnitt direkt vom Produktiv-Mount
+(`radiozapper.mp3`, kein erzwungener Wechsel): 27,5s Audio in 25s
+Wall-Clock (+2,5s), deckt sich mit dem isoliert gemessenen
+Connect-Burst-Überschuss, kein Hinweis auf Drift. Container läuft
+stabil weiter (`docker compose ps`: Up, kein Neustart-Loop).

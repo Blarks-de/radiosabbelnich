@@ -80,27 +80,47 @@ ffprobe beim Import korrekt als "hat Audio" durchwinkte, die ffmpeg aber
 nicht dauerhaft abspielen kann — 3569 Reconnect-Versuche über 8,5
 Stunden, Icecast-Mount die ganze Zeit weg.
 
-## Vorausschauendes Puffern
+## Vorausschauendes Puffern & Playout-Delay
 
-Damit ein Wechsel nicht erst neu verbinden muss, hält RadioZapper die
-nächsten Sender in Rotationsreihenfolge im Hintergrund bereits am Laufen
-und puffert von jedem die letzten paar Sekunden vor. Ein Wechsel dorthin
-(automatisch oder manuell) übernimmt die schon laufende Quelle sofort,
-statt neu zu verbinden — spürbar flüssiger, kostet aber zusätzliche
-Bandbreite/CPU (ein zusätzlicher ffmpeg-Prozess pro gepuffertem Sender,
-parallel zum aktuellen; Default 5 Sender × 10s ist auf haushaltsüblicher
-Hardware unkritisch).
+RadioZapper hält die nächsten Sender in Rotationsreihenfolge im
+Hintergrund bereits am Laufen und puffert von jedem die letzten
+`prebuffer_seconds` Sekunden vor (Default 10s, unter `/config`
+einstellbar, wirkt sofort ohne Neustart). Das dient zwei Zwecken
+gleichzeitig:
 
-Aus dem Puffer ausgestrahlt wird dabei nur so viel, wie der Wechsel
-tatsächlich gedauert hat (typisch Bruchteile einer Sekunde) — der Rest
-wird verworfen. Die gepufferten Sekunden sind also ein *Vorrat für die
-Dauer der Übergabe*, kein Vorlauf, der mitgesendet wird: die
-Audio-Zeitachse bleibt deckungsgleich mit der echten Zeit, egal wie oft
-gezappt wird. `prebuffer_seconds` legt damit fest, wie lange ein Wechsel
-maximal dauern darf, ohne dass eine Lücke entsteht.
+1. **Nahtloser Wechsel**: ein Wechsel zu einem vorgepufferten Sender
+   (automatisch oder manuell) übernimmt die schon laufende Quelle sofort,
+   statt neu zu verbinden — kein Reconnect-Ruckler.
+2. **Hörer-Delay für die Sprache-Erkennung**: derselbe Puffer verzögert
+   auch die Ausstrahlung des GERADE laufenden Senders um exakt
+   `prebuffer_seconds`. Die Sprache-Erkennung (VAD/Heuristik/STT/
+   Fingerprint) läuft dabei auf frisch eingetroffenem Audio, das der
+   Hörer erst nach dieser Verzögerung bekommt — Moderation/Werbung kann
+   dadurch VOR der Hörer-Ausgabe erkannt und weggeschaltet werden, statt
+   erst danach. Kostet zusätzliche Bandbreite/CPU (ein zusätzlicher
+   ffmpeg-Prozess pro gepuffertem Sender, parallel zum aktuellen; Default
+   5 Sender × 10s ist auf haushaltsüblicher Hardware unkritisch).
 
-Beide Werte (Sekunden pro Sender, Anzahl vorausgepufferter Sender) sind
-unter `/config` einstellbar und wirken sofort, ohne Neustart.
+Ein Wechsel übernimmt dabei die komplette Fenster-Reihe des Ziel-Puffers
+auf einen Schlag — die Ausgabe läuft danach im selben Sekundentakt weiter
+wie vorher, keine Lücke, kein doppelt gesendetes Audio, keine kumulative
+Drift gegenüber der echten Zeit (verifiziert: das Delay ist konstant, es
+wächst nicht mit jedem Zap).
+
+**Einschränkung**: Trifft ein Wechsel einen Sender, der gerade NICHT
+vorgepuffert ist (z.B. manueller Klick außerhalb der nächsten
+`prebuffer_count` Sender in der Rotation, oder ein Notfall-Wechsel, weil
+alle Puffer-Kandidaten selbst tot sind), läuft dieser Sender ohne Delay
+weiter — sofortige Reaktion auf den Klick, aber ohne den
+Vorausschau-Vorteil, bis der nächste Wechsel wieder einen vorgepufferten
+Sender trifft. Ein lückenloser Übergang von 0 auf volle Verzögerung ist
+ohne Zeitdehnung/Pitch-Manipulation nicht möglich, deshalb bewusst nicht
+versucht.
+
+**Nachrichten-Pause verschiebt sich entsprechend**: läuft der aktuelle
+Sender gerade mit vollem Delay, kommt die Nachrichten-MP3 bis zu
+`prebuffer_seconds` später beim Hörer an als die tatsächliche :00/:30 —
+die Fensterlänge selbst (`window_minutes`) bleibt davon unberührt.
 
 ## Nachrichten-Pause
 
@@ -589,28 +609,44 @@ correctly flagged as "has audio" during import, but that ffmpeg can't
 play continuously — 3569 reconnect attempts over 8.5 hours, Icecast
 mount silent the whole time.
 
-## Look-ahead buffering
+## Look-ahead buffering & playout delay
 
-So a switch doesn't have to reconnect from scratch, RadioZapper keeps
-the next stations in rotation order running in the background and
-buffers the last few seconds of each. Switching to one of them
-(automatically or manually) takes over the already-running source
-immediately instead of reconnecting — noticeably smoother, but costs
-extra bandwidth/CPU (one extra ffmpeg process per buffered station,
-running alongside the current one; the default of 5 stations × 10s is
-uncritical on typical home hardware).
+RadioZapper keeps the next stations in rotation order running in the
+background and buffers the last `prebuffer_seconds` seconds of each
+(default 10s, configurable under `/config`, takes effect immediately, no
+restart needed). That buffer serves two purposes at once:
 
-Only as much as the switch actually took (typically a fraction of a
-second) is broadcast from the buffer — the rest is discarded. The
-buffered seconds are thus a *reserve for the duration of the handover*,
-not a lead that gets sent along: the audio timeline stays in lockstep
-with real time, no matter how often you zap. `prebuffer_seconds`
-therefore defines the maximum time a switch may take without creating
-a gap.
+1. **Seamless switching**: switching to a buffered station (automatically
+   or manually) takes over the already-running source immediately instead
+   of reconnecting — no reconnect stutter.
+2. **Listener delay for speech detection**: the same buffer also delays
+   the broadcast of the CURRENTLY playing station by exactly
+   `prebuffer_seconds`. Speech detection (VAD/heuristic/STT/fingerprint)
+   runs on freshly arrived audio that the listener only gets after this
+   delay — talk/ads can therefore be detected and switched away from
+   BEFORE it reaches the listener, not just after.  Costs extra
+   bandwidth/CPU (one extra ffmpeg process per buffered station, running
+   alongside the current one; the default of 5 stations × 10s is
+   uncritical on typical home hardware).
 
-Both values (seconds per station, number of pre-buffered stations) are
-configurable under `/config` and take effect immediately, no restart
-needed.
+A switch takes over the target buffer's entire window sequence in one
+go — output continues afterwards in the same one-second cadence as
+before: no gap, no duplicated audio, no cumulative drift from real time
+(verified: the delay stays constant, it doesn't grow with every zap).
+
+**Limitation**: if a switch lands on a station that is NOT currently
+buffered (e.g. a manual click outside the next `prebuffer_count` stations
+in rotation, or an emergency switch because all buffered candidates are
+themselves dead), that station plays without delay — instant reaction to
+the click, but without the look-ahead benefit until the next switch hits
+a buffered station again. A gapless transition from 0 to full delay isn't
+possible without time-stretching/pitch manipulation, so it's deliberately
+not attempted.
+
+**News break timing shifts accordingly**: if the current station is
+running with full delay, the news-break MP3 reaches the listener up to
+`prebuffer_seconds` later than the actual top/bottom of the hour — the
+window length itself (`window_minutes`) is unaffected.
 
 ## News break
 
