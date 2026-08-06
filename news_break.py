@@ -22,6 +22,13 @@ from datetime import datetime, timedelta
 
 log = logging.getLogger("newsbreak")
 
+# Wie viele zuletzt gespielte Dateien pick_random_mp3() bei der
+# Zufallsauswahl ausschließt -- klein genug, dass auch kleinere Ordner
+# (4-5 Dateien) noch eine echte Auswahl behalten, groß genug, dass eine
+# Datei nicht schon nach 1-2 Wechseln wieder drankommt (reines "letzte
+# Datei ausschließen" reichte in der Praxis nicht, siehe SESSION.md).
+RECENT_HISTORY_SIZE = 3
+
 
 def _nearest_half_hour(now: datetime) -> datetime:
     """Die näher gelegene der drei Kandidaten-Grenzen: die volle Stunde
@@ -59,7 +66,7 @@ def active_slot(cfg: dict, now: datetime = None) -> str | None:
     return None
 
 
-def pick_random_mp3(folder: str, exclude: str = None) -> str | None:
+def pick_random_mp3(folder: str, recent=None) -> str | None:
     """Liefert einen zufälligen Pfad zu einer .mp3-Datei aus `folder`.
 
     None (mit Log-Warnung, nicht mehr) falls der Ordner nicht konfiguriert,
@@ -67,9 +74,12 @@ def pick_random_mp3(folder: str, exclude: str = None) -> str | None:
     "Feature still überspringen, ins Log schreiben, normal weiterlaufen",
     kein Fehler, der den Hauptloop stören dürfte.
 
-    `exclude` (der zuletzt gespielte Dateiname) wird vermieden, sofern noch
-    eine andere Wahl übrig bleibt — bei nur einer Datei im Ordner bleibt
-    nichts anderes übrig, dann wird sie trotzdem gespielt."""
+    `recent` (Iterable der zuletzt gespielten Dateinamen, siehe
+    RECENT_HISTORY_SIZE) wird bei der Auswahl vermieden, sofern danach noch
+    mindestens eine Datei übrig bleibt. Enthält der Ordner insgesamt nicht
+    mehr Dateien als `recent` (z.B. nur 1-2 MP3s insgesamt), lässt der
+    Ausschluss nichts mehr übrig -- dann lieber eine Wiederholung als eine
+    fehlschlagende Nachrichten-Pause."""
     if not folder:
         log.warning("⚠ Nachrichten-Pause aktiv, aber kein mp3_folder konfiguriert — übersprungen.")
         return None
@@ -84,6 +94,7 @@ def pick_random_mp3(folder: str, exclude: str = None) -> str | None:
         log.warning("⚠ Nachrichten-Pause: keine .mp3-Dateien in %s — übersprungen.", folder)
         return None
 
-    candidates = [f for f in files if f != exclude] or files
+    recent = recent or ()
+    candidates = [f for f in files if f not in recent] or files
     choice = random.choice(candidates)
     return os.path.join(folder, choice)

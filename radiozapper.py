@@ -893,7 +893,10 @@ def main():
     # korrekten Daten weiter, nur `source` zeigt vorübergehend auf die MP3.
     news_break_active = False
     news_break_resume_id = None   # id des Senders, zu dem danach zurückgeschaltet wird
-    news_break_last_file = None   # zuletzt gespielte Datei (Basename) -> kein Repeat direkt danach
+    # Zuletzt gespielte Dateien (Basename), jüngste zuletzt -> vermeidet
+    # nicht nur die direkt vorige, sondern die letzten RECENT_HISTORY_SIZE
+    # Dateien bei der Zufallsauswahl (siehe news_break.pick_random_mp3()).
+    news_break_recent_files = collections.deque(maxlen=news_break.RECENT_HISTORY_SIZE)
     news_break_served_slot = None  # welcher Slot (siehe news_break.active_slot) schon dran war
 
     def note_news_break_interrupted():
@@ -944,16 +947,18 @@ def main():
         beim Erstbetreten des Fensters als auch wenn die vorige MP3 zu Ende
         ist, das Fenster (window_minutes) selbst aber noch läuft. Ohne das
         endete die Pause ursprünglich nach genau einer Datei, auch wenn vom
-        Zeitfenster noch viel übrig war (siehe SESSION.md). `exclude`
-        verhindert eine direkte Wiederholung, sofern der Ordner mehr als
-        eine MP3 enthält. Gibt False zurück, wenn keine MP3 verfügbar ist
-        (Ordner leer/nicht lesbar) — der Aufrufer entscheidet dann, was
-        stattdessen passiert."""
-        nonlocal news_break_last_file
-        path = news_break.pick_random_mp3(cfg.get("mp3_folder"), exclude=news_break_last_file)
+        Zeitfenster noch viel übrig war (siehe SESSION.md). Die letzten
+        news_break.RECENT_HISTORY_SIZE Dateien werden bei der Auswahl
+        vermieden, sofern der Ordner genug andere MP3s enthält. Gibt False
+        zurück, wenn keine MP3 verfügbar ist (Ordner leer/nicht lesbar) —
+        der Aufrufer entscheidet dann, was stattdessen passiert."""
+        path = news_break.pick_random_mp3(cfg.get("mp3_folder"), recent=news_break_recent_files)
         if path is None:
             return False
-        news_break_last_file = os.path.basename(path)
+        # deque.append() mutiert nur das bestehende Objekt, kein Rebinding
+        # des Namens -> kein "nonlocal" nötig (anders als bei der früheren
+        # einzelnen news_break_last_file-Variable, die hier reassigned wurde).
+        news_break_recent_files.append(os.path.basename(path))
         # Playout-Deque leeren/unprimed: eine evtl. noch gefüllte Deque vom
         # PAUSIERTEN Sender darf nicht mit MP3-Fenstern vermischt werden
         # (siehe push_and_drain()). Während der Pause wird ohnehin nicht
@@ -966,7 +971,7 @@ def main():
         # alte Verbindung (den pausierten Sender bzw. die vorige MP3)
         # selbst auf.
         source.start(path, realtime=True)
-        state.set_news_break(True, news_break_last_file)
+        state.set_news_break(True, news_break_recent_files[-1])
         quick_forward()
         return True
 
@@ -1236,7 +1241,7 @@ def main():
                 if start_news_break_mp3(news_break_cfg):
                     news_break_active = True
                     log.info("📰 Nachrichten-Pause: spiele '%s' (zurück zu '%s' danach)",
-                             news_break_last_file, current["name"])
+                             news_break_recent_files[-1], current["name"])
                     last_switch_time = time.time()
                     speech_streak = 0
                     speech_buffer = []
@@ -1262,7 +1267,7 @@ def main():
                     # noch übrig war (siehe SESSION.md).
                     if (news_break.active_slot(state.news_break_cfg)
                             and start_news_break_mp3(state.news_break_cfg)):
-                        log.info("📰 Nachrichten-Pause: nächste MP3 '%s'", news_break_last_file)
+                        log.info("📰 Nachrichten-Pause: nächste MP3 '%s'", news_break_recent_files[-1])
                         last_switch_time = time.time()
                         speech_streak = 0
                         speech_buffer = []
