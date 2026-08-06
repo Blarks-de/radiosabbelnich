@@ -4045,3 +4045,60 @@ DASH-fähiger Ingestion-Pfad evaluiert/gebaut) — bleiben deaktiviert in
 Projekt, siehe CLAUDE.md) — die Lehre daraus (systematisches Grep aller
 Aufrufstellen bei Signaturänderungen) ist oben festgehalten, aber nicht
 in Werkzeug/Prozess gegossen.
+
+## 2026-08-06 (Fortsetzung 8) — Nachrichten-Pause: kein Repeat kurz hintereinander
+
+Nutzer-Beobachtung: dieselbe MP3 aus dem News-Break-Ordner kam öfter kurz
+hintereinander dran. `news_break.pick_random_mp3()` hatte bereits einen
+`exclude`-Parameter (die eine zuletzt gespielte Datei), das reicht aber
+bei mehreren MP3s im Ordner nicht — eine Datei kann trotzdem schon nach
+1-2 Wechseln wieder drankommen, wenn nur der unmittelbare Vorgänger
+ausgeschlossen wird.
+
+### Umsetzung
+
+- **`news_break.py`**: `pick_random_mp3(folder, exclude=None)` →
+  `pick_random_mp3(folder, recent=None)`. `recent` ist jetzt eine
+  Iterable mehrerer zuletzt gespielter Dateinamen statt nur einer
+  einzelnen — `candidates = [f for f in files if f not in recent] or
+  files`. Neue Konstante `RECENT_HISTORY_SIZE = 3` (Kompromiss: groß
+  genug, dass eine Datei nicht sofort wiederkommt, klein genug, dass
+  auch Ordner mit 4-5 Dateien noch eine echte Auswahl behalten). Der
+  `or files`-Fallback ist der Randfall-Schutz aus Anforderung 3: enthält
+  der Ordner insgesamt nicht mehr Dateien als `recent` (z.B. nur 1-2
+  MP3s), lässt der Ausschluss nichts mehr übrig — dann lieber eine
+  Wiederholung als eine fehlschlagende Nachrichten-Pause (`None`
+  zurückgeben würde das Feature für dieses Fenster ausfallen lassen).
+- **`radiozapper.py`**: die bisherige einzelne Variable
+  `news_break_last_file` (String, per `nonlocal` reassigned) wurde durch
+  `news_break_recent_files = collections.deque(maxlen=
+  news_break.RECENT_HISTORY_SIZE)` ersetzt — `deque.append()` mutiert
+  nur das Objekt, kein Rebinding des Namens, daher entfällt das
+  `nonlocal` in `start_news_break_mp3()`. An allen vier Stellen
+  nachgezogen (Auswahl-Aufruf, `state.set_news_break()`, zwei
+  Log-Zeilen) — jeweils `news_break_recent_files[-1]` statt der alten
+  einzelnen Variable für "die gerade gestartete Datei".
+
+### Verifiziert (isoliert, temp-Verzeichnis mit synthetischen leeren .mp3-Dateien, ohne den laufenden Container anzufassen)
+
+- 8 Dateien, 30 simulierte Zyklen: nie zwei gleiche Dateien direkt
+  hintereinander.
+- 5 Dateien, 20 Zyklen: keine Wiederholung innerhalb der letzten 3 Picks.
+- Randfall 1 Datei insgesamt: liefert bei jedem der 10 Aufrufe dieselbe
+  Datei, nie `None` — Feature fällt nicht aus.
+- Randfall 2 Dateien (weniger als `RECENT_HISTORY_SIZE`): nie `None`,
+  Wiederholungen kommen zwangsläufig vor (erwartet, siehe Randfall-Logik
+  oben).
+- Randfall genau 3 Dateien (== `RECENT_HISTORY_SIZE`): Fallback griff
+  korrekt (u.a. eine direkte Wiederholung im Log sichtbar, weil der
+  Ausschluss aller 3 Dateien nichts mehr übrig ließ) — kein Fehlschlag.
+- Danach `docker compose up -d --build radiozapper`: sauberer Start,
+  keine Fehler/Tracebacks im Log über die ersten ~40s.
+
+### Bewusst NICHT gemacht
+
+`RECENT_HISTORY_SIZE` nicht konfigurierbar gemacht (kein neues
+Settings-Feld) — Anforderung war "einfaches Gedächtnis", ein
+hartkodierter, begründeter Wert reicht dafür. Kein Persistieren der
+zuletzt gespielten Dateien über einen Neustart hinweg (explizit nicht
+gefordert, `deque` lebt nur im Hauptloop-Prozess).
