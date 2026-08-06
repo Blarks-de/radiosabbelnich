@@ -291,13 +291,48 @@ sonst wird der Klick sonst stillschweigend verschluckt.
 Zusätzliches Signal per Speech-to-Text, komplett unabhängig von
 `fingerprint.py`: wo VAD/Heuristik nur "menschliche Stimme" erkennen
 (Gesang zählt da mit), prüft `stt_filter.py` den Inhalt — kommt gerade
-zusammenhängender deutscher Text? Genau wie `news_break.py` kennt dieses
-Modul weder `StreamSource` noch `SwitcherState`. Die **einzige**
-Kopplungsstelle mit der bestehenden Switch-Logik ist
-`stt_filter.combine_label()`, eingehängt in die `classify()`-Closure in
-`radiozapper.py`s `main()` — Streak-Zählung, Fingerprint-Trigger und
-`do_switch()` dahinter bleiben dadurch komplett unverändert, Fingerprint
-merkt von alldem nichts.
+zusammenhängender Text in der jeweils erwarteten Sprache? Genau wie
+`news_break.py` kennt dieses Modul weder `StreamSource` noch
+`SwitcherState`. Die **einzige** Kopplungsstelle mit der bestehenden
+Switch-Logik ist `stt_filter.combine_label()`, eingehängt in die
+`classify()`-Closure in `radiozapper.py`s `main()` — Streak-Zählung,
+Fingerprint-Trigger und `do_switch()` dahinter bleiben dadurch komplett
+unverändert, Fingerprint merkt von alldem nichts.
+
+**Mehrsprachigkeit (seit 2026-08-06)**: welche Sprache für den aktuell
+laufenden Sender geprüft wird, hängt an dessen **Kategorie**
+(`stations_store.CATEGORIES`), nicht am einzelnen Sender —
+`settings_store.resolve_stt_language(category, cfg)` löst das über
+`cfg["category_languages"]` auf (fehlender Eintrag → `"de"`). Der
+Hauptloop ruft das einmal pro Durchlauf auf und reicht dasselbe
+`stt_lang` sowohl an `stt.sample_async()` (Sampling-Ziel) als auch an
+`classify()` (Verdict-Interpretation) weiter — beide müssen zwingend
+dieselbe Sprache sehen, sonst würde z.B. während des ersten Fensters nach
+einem Kategoriewechsel mit der falschen Sprache gesampelt.
+
+`stt_filter.py`s `_fresh_verdict(verdict, cfg, expected_language)` prüft
+NEBEN dem Alter (siehe unten) auch, ob `verdict`s eigenes Sprach-Tag zu
+`expected_language` passt — sonst würde ein noch nicht abgelaufener
+Befund einer VORHERIGEN Sprache (z.B. kurz nach einem Sender-/
+Kategoriewechsel) fälschlich mit der SCHWELLE der neuen Sprache bewertet.
+`combine_label()`/`live_confidence()`/`live_language()` teilen sich
+diese eine Prüfung, damit alle drei exakt denselben "kein (passender)
+Befund"-Begriff verwenden.
+
+**Engine-Asymmetrie bestimmt die Architektur**: Whisper ist von Haus aus
+multilingual (ein geladenes Modell, Sprachcode nur pro
+`transcribe()`-Aufruf) — eine zusätzliche Sprache kostet dort kein
+zusätzliches RAM. Vosk braucht dagegen ein komplett eigenes Modell PRO
+Sprache. `SttFilter._get_vosk_engine(lang, cfg)` lädt Vosk-Modelle
+deshalb lazy (erst beim ersten tatsächlichen Sample dieser Sprache) und
+hält per `MAX_LOADED_VOSK_LANGUAGES` (Default 2) nur eine begrenzte
+Anzahl gleichzeitig im Speicher — ein `OrderedDict` als LRU-Cache
+verdrängt bei Bedarf das am längsten ungenutzte Modell. Sowohl Erfolg
+ALS AUCH Fehlschlag werden gecacht (Fehlertext statt `_VoskEngine`-
+Objekt als Cache-Wert), damit ein kaputter Modellpfad nicht bei jedem
+Sample-Tick erneut das Dateisystem anfasst — `SttFilter.language_status()`
+legt diesen Zustand für die Config-Seite offen (✅/⚠ pro Sprache in der
+"🌐 STT-Sprachen"-Tabelle).
 
 - **Sampling läuft kontinuierlich, unabhängig vom aktuellen VAD-Label**
   (nicht nur während erkannter Sprache) — sonst wäre `combine_mode="or"`
@@ -319,9 +354,10 @@ merkt von alldem nichts.
   Wahrscheinlichkeiten** — Vosk liefert nur bei manchen Modellen echte
   Wort-Konfidenzen (sonst Proxy aus Wortanzahl), Whisper liefert gar keine
   Sprache-Konfidenz, nur `no_speech_prob` pro Segment (`1 - no_speech_prob`
-  als Näherung). `confidence_threshold` ist entsprechend Justiersache pro
-  Sender-Mix, nicht aus der Theorie ableitbar — dafür die DEBUG-Logs mit
-  Text+Konfidenz pro Sample.
+  als Näherung). `confidence_threshold` ist entsprechend Justiersache PRO
+  SPRACHE (`cfg["languages"][lang]["confidence_threshold"]`, seit der
+  Mehrsprachigkeit kein flaches Feld mehr) und Sender-Mix, nicht aus der
+  Theorie ableitbar — dafür die DEBUG-Logs mit Text+Konfidenz pro Sample.
   Der `vosk-model-small-de-0.15`-Default liefert allerdings echte
   Wort-Konfidenzen (kein Proxy nötig) — Messung gegen echte Sender (siehe
   SESSION.md): Deutschlandfunk-Sprache nie unter 0.83, Schlager-Gesang
@@ -338,17 +374,20 @@ merkt von alldem nichts.
   einen kleinen Test (n=40 Clips, 4 Sender) geprüft wurde, keine
   ausreichende Grundlage für eine weitere Schwellwert-Entscheidung.
 - **Engine-Reload bei laufendem Sample ist sicher**: `sample_async()`
-  kopiert die Engine-Referenz lokal in den Thread, bevor `reload()`
-  (Config-Änderung, z.B. Vosk→Whisper) `self.engine` austauschen kann —
-  ein bereits laufender Sample läuft auf der alten Engine sauber zu Ende,
-  statt ihm das Objekt unter der laufenden `transcribe()`-Anfrage
-  wegzuziehen.
+  kopiert die Whisper-Engine-Referenz (bzw. bei Vosk: `engine_name`, der
+  eigentliche Modell-Zugriff läuft über den threadsicheren
+  `_get_vosk_engine()`-Cache) lokal in den Thread, bevor `reload()`
+  (Config-Änderung, z.B. Vosk→Whisper) sie austauschen kann — ein bereits
+  laufender Sample läuft sauber zu Ende, statt ihm das Objekt unter der
+  laufenden `transcribe()`-Anfrage wegzuziehen.
 - Reload bei Settings-Änderung passiert im bestehenden
   `state.pop_reload_request()`-Zweig in `main()`: nur bei Änderung von
-  `enabled`/`engine`/`vosk_model_path`/`whisper_model_size` wird die
-  Engine tatsächlich neu geladen (teuer). `sample_interval_seconds`/
-  `confidence_threshold`/`combine_mode` liest `combine_label()` bei jedem
-  Aufruf frisch aus `state.stt_filter_cfg` — dafür ist kein Reload nötig.
+  `enabled`/`engine`/`languages`/`whisper_model_size` wird die Engine
+  tatsächlich neu geladen — bei Vosk heißt "neu laden" dank Lazy-Load nur
+  "Cache leeren", nicht gleich alle konfigurierten Sprachmodelle neu
+  laden. `sample_interval_seconds`/`category_languages`/`combine_mode`
+  liest `combine_label()`/`resolve_stt_language()` bei jedem Aufruf
+  frisch aus `state.stt_filter_cfg` — dafür ist kein Reload nötig.
 
 ### Zweisprachiges Web-Interface (i18n.py)
 
@@ -500,6 +539,14 @@ Sample (Deutschlandfunk + 3 Schlager-Sender, siehe SESSION.md) kalibriert
 ursprüngliche Startwert, aber klar/langsam gesungener Schlager bleibt
 eine bekannte Schwachstelle (~20% falsch-positive Konfidenz trotz
 Schwelle). Whisper wurde noch gar nicht gegen echtes Audio getestet.
+Die Mehrsprachigkeit (Kategorie → Sprache, siehe STT-Sprachfilter-
+Abschnitt oben) ist als Datenmodell/Engine-Plumbing umgesetzt und die
+Sprachen-Verwaltung in der Config-Seite manuell bedienbar — der im
+Architektur-Vorschlag skizzierte GEFÜHRTE Kalibrierungs-Wizard (Sender
+kurz mithören lassen, Schwelle automatisch vorschlagen) ist bewusst noch
+NICHT gebaut ("Teil 1b"); bis dahin muss `confidence_threshold` für jede
+zusätzliche Sprache weiterhin manuell nach der im README beschriebenen
+Methode ermittelt werden, wie bisher nur für Deutsch geschehen.
 Das Playout-Delay (siehe Prebuffering-Abschnitt oben) schützt Hörer nur
 bei Wechseln zu vorgewärmten Sendern — bei einem frischen Wechsel
 (außerhalb der nächsten `prebuffer_count` Sender oder im Notfall) läuft

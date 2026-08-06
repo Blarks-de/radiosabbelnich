@@ -51,6 +51,7 @@ import numpy as np
 import fingerprint
 import logging_setup
 import news_break
+import settings_store
 import stt_filter
 import webui
 from speech_detector import SpeechDetector
@@ -653,7 +654,7 @@ def main():
     else:
         log.info("🗣  Sprache-Erkennung: Signal-Heuristik (Fallback)")
 
-    def classify(pcm: np.ndarray) -> str:
+    def classify(pcm: np.ndarray, stt_lang: str) -> str:
         label, prob = detector.classify(pcm)
         if label is None:
             label, prob = classify_window(pcm, SAMPLE_RATE)  # Heuristik-Fallback
@@ -664,14 +665,23 @@ def main():
         # wirken statt sich flüssig zu bewegen.
         state.set_speech_probability(prob)
         # Einmal abrufen, für combine_label() (Switch-Logik) UND
-        # live_confidence() (STT-Balken im Web-Interface) -- beide sollen
-        # exakt denselben Befund sehen, nicht zwei zeitlich leicht
-        # versetzte last_verdict()-Aufrufe.
+        # live_confidence()/live_language() (STT-Balken im Web-Interface) --
+        # alle drei sollen exakt denselben Befund sehen, nicht mehrere
+        # zeitlich leicht versetzte last_verdict()-Aufrufe. stt_lang kommt
+        # vom Aufrufer (siehe unten) -- dieselbe Sprache, mit der auch
+        # gerade gesampelt wird (settings_store.resolve_stt_language() der
+        # AKTUELLEN Sender-Kategorie).
         verdict = stt.last_verdict()
-        state.set_stt_probability(stt_filter.live_confidence(verdict, state.stt_filter_cfg))
-        # Einzige Kopplungsstelle mit stt_filter.py -- ohne (frischen) STT-
-        # Befund ist das ein No-Op, siehe combine_label()-Docstring.
-        return stt_filter.combine_label(label, verdict, state.stt_filter_cfg)
+        state.set_stt_probability(stt_filter.live_confidence(verdict, state.stt_filter_cfg, stt_lang))
+        state.set_stt_language(stt_filter.live_language(verdict, state.stt_filter_cfg, stt_lang))
+        # Sprachen werden lazy geladen (siehe stt_filter.py), nicht nur bei
+        # einem expliziten reload() -- deshalb hier bei jedem Tick mit
+        # aktualisieren, günstig (max. MAX_LOADED_VOSK_LANGUAGES Einträge).
+        state.set_stt_language_status(stt.language_status())
+        # Einzige Kopplungsstelle mit stt_filter.py -- ohne (frischen,
+        # sprachlich passenden) STT-Befund ist das ein No-Op, siehe
+        # combine_label()-Docstring.
+        return stt_filter.combine_label(label, verdict, state.stt_filter_cfg, stt_lang)
 
     state = webui.SwitcherState()
     active = state.active_stations
@@ -682,6 +692,7 @@ def main():
 
     stt = stt_filter.SttFilter(state.stt_filter_cfg)
     state.set_stt_status(*stt.status())
+    state.set_stt_language_status(stt.language_status())
     # STT sammelt in diesem Ringpuffer die letzten CLIP_SECONDS Sekunden
     # Mono-PCM (unabhängig vom aktuellen VAD-Label, siehe CLAUDE.md) und
     # sampelt daraus alle sample_interval_seconds -- siehe Hauptloop unten.
@@ -1082,14 +1093,20 @@ def main():
                 state.reload()
                 new_stt_cfg = state.stt_filter_cfg
                 # Nur bei Änderung an Engine-relevanten Feldern tatsächlich
-                # neu laden (Modell laden ist teuer) -- Schwellwert/
-                # Intervall/Verknüpfung liest combine_label() ohnehin bei
-                # jedem Aufruf frisch aus state.stt_filter_cfg, dafür ist
-                # kein Reload nötig.
+                # neu laden -- Schwellwert/Intervall/Verknüpfung/
+                # category_languages liest combine_label() bzw.
+                # resolve_stt_language() ohnehin bei jedem Aufruf frisch aus
+                # state.stt_filter_cfg, dafür ist kein Reload nötig.
+                # "languages" (Modellpfade PRO Sprache, siehe SESSION.md)
+                # ersetzt hier das frühere einzelne "vosk_model_path" -- bei
+                # Vosk ist reload() dank Lazy-Load ohnehin billig (räumt nur
+                # den Cache, siehe stt_filter.py), lädt also nicht bei jeder
+                # Sprachänderung gleich alle Modelle neu.
                 if any(prev_stt_cfg.get(f) != new_stt_cfg.get(f)
-                       for f in ("enabled", "engine", "vosk_model_path", "whisper_model_size")):
+                       for f in ("enabled", "engine", "languages", "whisper_model_size")):
                     stt.reload(new_stt_cfg)
                     state.set_stt_status(*stt.status())
+                    state.set_stt_language_status(stt.language_status())
                 if (state.prebuffer_seconds, state.prebuffer_count) != prev_prebuffer_settings:
                     # PrebufferedSource-Instanzen haben ihre Puffergröße
                     # fest einkompiliert (deque(maxlen=...) bei der
@@ -1304,11 +1321,15 @@ def main():
             # gegriffen haben -- sonst wäre es verschwendete Rechenzeit.
             stt_ring.append(pcm)
             now_stt = time.monotonic()
+            # Sprache der AKTUELLEN Sender-Kategorie -- einmal pro Durchlauf
+            # aufgelöst, gilt sowohl fürs Sampling-Ziel unten als auch für
+            # classify() (Verdict-Interpretation), siehe deren Docstrings.
+            stt_lang = settings_store.resolve_stt_language(current["category"], state.stt_filter_cfg)
             if now_stt - last_stt_sample_at >= state.stt_filter_cfg["sample_interval_seconds"]:
                 last_stt_sample_at = now_stt
-                stt.sample_async(np.concatenate(stt_ring), SAMPLE_RATE)
+                stt.sample_async(np.concatenate(stt_ring), SAMPLE_RATE, stt_lang, state.stt_filter_cfg)
 
-            label = classify(pcm)
+            label = classify(pcm, stt_lang)
             now = time.time()
 
             if now - last_switch_time < COOLDOWN_AFTER_SWITCH:

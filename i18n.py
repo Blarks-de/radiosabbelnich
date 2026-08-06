@@ -207,23 +207,23 @@ STRINGS = {
     "cfg_stt_heading": {"de": "🗣 STT-Sprachfilter", "en": "🗣 STT speech filter"},
     "cfg_stt_hint": {
         "de": ('Zusätzliches Signal per Speech-to-Text: erkennt, ob '
-               'gerade zusammenhängender deutscher Text zu hören ist (echte '
-               'Moderation) oder nicht (auch deutsch gesungene Musik zählt dann als '
-               '"keine Sprache") — ergänzt VAD/Heuristik, die reinen Gesang oft '
-               'fälschlich als Sprache werten. <strong>Vosk</strong> ist leichtgewichtig '
-               'und Pi-tauglich, <strong>Whisper</strong> genauer, aber deutlich '
-               'ressourcenhungriger. Modellpfad/-größe sind Container-interne Werte '
-               '(siehe README) — braucht ggf. einen Neustart des Containers, falls '
-               'das Modell erstmals gemountet wird.'),
+               'gerade zusammenhängender Text in der jeweils erwarteten Sprache '
+               'zu hören ist (echte Moderation) oder nicht (auch in dieser Sprache '
+               'gesungene Musik zählt dann als "keine Sprache") — ergänzt '
+               'VAD/Heuristik, die reinen Gesang oft fälschlich als Sprache werten. '
+               '<strong>Vosk</strong> ist leichtgewichtig und Pi-tauglich, '
+               '<strong>Whisper</strong> genauer, aber deutlich ressourcenhungriger. '
+               'Welche Sprache für welchen Sender gilt, wird unten über die '
+               'Sender-Kategorie festgelegt.'),
         "en": ('Additional signal via speech-to-text: detects whether '
-               'coherent German speech is currently audible (actual '
-               'presenting) or not (music sung in German also counts as '
-               '"no speech" then) — complements VAD/heuristic, which often '
-               'misjudges pure singing as speech. <strong>Vosk</strong> is lightweight '
-               'and Pi-friendly, <strong>Whisper</strong> more accurate but noticeably '
-               'more resource-hungry. Model path/size are container-internal values '
-               '(see README) — may need a restart of the container if '
-               'the model is mounted for the first time.'),
+               'coherent speech in the respectively expected language is '
+               'currently audible (actual presenting) or not (music sung in '
+               'that language also counts as "no speech" then) — complements '
+               'VAD/heuristic, which often misjudges pure singing as speech. '
+               '<strong>Vosk</strong> is lightweight and Pi-friendly, '
+               '<strong>Whisper</strong> more accurate but noticeably more '
+               'resource-hungry. Which language applies to which station is set '
+               'below via the station category.'),
     },
     "cfg_stt_status_loading": {"de": "Lade Status …", "en": "Loading status …"},
     "cfg_stt_engine_label": {"de": "Engine", "en": "Engine"},
@@ -231,14 +231,52 @@ STRINGS = {
                                     "en": "Vosk (lightweight, Pi-friendly)"},
     "cfg_stt_engine_whisper_option": {"de": "Whisper (genauer, ressourcenhungriger)",
                                        "en": "Whisper (more accurate, more resource-hungry)"},
-    "cfg_stt_vosk_path_label": {"de": "Vosk-Modellpfad (Container-Pfad)", "en": "Vosk model path (container path)"},
     "cfg_stt_whisper_size_label": {"de": "Whisper-Modellgröße", "en": "Whisper model size"},
     "cfg_stt_interval_label": {"de": "Sample-Intervall (Sekunden)", "en": "Sample interval (seconds)"},
-    "cfg_stt_threshold_label": {"de": "Konfidenz-Schwelle (0–1)", "en": "Confidence threshold (0–1)"},
     "cfg_stt_combine_label": {"de": "Verknüpfung mit VAD/Heuristik", "en": "Combination with VAD/heuristic"},
     "cfg_stt_combine_and_option": {"de": 'UND — beide müssen "Sprache" sagen (empfohlen)',
                                     "en": 'AND — both must say "speech" (recommended)'},
     "cfg_stt_combine_or_option": {"de": "ODER — eines reicht", "en": "OR — either is enough"},
+
+    "cfg_stt_lang_heading": {"de": "🌐 STT-Sprachen", "en": "🌐 STT languages"},
+    "cfg_stt_lang_hint": {
+        "de": ('Pro Sprache ein Vosk-Modellpfad (nur bei Engine "Vosk" relevant, '
+               'jede Sprache braucht ein eigenes Modell) und eine empirisch '
+               'ermittelte Konfidenz-Schwelle (siehe README). Ein bereits '
+               'vorhandener Sprachcode wird beim erneuten Eintragen aktualisiert '
+               'statt doppelt angelegt.'),
+        "en": ('One Vosk model path per language (only relevant with engine '
+               '"Vosk" — each language needs its own model) and an empirically '
+               'determined confidence threshold (see README). Entering an '
+               'existing language code again updates it instead of duplicating it.'),
+    },
+    "cfg_stt_lang_col_code": {"de": "Sprache", "en": "Language"},
+    "cfg_stt_lang_col_vosk_path": {"de": "Vosk-Modellpfad", "en": "Vosk model path"},
+    "cfg_stt_lang_col_threshold": {"de": "Schwelle", "en": "Threshold"},
+    "cfg_stt_lang_col_status": {"de": "Status", "en": "Status"},
+    "cfg_stt_lang_code_placeholder": {"de": "z.B. en", "en": "e.g. en"},
+    "cfg_stt_lang_add_btn": {"de": "+ Sprache hinzufügen/aktualisieren", "en": "+ Add/update language"},
+    "cfg_stt_lang_status_unknown": {"de": "noch nicht geladen", "en": "not loaded yet"},
+    "cfg_stt_lang_status_ok": {"de": "✅ geladen", "en": "✅ loaded"},
+    "cfg_stt_lang_status_error": {"de": "⚠ {error}", "en": "⚠ {error}"},
+    "cfg_stt_lang_saved": {"de": "Sprache gespeichert.", "en": "Language saved."},
+    "cfg_stt_lang_deleted": {"de": "Sprache gelöscht.", "en": "Language deleted."},
+    "cfg_stt_lang_delete_confirm": {
+        "de": "Sprache '{code}' wirklich löschen? Kategorien, die ihr zugeordnet sind, "
+              "fallen danach auf Deutsch zurück.",
+        "en": "Really delete language '{code}'? Categories assigned to it will fall "
+              "back to German afterwards.",
+    },
+
+    "cfg_stt_cat_lang_heading": {"de": "🏷 Kategorie-Sprachen", "en": "🏷 Category languages"},
+    "cfg_stt_cat_lang_hint": {
+        "de": ('Legt fest, welche der oben konfigurierten Sprachen für Sender welcher '
+               'Kategorie geprüft wird. Kategorien ohne Auswahl gelten als Deutsch.'),
+        "en": ('Sets which of the languages configured above is checked for stations '
+               'of which category. Categories without a selection default to German.'),
+    },
+    "cfg_stt_cat_lang_default": {"de": "(Standard: Deutsch)", "en": "(default: German)"},
+    "cfg_stt_cat_lang_saved": {"de": "Kategorie-Sprache gespeichert.", "en": "Category language saved."},
 
     "cfg_fingerprint_heading": {"de": "🗑 Fingerprint-Datenbank", "en": "🗑 Fingerprint database"},
     "cfg_fingerprint_hint": {

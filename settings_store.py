@@ -13,6 +13,7 @@ gebindmountet, os.replace() schlägt darüber mit "Device or resource
 busy" fehl).
 """
 
+import copy
 import json
 import logging
 import os
@@ -55,23 +56,37 @@ DEFAULTS = {
     },
     "stt_filter": {
         "enabled": False,
-        "engine": "vosk",              # "vosk" | "whisper"
-        # Container-interner Pfad — siehe docker-compose.yml
-        # (VOSK_MODEL_FOLDER-Bind-Mount) und README. NICHT der Host-Pfad.
-        "vosk_model_path": "/app/vosk-model-de",
-        "whisper_model_size": "tiny",  # "tiny" | "base" (o.ä., siehe faster-whisper)
+        "engine": "vosk",              # "vosk" | "whisper" -- GLOBAL, gilt für alle Sprachen
+                                         # gleichzeitig (siehe stt_filter.py-Moduldocstring: nie
+                                         # beide Engines gleichzeitig geladen, RAM-Gründe)
+        "whisper_model_size": "tiny",  # "tiny" | "base" (o.ä., siehe faster-whisper) -- ebenfalls
+                                         # GLOBAL: faster-whisper ist von Haus aus multilingual,
+                                         # ein Sprachwechsel braucht bei dieser Engine KEIN neues
+                                         # Modell, nur einen anderen language=-Parameter pro
+                                         # transcribe()-Aufruf (siehe stt_filter.py)
         "sample_interval_seconds": 8.0,
-        # Empirisch aus echten Sendern hergeleitet (siehe SESSION.md):
-        # Deutschlandfunk-Sprache lag in 10 Clips nie unter 0.83, Schlager-
-        # Gesang (ndr-schlager/radio-paloma/schlagerparadies) im Schnitt
-        # bei 0.38 -- 0.75 liegt mit Marge unter dem Sprache-Minimum, damit
-        # reale Moderation sicher erkannt wird, filtert aber den Großteil
-        # des gesungenen Schlagers heraus (bei 0.6 wären es nur ~60%
-        # gewesen statt ~80% bei 0.75).
-        "confidence_threshold": 0.75,
         "combine_mode": "and",          # "and" | "or" — siehe stt_filter.combine_label()
+        # Pro Sprache: vosk_model_path (Container-interner Pfad, NUR für
+        # engine="vosk" relevant -- siehe docker-compose.yml/README für den
+        # Bind-Mount) + confidence_threshold (siehe stt_filter.py, empirisch
+        # pro Sprache zu ermitteln, nicht aus der Theorie ableitbar -- der
+        # de-Default 0.75 ist so hergeleitet, siehe SESSION.md: Deutschlandfunk-
+        # Sprache lag in 10 Clips nie unter 0.83, Schlager-Gesang im Schnitt
+        # bei 0.38, 0.75 liegt mit Marge dazwischen).
+        "languages": {
+            "de": {"vosk_model_path": "/app/vosk-model-de", "confidence_threshold": 0.75},
+        },
+        # Sender-Kategorie (siehe stations_store.CATEGORIES) -> Sprachcode
+        # (Schlüssel in "languages" oben). Fehlt eine Kategorie hier, gilt
+        # DEFAULT_STT_LANGUAGE -- ein frischer Server ohne jede Zuordnung
+        # verhält sich dadurch exakt wie vor diesem Feature (alles Deutsch).
+        "category_languages": {},
     },
 }
+
+# Fallback-Sprache für Kategorien ohne explizite Zuordnung in
+# category_languages -- siehe resolve_stt_language().
+DEFAULT_STT_LANGUAGE = "de"
 
 # (min, max) — grobe Leitplanken gegen Tippfehler/Unsinn, nicht als
 # strenge Produktentscheidung gedacht.
@@ -98,9 +113,42 @@ UNSET = object()
 def _defaults_copy() -> dict:
     """dict(DEFAULTS) reicht nicht — "news_break"/"stt_filter" sind selbst
     dicts, ein flacher copy() würde sie mit dem Modul-weiten DEFAULTS-
-    Objekt teilen statt kopieren."""
+    Objekt teilen statt kopieren. stt_filter.languages/category_languages
+    sind seit der Mehrsprachigkeit (siehe SESSION.md) selbst wieder
+    verschachtelte dicts -- deshalb hier deepcopy() statt eines weiteren
+    Handkopie-Levels."""
     return {**DEFAULTS, "news_break": dict(DEFAULTS["news_break"]),
-            "stt_filter": dict(DEFAULTS["stt_filter"])}
+            "stt_filter": copy.deepcopy(DEFAULTS["stt_filter"])}
+
+
+def _migrate_stt_filter(v: dict) -> dict:
+    """Alte settings.json-Dateien (vor der Mehrsprachigkeit, siehe
+    SESSION.md) hatten vosk_model_path/confidence_threshold flach in
+    stt_filter statt pro Sprache in stt_filter.languages -- reine
+    In-Memory-Migration beim Laden (wie das übrige Reconcile hier auch:
+    kein Zurückschreiben nötig, der nächste echte set_stt_language()-
+    Aufruf persistiert die neue Form ohnehin). Nur relevant, solange
+    "languages" noch NICHT im geladenen JSON steht -- danach ist
+    "languages" die alleinige Quelle der Wahrheit, alte Flachfelder
+    werden ignoriert, damit ein Nutzer sie nicht versehentlich durch
+    Zurückbearbeiten einer alten settings.json wiederbeleben kann."""
+    if "languages" in v:
+        return v
+    old_path = v.get("vosk_model_path")
+    old_threshold = v.get("confidence_threshold")
+    if old_path is None and old_threshold is None:
+        return v
+    default_de = DEFAULTS["stt_filter"]["languages"]["de"]
+    v = dict(v)
+    v["languages"] = {
+        "de": {
+            "vosk_model_path": old_path if old_path is not None else default_de["vosk_model_path"],
+            "confidence_threshold": old_threshold if old_threshold is not None else default_de["confidence_threshold"],
+        }
+    }
+    log.info("⚙ settings.json: alte STT-Konfiguration (vosk_model_path=%r, "
+             "confidence_threshold=%r) zu Sprache 'de' migriert.", old_path, old_threshold)
+    return v
 
 
 def _read_raw() -> dict:
@@ -124,9 +172,11 @@ def _read_raw() -> dict:
         elif k == "stt_filter" and isinstance(v, dict):
             # Gleiches Muster wie "news_break" direkt oben: ein
             # settings.json von vor diesem Feature funktioniert dadurch
-            # unverändert weiter.
+            # unverändert weiter. _migrate_stt_filter() zusätzlich davor,
+            # weil "languages"/"category_languages" ERST mit der
+            # Mehrsprachigkeit dazukamen (siehe dortiger Docstring).
             merged["stt_filter"].update(
-                {kk: vv for kk, vv in v.items() if kk in DEFAULTS["stt_filter"]}
+                {kk: vv for kk, vv in _migrate_stt_filter(v).items() if kk in DEFAULTS["stt_filter"]}
             )
         else:
             merged[k] = v
@@ -148,8 +198,8 @@ def update(prebuffer_seconds=None, prebuffer_count=None, import_url=None,
            news_break_enabled=None, news_break_mp3_folder=None,
            news_break_window_minutes=None, news_break_enabled_hours=UNSET,
            stt_filter_enabled=None, stt_filter_engine=None,
-           stt_filter_vosk_model_path=None, stt_filter_whisper_model_size=None,
-           stt_filter_sample_interval_seconds=None, stt_filter_confidence_threshold=None,
+           stt_filter_whisper_model_size=None,
+           stt_filter_sample_interval_seconds=None,
            stt_filter_combine_mode=None) -> dict:
     """Aktualisiert nur die übergebenen Felder (None = unverändert lassen),
     validiert. Wirft ValueError bei ungültigen Werten.
@@ -173,11 +223,13 @@ def update(prebuffer_seconds=None, prebuffer_count=None, import_url=None,
     Einstellung noch nicht verfügbar sein kann. Die eigentliche Prüfung
     passiert erst zur Laufzeit in news_break.pick_random_mp3().
 
-    stt_filter_vosk_model_path/stt_filter_whisper_model_size werden aus
-    demselben Grund NICHT auf Existenz geprüft — die eigentliche Prüfung
-    (Modell ladbar?) passiert erst beim Laden in stt_filter.py, das sich
-    bei einem ungültigen Pfad selbst deaktiviert statt hier schon einen
-    Fehler zu werfen."""
+    stt_filter_whisper_model_size wird aus demselben Grund NICHT auf
+    Existenz geprüft — die eigentliche Prüfung (Modell ladbar?) passiert
+    erst beim Laden in stt_filter.py, das sich bei einem ungültigen Wert
+    selbst deaktiviert statt hier schon einen Fehler zu werfen. Gleiches
+    gilt für vosk_model_path PRO SPRACHE — das ist seit der
+    Mehrsprachigkeit (siehe SESSION.md) kein Feld dieser Funktion mehr,
+    sondern läuft über set_stt_language() weiter unten."""
     with _lock:
         data = _read_raw()
         if prebuffer_seconds is not None:
@@ -255,8 +307,6 @@ def update(prebuffer_seconds=None, prebuffer_count=None, import_url=None,
             if stt_filter_engine not in STT_ENGINES:
                 raise ValueError(f"stt_filter_engine muss eine von {sorted(STT_ENGINES)} sein.")
             stt["engine"] = stt_filter_engine
-        if stt_filter_vosk_model_path is not None:
-            stt["vosk_model_path"] = str(stt_filter_vosk_model_path).strip()
         if stt_filter_whisper_model_size is not None:
             stt["whisper_model_size"] = str(stt_filter_whisper_model_size).strip()
         if stt_filter_sample_interval_seconds is not None:
@@ -268,15 +318,6 @@ def update(prebuffer_seconds=None, prebuffer_count=None, import_url=None,
             if not (lo <= stt_filter_sample_interval_seconds <= hi):
                 raise ValueError(f"stt_filter_sample_interval_seconds muss zwischen {lo} und {hi} liegen.")
             stt["sample_interval_seconds"] = stt_filter_sample_interval_seconds
-        if stt_filter_confidence_threshold is not None:
-            lo, hi = LIMITS["stt_confidence_threshold"]
-            try:
-                stt_filter_confidence_threshold = float(stt_filter_confidence_threshold)
-            except (TypeError, ValueError):
-                raise ValueError("stt_filter_confidence_threshold muss eine Zahl sein.")
-            if not (lo <= stt_filter_confidence_threshold <= hi):
-                raise ValueError(f"stt_filter_confidence_threshold muss zwischen {lo} und {hi} liegen.")
-            stt["confidence_threshold"] = stt_filter_confidence_threshold
         if stt_filter_combine_mode is not None:
             stt_filter_combine_mode = str(stt_filter_combine_mode).strip()
             if stt_filter_combine_mode not in STT_COMBINE_MODES:
@@ -286,3 +327,91 @@ def update(prebuffer_seconds=None, prebuffer_count=None, import_url=None,
         _write(data)
         log.info("⚙ Einstellungen gespeichert: %s", data)
         return data
+
+
+def set_stt_language(lang_code: str, vosk_model_path: str = None,
+                      confidence_threshold: float = None) -> dict:
+    """Legt eine STT-Sprache an oder aktualisiert sie (gleiche None-
+    Konvention wie update(): nur übergebene Felder ändern sich, ein
+    bestehender Eintrag wird nicht überschrieben). Sprachcode wird NICHT
+    gegen eine feste Liste geprüft -- Freitext statt fest programmierter
+    Auswahl, weil Vosk-Modelle ohnehin selbst besorgt/gemountet werden
+    müssen (siehe SESSION.md) und Whisper praktisch jeden Sprachcode
+    akzeptiert, den faster-whisper kennt.
+
+    vosk_model_path wird wie beim übrigen STT-Filter NICHT auf Existenz
+    geprüft — die eigentliche Prüfung passiert lazy beim ersten Sample
+    dieser Sprache in stt_filter.py, das sich bei einem ungültigen Pfad
+    für genau diese Sprache selbst deaktiviert statt hier schon einen
+    Fehler zu werfen."""
+    lang_code = (lang_code or "").strip().lower()
+    if not lang_code:
+        raise ValueError("Sprachcode darf nicht leer sein.")
+    with _lock:
+        data = _read_raw()
+        langs = data["stt_filter"]["languages"]
+        entry = dict(langs.get(lang_code, {"vosk_model_path": "", "confidence_threshold": 0.6}))
+        if vosk_model_path is not None:
+            entry["vosk_model_path"] = str(vosk_model_path).strip()
+        if confidence_threshold is not None:
+            lo, hi = LIMITS["stt_confidence_threshold"]
+            try:
+                confidence_threshold = float(confidence_threshold)
+            except (TypeError, ValueError):
+                raise ValueError("confidence_threshold muss eine Zahl sein.")
+            if not (lo <= confidence_threshold <= hi):
+                raise ValueError(f"confidence_threshold muss zwischen {lo} und {hi} liegen.")
+            entry["confidence_threshold"] = confidence_threshold
+        langs[lang_code] = entry
+        _write(data)
+        log.info("🌐 STT-Sprache gespeichert: '%s' (%s)", lang_code, entry)
+        return entry
+
+
+def delete_stt_language(lang_code: str) -> None:
+    """Mindestens eine Sprache muss konfiguriert bleiben (sonst hat
+    engine="vosk" gar kein Modell mehr, das es laden könnte). Kategorien,
+    die auf die gelöschte Sprache zeigten, werden aus category_languages
+    entfernt statt als verwaiste Zuordnung stehen zu bleiben -- sie fallen
+    danach auf DEFAULT_STT_LANGUAGE zurück, siehe resolve_stt_language()."""
+    with _lock:
+        data = _read_raw()
+        langs = data["stt_filter"]["languages"]
+        if lang_code not in langs:
+            raise KeyError(lang_code)
+        if len(langs) <= 1:
+            raise ValueError("Mindestens eine Sprache muss konfiguriert bleiben.")
+        del langs[lang_code]
+        cat_langs = data["stt_filter"]["category_languages"]
+        for cat in [c for c, lang in cat_langs.items() if lang == lang_code]:
+            del cat_langs[cat]
+        _write(data)
+        log.info("🗑 STT-Sprache gelöscht: '%s'", lang_code)
+
+
+def set_category_language(category: str, lang_code: str) -> None:
+    """lang_code leer/None löscht die Zuordnung -- die Kategorie fällt
+    dann auf DEFAULT_STT_LANGUAGE zurück (siehe resolve_stt_language()),
+    statt einen ungültigen leeren Sprachcode zu speichern."""
+    category = (category or "").strip()
+    if not category:
+        raise ValueError("category darf nicht leer sein.")
+    lang_code = (lang_code or "").strip().lower()
+    with _lock:
+        data = _read_raw()
+        cat_langs = data["stt_filter"]["category_languages"]
+        if not lang_code:
+            cat_langs.pop(category, None)
+        else:
+            cat_langs[category] = lang_code
+        _write(data)
+        log.info("🌐 Kategorie-Sprache gespeichert: '%s' -> '%s'", category, lang_code or "(Standard)")
+
+
+def resolve_stt_language(category: str, cfg: dict) -> str:
+    """Löst die für eine Sender-Kategorie zuständige STT-Sprache auf --
+    fehlt die Kategorie in cfg["category_languages"], gilt
+    DEFAULT_STT_LANGUAGE. cfg ist typischerweise state.stt_filter_cfg im
+    Hauptloop (siehe radiozapper.py), damit nicht bei jedem Aufruf frisch
+    von der Platte gelesen wird."""
+    return cfg.get("category_languages", {}).get(category, DEFAULT_STT_LANGUAGE)

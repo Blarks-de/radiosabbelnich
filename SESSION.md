@@ -3620,3 +3620,164 @@ Nach Zustimmung des Nutzers: `docker compose up -d --build radiozapper`.
 Sauberer Start, kein Fehler/Traceback. `GET /` und `GET /config` zeigten
 beide `<div class="version-tag">v1.0.3 build 2026-08-06 10:35 Uhr</div>`
 direkt unter dem Banner-Bild. `docker compose ps`: beide Container `Up`.
+
+## 2026-08-06 (Fortsetzung 5) — Mehrsprachige STT-Erkennung (Teil 1a)
+
+Dritter und größter Teil aus dem Architektur-Vorschlag (siehe
+"Fortsetzung 2"/"Fortsetzung 3" oben) — Kern-Plumbing für mehrsprachige
+STT-Erkennung. Vor Beginn zwei offene Designfragen mit dem Nutzer
+geklärt: Kalibrierung zweistufig (Sprache- UND Musik-Sender, wie die
+ursprüngliche DE-Kalibrierung) statt einstufig, Sprachliste als Freitext
+statt feste Auswahl. Wegen des Umfangs bewusst in zwei Schritte
+gesplittet: **1a** (dieser Eintrag) legt Datenmodell, Multi-Language-
+Engine und manuelle Config-UI hin; **1b** (der geführte
+Kalibrierungs-Wizard mit Live-Sampling) folgt separat, sobald 1a live
+läuft — gleiches inkrementelles Muster wie bei Teil 2/3.
+
+### Kernentscheidung: Kategorie → Sprache, nicht Sender → Sprache
+
+`stations_store.CATEGORIES` bleibt unangetastet (weiterhin eine feste,
+nicht persistierte Python-Konstante, keine Migration von `stations.json`
+nötig). Stattdessen bekommt `settings_store.py`s `stt_filter`-Block ein
+neues `category_languages`-Dict (Kategorie-Name → Sprachcode) — eine
+Kategorie ohne Eintrag gilt als Deutsch. Das hält die Änderung komplett
+auf `settings.json` beschränkt, keine Anfassung von `stations_store.py`
+oder der bestehenden Sender-Verwaltung nötig.
+
+### Umsetzung
+
+- **`settings_store.py`**: `stt_filter.vosk_model_path`/
+  `confidence_threshold` (bisher flach, EIN Wert für "die" Sprache)
+  werden zu `stt_filter.languages` (Dict Sprachcode → {vosk_model_path,
+  confidence_threshold}). `engine`/`whisper_model_size` bleiben bewusst
+  GLOBAL (nicht pro Sprache) — Whisper ist multilingual mit einem
+  einzigen geladenen Modell, ein Pro-Sprache-`whisper_model_size` hätte
+  bei jedem Sprachwechsel einen Modell-Neustart erzwungen und damit genau
+  den Whisper-Vorteil (eine zusätzliche Sprache kostet kein RAM) wieder
+  zunichtegemacht. `_migrate_stt_filter()` übersetzt eine alte
+  `settings.json` (flache Felder) beim Laden in-memory in die neue Form
+  (Deutsch übernimmt die vorhandenen Werte) — kein Zurückschreiben nötig,
+  der nächste `set_stt_language()`-Aufruf persistiert die neue Form
+  ohnehin, gleiches Muster wie das bestehende `news_break`/`stt_filter`-
+  Reconcile beim Laden. Neue Funktionen `set_stt_language()`/
+  `delete_stt_language()` (Upsert bzw. Löschen mit Schutz der letzten
+  verbliebenen Sprache + Aufräumen verwaister `category_languages`-
+  Einträge)/`set_category_language()`/`resolve_stt_language()`.
+- **`stt_filter.py`**: `_WhisperEngine.transcribe()` bekommt einen
+  `language`-Parameter statt hartkodiertem `"de"`. `SttFilter` hält bei
+  Vosk keine einzelne Engine mehr, sondern `_get_vosk_engine(lang, cfg)`:
+  Lazy-Load + LRU-Cache (`MAX_LOADED_VOSK_LANGUAGES=2`), der SOWOHL
+  erfolgreich geladene Modelle ALS AUCH Ladefehler cacht (Fehlertext statt
+  Objekt als Cache-Wert) — ein kaputter Pfad soll nicht bei jedem
+  Sample-Tick erneut versucht werden. `last_verdict()` liefert jetzt ein
+  4-Tupel `(confidence, text, timestamp, language)` statt 3; die geteilte
+  `_fresh_verdict()`-Prüfung (genutzt von `combine_label()`/
+  `live_confidence()`/`live_language()`) verwirft einen Befund zusätzlich
+  zur Altersprüfung, wenn sein Sprach-Tag nicht zur AKTUELL erwarteten
+  Sprache passt — verhindert, dass kurz nach einem Kategoriewechsel noch
+  ein Befund der vorherigen Sprache mit der FALSCHEN Schwelle bewertet
+  wird.
+- **`radiozapper.py`**: `classify()` bekommt einen `stt_lang`-Parameter,
+  einmal pro Loop-Durchlauf über `settings_store.resolve_stt_language(
+  current["category"], state.stt_filter_cfg)` aufgelöst und sowohl an
+  `stt.sample_async()` (Sampling-Ziel) als auch an `classify()`
+  (Verdict-Interpretation) weitergereicht — beide MÜSSEN dieselbe Sprache
+  sehen. Reload-Trigger-Feldliste von `vosk_model_path` auf `languages`
+  umgestellt.
+- **`webui.py`**: `SwitcherState` bekommt `stt_language`
+  (Sprachkürzel für die Live-Anzeige) und `stt_language_status`
+  (Ladezustand pro Sprache fürs Config-UI, getrennt von
+  `stt_status`/dem Gesamtzustand). Drei neue Endpoints:
+  `POST /api/config/stt-languages` (Upsert), `POST
+  /api/config/stt-languages/<code>/delete`, `POST
+  /api/config/stt-category-language`. Config-Seite: STT-Formular um
+  Modellpfad/Schwelle gekürzt (jetzt pro Sprache), zwei neue Sektionen
+  "🌐 STT-Sprachen" (Tabelle + Add/Update-Formular, Ladezustand pro Zeile)
+  und "🏷 Kategorie-Sprachen" (Dropdown pro fester Kategorie). Player-Seite:
+  STT-Balken zeigt jetzt `82% (en)` statt nur `82%`, wenn eine erkannte
+  Sprache vorliegt.
+- **Doku**: `CLAUDE.md`-Abschnitt zum STT-Sprachfilter um die
+  Mehrsprachigkeits-Architektur ergänzt (Kategorie-Auflösung,
+  Engine-Asymmetrie/LRU-Cache, Cross-Language-Invalidierung).
+  `README.md` (DE+EN): STT-Abschnitt um Mehrsprachigkeits-Unterabschnitt
+  erweitert, inkl. Beispiel für einen zusätzlichen `docker-compose.yml`-
+  Mount für weitere Vosk-Sprachmodelle (bewusst KEIN Umbau des
+  bestehenden `VOSK_MODEL_FOLDER`-Mounts — hätte Nutzer gezwungen, ihr
+  bestehendes deutsches Modell in einen neuen Ordner umzuziehen).
+
+### Verifiziert (isoliert, temp-Verzeichnis + separater Testport, ohne den laufenden Produktiv-Container anzufassen)
+
+- `settings_store.py` direkt getestet: Migration einer alten
+  `settings.json` mit flachen `vosk_model_path`/`confidence_threshold`
+  → korrekt zu `languages.de` migriert, Flachfelder verschwunden.
+  `set_stt_language()`/`set_category_language()`/`resolve_stt_language()`
+  End-to-End (National→en gesetzt, Lokal fällt auf Standard "de" zurück).
+  `delete_stt_language()` räumt zugehörige `category_languages`-Einträge
+  mit auf, letzte verbleibende Sprache ist geschützt (`ValueError`).
+- `stt_filter.py` direkt getestet (vosk/faster-whisper auf dem Host nicht
+  installiert, siehe CLAUDE.md — nutzt das deterministisch als
+  "Modell nicht ladbar"-Simulation ohne echte Modelle zu brauchen):
+  3 Sprachen konfiguriert, `MAX_LOADED_VOSK_LANGUAGES=2` eingehalten,
+  älteste Sprache korrekt aus dem Cache verdrängt (auch bei
+  Fehlschlägen). `sample_async()` mit kaputtem Modell setzt keinen
+  Verdict. `_fresh_verdict()`/`combine_label()`/`live_confidence()`/
+  `live_language()` mit synthetischen Verdicts geprüft: passende Sprache
+  liefert Befund, Sprachwechsel invalidiert einen noch "frischen" alten
+  Verdict korrekt (kein Cross-Language-Leck), `confidence_threshold`
+  wird pro Sprache aufgelöst (gleicher Konfidenzwert 0.6 zählt für "en"
+  als Sprache, für "de" als Musik), Altersschwelle greift weiterhin.
+- End-to-End über echtes HTTP (temp-Verzeichnis mit allen `.py`,
+  synthetischer `stations.json` mit zwei Kategorien, Testport 15200):
+  Sprache 'en' anlegen → in `/api/config/settings` sichtbar, Kategorie
+  "International" → 'en' setzen → `category_languages` korrekt gefüllt,
+  'de' löschen (nicht die letzte) → erfolgreich, 'en' danach löschen
+  (jetzt letzte) → korrekt abgelehnt, unbekannte Kategorie → korrekt
+  abgelehnt. Config-Seite (`GET /config`) enthält alle neuen
+  Markup-IDs (`stt-lang-section`/`stt-lang-tbody`/
+  `stt-cat-lang-section`/`stt-cat-lang-tbody`/`stt-lang-add-form`).
+  `_check_i18n_coverage()` beim Modul-Import ohne `AssertionError`
+  durchgelaufen (alle neuen `data-i18n`/`t(...)`-Keys vollständig in
+  `i18n.STRINGS`). `radiozapper.py` importiert sauber (Modul-Ebene),
+  `classify()`-Aufruf mit neuem `stt_lang`-Argument konsistent.
+  Testprozess/-verzeichnis danach entfernt, keine Auswirkung auf den
+  laufenden Produktiv-Container.
+
+### Bewusst NICHT gemacht
+
+Der geführte Kalibrierungs-Wizard (Teil 1b) — Nutzer lässt einen
+Sprache- UND einen Musik-Sender kurz mithören, Schwelle wird
+automatisch vorgeschlagen. Bis dahin bleibt das Ermitteln von
+`confidence_threshold` für eine neue Sprache manuell (README beschreibt
+die Methode). Kein Umbau des `VOSK_MODEL_FOLDER`-Mounts auf eine
+Parent-Ordner-Struktur mit Sprach-Unterordnern (hätte bestehende
+Deployments zum Umziehen ihres Modells gezwungen) — zusätzliche Sprachen
+brauchen stattdessen eine manuell ergänzte Mount-Zeile in
+`docker-compose.yml` (README zeigt ein Beispiel). Kein eifriges
+Vorladen aller konfigurierten Vosk-Modelle bei `reload()` (bewusst lazy,
+siehe RAM-Begründung oben).
+
+### Live deployt
+
+Nach Zustimmung des Nutzers: `docker compose up -d --build radiozapper`.
+Sauberer Start, kein Fehler/Traceback. **Migration griff korrekt am
+echten `settings.json`**: Log zeigte `⚙ settings.json: alte
+STT-Konfiguration (vosk_model_path='/app/vosk-model-de',
+confidence_threshold=0.75) zu Sprache 'de' migriert.` — die bestehende,
+empirisch kalibrierte Deutsch-Schwelle blieb erhalten, kein manueller
+Eingriff nötig. `GET /api/config/settings` zeigte danach korrekt
+`languages: {"de": {...0.75}}`, `category_languages: {}`. Config-Seite
+(`GET /config`) enthielt die neuen Sektionen `stt-lang-section`/
+`stt-cat-lang-section`.
+
+Container startete mitten in einer laufenden Nachrichten-Pause (kein
+STT-Sampling währenddessen, siehe CLAUDE.md) — direkt danach lazy
+geladen: Log zeigte `🗣 STT-Filter: Vosk-Modell für Sprache 'de' geladen
+(/app/vosk-model-de).` als allerersten Ladeversuch (nicht schon beim
+Start), bestätigt den Lazy-Load-Pfad unter echter Last. Erster
+`/api/status`-Check direkt nach Ende der Pause zeigte noch
+`stt_probability: null` (das allererste Sample lief zu diesem Zeitpunkt
+noch, reiner Timing-Artefakt meines Test-Checks) — ein zweiter Check
+kurz danach bestätigte `stt_language: "de"`,
+`stt_probability: 0.321038`, `_stt_language_status: {"de": null}`
+(erfolgreich geladen, kein Fehler). `docker compose ps`: beide Container
+`Up`, kein Neustart-Loop.

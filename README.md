@@ -181,79 +181,133 @@ Fingerprint) — die MP3 selbst enthält u.U. Sprache, das soll nicht als
 ## STT-Sprachfilter
 
 Silero VAD/die Signal-Heuristik erkennen "ist hier eine menschliche
-Stimme" — auch deutsch gesungene Musik zählt da oft fälschlich mit. Der
+Stimme" — auch gesungene Musik zählt da oft fälschlich mit. Der
 STT-Sprachfilter (`stt_filter.py`) hört stattdessen per Speech-to-Text
-mit, ob gerade *zusammenhängender deutscher Text* zu erkennen ist, und
-liefert das als zusätzliches Signal für die Switch-Entscheidung.
+mit, ob gerade *zusammenhängender Text in der erwarteten Sprache* zu
+erkennen ist, und liefert das als zusätzliches Signal für die
+Switch-Entscheidung.
 
 Zwei austauschbare Engines, nie gleichzeitig geladen:
 
-- **Vosk** — kleines deutsches Kaldi-Modell, leichtgewichtig und auch auf
-  einem Raspberry Pi gut nutzbar.
+- **Vosk** — kleines Kaldi-Modell, leichtgewichtig und auch auf einem
+  Raspberry Pi gut nutzbar. Braucht ein eigenes Modell **pro Sprache**.
 - **Whisper** (über `faster-whisper`) — genauer, aber deutlich
-  ressourcenhungriger, selbst als "tiny"-Modell.
+  ressourcenhungriger, selbst als "tiny"-Modell. Ein einziges geladenes
+  Modell deckt beliebig viele Sprachen ab (der Sprachcode wird nur pro
+  Analyse mitgegeben) — bei Whisper kostet eine zusätzliche Sprache also
+  kein zusätzliches RAM.
 
-Konfiguriert wird das über den `stt_filter`-Block in `settings.json`,
-einstellbar über die Formular-Sektion "🗣 STT-Sprachfilter" auf der
-Config-Seite (`/config`) oder direkt per API:
+### Mehrsprachigkeit: Sprache pro Sender-Kategorie
+
+Welche Sprache für einen Sender geprüft wird, richtet sich nach seiner
+**Kategorie** (Lokal/Regional/National/International/…, siehe
+"Web-Interface" oben) — nicht nach dem einzelnen Sender. Auf der
+Config-Seite gibt es dafür zwei neue Abschnitte unterhalb von
+"🗣 STT-Sprachfilter":
+
+- **🌐 STT-Sprachen** — legt an, welche Sprachen überhaupt zur Verfügung
+  stehen: Sprachcode (Freitext, z.B. `en`, `fr` — keine feste Liste, da
+  Vosk-Modelle ohnehin selbst besorgt werden müssen), bei Engine "Vosk"
+  ein Modellpfad, plus eine (empirisch zu ermittelnde, siehe unten)
+  Konfidenz-Schwelle. Ein bereits vorhandener Sprachcode wird beim
+  erneuten Eintragen aktualisiert statt doppelt angelegt. Jede Zeile
+  zeigt zusätzlich den Ladezustand (✅ geladen / ⚠ Fehlermeldung / noch
+  nicht geladen) — bei Vosk wird jedes Sprachmodell erst **lazy** beim
+  ersten tatsächlichen Sample geladen, nicht schon beim Speichern.
+- **🏷 Kategorie-Sprachen** — ordnet jeder der festen Kategorien eine der
+  oben angelegten Sprachen zu. Kategorien ohne Auswahl gelten als
+  Deutsch (`de`).
+
+Bei Vosk sind aus RAM-Gründen (siehe schwache Hardware/Pi) nie mehr als
+**2 Sprachmodelle gleichzeitig** geladen — bei mehr konfigurierten
+Sprachen wird das am längsten ungenutzte automatisch verdrängt (LRU) und
+beim nächsten Bedarf neu geladen. Wechselt ein Sender die erwartete
+Sprache (z.B. durch einen Kategoriewechsel), wird ein noch nicht
+abgelaufener STT-Befund der VORHERIGEN Sprache verworfen statt
+fälschlich weiterverwendet.
+
+**Zusätzliche Vosk-Modelle mounten**: der mitgelieferte
+`VOSK_MODEL_FOLDER`-Mount in `docker-compose.yml` deckt genau EIN Modell
+ab (Default: Deutsch, `/app/vosk-model-de`). Für eine weitere Sprache
+selbst eine zusätzliche Zeile in `docker-compose.yml` ergänzen, z.B.:
+
+```yaml
+      - ${VOSK_MODEL_FOLDER_EN:-./data/vosk-model-en}:/app/vosk-model-en:ro
+```
+
+und den resultierenden Container-Pfad (`/app/vosk-model-en`) als
+Modellpfad bei "🌐 STT-Sprachen" eintragen — danach `docker compose up -d
+--build radiozapper`, damit der neue Mount aktiv wird.
+
+### Konfiguration im Detail
+
+Konfiguriert wird das über den `stt_filter`-Block in `settings.json`
+(Sprachen selbst über `set_stt_language()`/`delete_stt_language()`
+verwaltet, nicht direkt im Block editieren):
 
 ```json
 "stt_filter": {
   "enabled": false,
   "engine": "vosk",
-  "vosk_model_path": "/app/vosk-model-de",
   "whisper_model_size": "tiny",
   "sample_interval_seconds": 8.0,
-  "confidence_threshold": 0.75,
-  "combine_mode": "and"
+  "combine_mode": "and",
+  "languages": {
+    "de": {"vosk_model_path": "/app/vosk-model-de", "confidence_threshold": 0.75}
+  },
+  "category_languages": {}
 }
 ```
 
 - **`enabled`** — Feature an/aus.
-- **`engine`** — `"vosk"` oder `"whisper"`.
-- **`vosk_model_path`** — Container-interner Pfad (nicht der Host-Pfad!)
-  zu einem entpackten deutschen Vosk-Modell. Der eigentliche Host-Ordner
-  wird über `VOSK_MODEL_FOLDER` in `.env` reingemountet (siehe
-  `docker-compose.yml`). Ein deutsches Modell gibt es unter
-  [alphacephei.com/vosk/models](https://alphacephei.com/vosk/models) —
-  `vosk-model-small-de-0.15` (~45 MB) für schwache Hardware/Pi,
-  `vosk-model-de-0.21` (~1 GB) für mehr Genauigkeit. Entpackt in den
-  Ordner legen, auf den `VOSK_MODEL_FOLDER` zeigt. Die Config-Seite zeigt
-  unter dem Feld read-only den echten Host-Pfad an (analog zum
-  MP3-Ordner der Nachrichten-Pause, siehe oben).
+- **`engine`** — `"vosk"` oder `"whisper"`, gilt GLOBAL für alle
+  konfigurierten Sprachen gleichzeitig (siehe oben, warum nie beide
+  gemischt werden).
 - **`whisper_model_size`** — z.B. `"tiny"`, `"base"` (siehe
-  faster-whisper-Dokumentation für weitere Größen). Modelle werden beim
-  ersten Gebrauch automatisch von HuggingFace geladen und in einem
-  dauerhaften Volume zwischengespeichert (kein manueller Download nötig,
-  braucht aber beim ersten Aktivieren Internetzugriff und etwas Zeit).
+  faster-whisper-Dokumentation für weitere Größen), ebenfalls global.
+  Modelle werden beim ersten Gebrauch automatisch von HuggingFace geladen
+  und in einem dauerhaften Volume zwischengespeichert (kein manueller
+  Download nötig, braucht aber beim ersten Aktivieren Internetzugriff und
+  etwas Zeit).
 - **`sample_interval_seconds`** — wie oft ein kurzer Clip (ca. 3s) zur
   Analyse genommen wird. Läuft kontinuierlich im Hintergrund, unabhängig
   vom aktuellen VAD-Ergebnis (blockiert den Hauptloop nie).
-- **`confidence_threshold`** — ab welcher (Best-Effort-)Konfidenz ein
-  Sample als "zusammenhängender deutscher Text" gilt. Der Default (0.75)
-  ist **empirisch gemessen**, nicht geraten: 10 Live-Clips von
-  Deutschlandfunk (Sprache) lagen nie unter 0.83 Konfidenz, 30 Live-Clips
-  von drei Schlager-Sendern (gesungene deutsche Musik) im Schnitt bei
-  0.38 — 0.75 liegt mit Sicherheitsabstand unter dem Sprache-Minimum.
-  Erkannte Texte/Konfidenzwerte landen zum Nachjustieren in
-  `logs/radiozapper.log`.
+- **`languages.<code>.vosk_model_path`** — Container-interner Pfad (nicht
+  der Host-Pfad!) zu einem entpackten Vosk-Modell dieser Sprache, siehe
+  oben. Für Deutsch gibt es passende Modelle unter
+  [alphacephei.com/vosk/models](https://alphacephei.com/vosk/models) —
+  `vosk-model-small-de-0.15` (~45 MB) für schwache Hardware/Pi,
+  `vosk-model-de-0.21` (~1 GB) für mehr Genauigkeit; für andere Sprachen
+  auf derselben Seite nach dem passenden Modell suchen.
+- **`languages.<code>.confidence_threshold`** — ab welcher
+  (Best-Effort-)Konfidenz ein Sample als "zusammenhängender Text in
+  dieser Sprache" gilt. Der de-Default (0.75) ist **empirisch gemessen**,
+  nicht geraten: 10 Live-Clips von Deutschlandfunk (Sprache) lagen nie
+  unter 0.83 Konfidenz, 30 Live-Clips von drei Schlager-Sendern (gesungene
+  deutsche Musik) im Schnitt bei 0.38 — 0.75 liegt mit Sicherheitsabstand
+  unter dem Sprache-Minimum. Für jede weitere Sprache gilt dieselbe
+  Methode: ein paar Minuten gegen einen bekannten Sprache- UND einen
+  bekannten Musik-Sender dieser Sprache mithören, erkannte
+  Texte/Konfidenzwerte landen dafür in `logs/radiozapper.log`.
+- **`category_languages`** — Kategorie → Sprachcode (siehe oben), über
+  die Tabelle "🏷 Kategorie-Sprachen" gepflegt.
 - **`combine_mode`** — wie das STT-Ergebnis mit VAD/Heuristik verknüpft
   wird: `"and"` (Default) verlangt, dass beide "Sprache" sagen — das
-  lässt einen Großteil deutsch gesungener Musik (VAD ja, STT erkennt
-  meist keinen zusammenhängenden Text) korrekt als Musik durchgehen.
-  **Kein Allheilmittel**: bei klar/langsam gesungenem Schlager erkennt
-  Vosk gelegentlich kurze, grammatisch plausible Wortfetzen mit hoher
-  Konfidenz (bei obigem Test ~20% der Schlager-Clips trotz Schwelle 0.75)
-  — UND reduziert Fehl-Switches auf gesungene Musik deutlich, verhindert
-  sie aber nicht zu 100%. `"or"` reicht, wenn eines der beiden Signale
-  "Sprache" sagt — fängt mehr echte Moderation, aber wieder anfälliger
-  für denselben Gesangs-Fall.
+  lässt einen Großteil in dieser Sprache gesungener Musik (VAD ja, STT
+  erkennt meist keinen zusammenhängenden Text) korrekt als Musik
+  durchgehen. **Kein Allheilmittel**: bei klar/langsam gesungenem
+  deutschem Schlager erkennt Vosk gelegentlich kurze, grammatisch
+  plausible Wortfetzen mit hoher Konfidenz (bei obigem Test ~20% der
+  Schlager-Clips trotz Schwelle 0.75) — UND reduziert Fehl-Switches auf
+  gesungene Musik deutlich, verhindert sie aber nicht zu 100%. `"or"`
+  reicht, wenn eines der beiden Signale "Sprache" sagt — fängt mehr echte
+  Moderation, aber wieder anfälliger für denselben Gesangs-Fall.
 
-Modell nicht gefunden oder Ladefehler → das Feature deaktiviert sich
-selbst (Log-Meldung, Status auch auf der Config-Seite sichtbar),
-RadioZapper läuft normal ohne STT-Filter weiter. Ein Absturz der Engine
-bei einem einzelnen Sample überspringt nur diesen einen Sample, nicht den
-Hauptprozess.
+Modell nicht gefunden oder Ladefehler → nur die betroffene Sprache bleibt
+wirkungslos (Log-Meldung, Ladezustand auch auf der Config-Seite pro
+Sprache sichtbar), RadioZapper läuft mit den übrigen Sprachen/Sendern
+normal weiter. Ein Absturz der Engine bei einem einzelnen Sample
+überspringt nur diesen einen Sample, nicht den Hauptprozess.
 
 ## Sprache des Web-Interfaces
 
@@ -728,78 +782,126 @@ on the actual station.
 ## STT speech filter
 
 Silero VAD/the signal heuristic detect "is there a human voice here" —
-music sung in German often counts as a false positive there too. The
-STT speech filter (`stt_filter.py`) instead listens via speech-to-text
-for whether *coherent German text* is currently audible, and feeds
-that in as an additional signal for the switch decision.
+sung music often counts as a false positive there too. The STT speech
+filter (`stt_filter.py`) instead listens via speech-to-text for whether
+*coherent text in the expected language* is currently audible, and
+feeds that in as an additional signal for the switch decision.
 
 Two interchangeable engines, never loaded at the same time:
 
-- **Vosk** — a small German Kaldi model, lightweight and usable on a
-  Raspberry Pi.
+- **Vosk** — a small Kaldi model, lightweight and usable on a Raspberry
+  Pi. Needs its own model **per language**.
 - **Whisper** (via `faster-whisper`) — more accurate, but noticeably
-  more resource-hungry, even as the "tiny" model.
+  more resource-hungry, even as the "tiny" model. A single loaded model
+  covers any number of languages (the language code is just passed per
+  analysis) — with Whisper, an extra language costs no extra RAM.
 
-Configured via the `stt_filter` block in `settings.json`, adjustable
-through the "🗣 STT-Sprachfilter" form section on the config page
-(`/config`), or directly via the API:
+### Multi-language: language per station category
+
+Which language is checked for a station depends on its **category**
+(Local/Regional/National/International/…, see "Web interface" above) —
+not the individual station. The config page has two new sections for
+this below "🗣 STT-Sprachfilter":
+
+- **🌐 STT-Sprachen** — sets up which languages are available at all:
+  language code (free text, e.g. `en`, `fr` — no fixed list, since Vosk
+  models have to be sourced manually anyway), a model path for engine
+  "Vosk", plus an (empirically determined, see below) confidence
+  threshold. Entering an existing language code again updates it instead
+  of duplicating it. Each row also shows the load state (✅ loaded / ⚠
+  error message / not loaded yet) — with Vosk, each language model is
+  loaded **lazily** on its first actual sample, not already when saved.
+- **🏷 Kategorie-Sprachen** — assigns one of the languages configured
+  above to each of the fixed categories. Categories without a selection
+  default to German (`de`).
+
+With Vosk, never more than **2 language models are loaded at once** (for
+RAM reasons, see weak hardware/Pi) — with more configured languages, the
+least recently used one is evicted automatically (LRU) and reloaded on
+next demand. If a station's expected language changes (e.g. through a
+category change), a not-yet-expired STT reading from the PREVIOUS
+language is discarded instead of being reused incorrectly.
+
+**Mounting additional Vosk models**: the bundled `VOSK_MODEL_FOLDER`
+mount in `docker-compose.yml` covers exactly ONE model (default:
+German, `/app/vosk-model-de`). For another language, add your own extra
+line to `docker-compose.yml`, e.g.:
+
+```yaml
+      - ${VOSK_MODEL_FOLDER_EN:-./data/vosk-model-en}:/app/vosk-model-en:ro
+```
+
+and enter the resulting container path (`/app/vosk-model-en`) as the
+model path under "🌐 STT-Sprachen" — then `docker compose up -d --build
+radiozapper` so the new mount takes effect.
+
+### Configuration in detail
+
+Configured via the `stt_filter` block in `settings.json` (languages
+themselves managed via `set_stt_language()`/`delete_stt_language()`,
+don't edit the block directly):
 
 ```json
 "stt_filter": {
   "enabled": false,
   "engine": "vosk",
-  "vosk_model_path": "/app/vosk-model-de",
   "whisper_model_size": "tiny",
   "sample_interval_seconds": 8.0,
-  "confidence_threshold": 0.75,
-  "combine_mode": "and"
+  "combine_mode": "and",
+  "languages": {
+    "de": {"vosk_model_path": "/app/vosk-model-de", "confidence_threshold": 0.75}
+  },
+  "category_languages": {}
 }
 ```
 
 - **`enabled`** — feature on/off.
-- **`engine`** — `"vosk"` or `"whisper"`.
-- **`vosk_model_path`** — a container-internal path (not the host
-  path!) to an unpacked German Vosk model. The actual host folder is
-  mounted in via `VOSK_MODEL_FOLDER` in `.env` (see
-  `docker-compose.yml`). A German model is available at
-  [alphacephei.com/vosk/models](https://alphacephei.com/vosk/models) —
-  `vosk-model-small-de-0.15` (~45 MB) for weaker hardware/Pi,
-  `vosk-model-de-0.21` (~1 GB) for more accuracy. Unpack it into the
-  folder that `VOSK_MODEL_FOLDER` points to. The config page shows the
-  real host path read-only below the field (analogous to the news
-  break MP3 folder above).
+- **`engine`** — `"vosk"` or `"whisper"`, GLOBAL for all configured
+  languages at once (see above for why the two are never mixed).
 - **`whisper_model_size`** — e.g. `"tiny"`, `"base"` (see the
-  faster-whisper docs for further sizes). Models are automatically
-  downloaded from HuggingFace on first use and cached in a persistent
-  volume (no manual download needed, but first activation needs
-  internet access and some time).
+  faster-whisper docs for further sizes), also global. Models are
+  automatically downloaded from HuggingFace on first use and cached in a
+  persistent volume (no manual download needed, but first activation
+  needs internet access and some time).
 - **`sample_interval_seconds`** — how often a short clip (~3s) is
   taken for analysis. Runs continuously in the background, independent
   of the current VAD result (never blocks the main loop).
-- **`confidence_threshold`** — the (best-effort) confidence above
-  which a sample counts as "coherent German text". The default (0.75)
-  is **empirically measured**, not guessed: 10 live clips from
-  Deutschlandfunk (speech) never dropped below 0.83 confidence, 30
-  live clips from three Schlager stations (sung German music) averaged
-  0.38 — 0.75 sits safely below the speech minimum. Detected
-  text/confidence values are logged to `logs/radiozapper.log` for
-  fine-tuning.
+- **`languages.<code>.vosk_model_path`** — a container-internal path
+  (not the host path!) to an unpacked Vosk model for that language, see
+  above. German models are available at
+  [alphacephei.com/vosk/models](https://alphacephei.com/vosk/models) —
+  `vosk-model-small-de-0.15` (~45 MB) for weaker hardware/Pi,
+  `vosk-model-de-0.21` (~1 GB) for more accuracy; for other languages,
+  look for the matching model on the same site.
+- **`languages.<code>.confidence_threshold`** — the (best-effort)
+  confidence above which a sample counts as "coherent text in that
+  language". The de default (0.75) is **empirically measured**, not
+  guessed: 10 live clips from Deutschlandfunk (speech) never dropped
+  below 0.83 confidence, 30 live clips from three Schlager stations
+  (sung German music) averaged 0.38 — 0.75 sits safely below the speech
+  minimum. The same method applies to any further language: listen in
+  for a few minutes against a known speech AND a known music station in
+  that language; detected text/confidence values are logged to
+  `logs/radiozapper.log` for this.
+- **`category_languages`** — category → language code (see above),
+  managed via the "🏷 Kategorie-Sprachen" table.
 - **`combine_mode`** — how the STT result is combined with VAD/
   heuristic: `"and"` (default) requires both to say "speech" — this
-  lets a large share of sung German music (VAD says yes, STT usually
-  detects no coherent text) correctly pass through as music. **Not a
-  silver bullet**: with clearly/slowly sung Schlager, Vosk occasionally
-  detects short, grammatically plausible word fragments with high
-  confidence (~20% of Schlager clips in the test above despite the
-  0.75 threshold) — `"and"` noticeably reduces false switches on sung
-  music, but doesn't eliminate them 100%. `"or"` is enough if either
-  signal says "speech" — catches more actual presenting, but is again
-  more prone to that same singing case.
+  lets a large share of music sung in that language (VAD says yes, STT
+  usually detects no coherent text) correctly pass through as music.
+  **Not a silver bullet**: with clearly/slowly sung German Schlager,
+  Vosk occasionally detects short, grammatically plausible word
+  fragments with high confidence (~20% of Schlager clips in the test
+  above despite the 0.75 threshold) — `"and"` noticeably reduces false
+  switches on sung music, but doesn't eliminate them 100%. `"or"` is
+  enough if either signal says "speech" — catches more actual
+  presenting, but is again more prone to that same singing case.
 
-Model not found or load error → the feature disables itself (log
-entry, status also visible on the config page), RadioZapper keeps
-running normally without the STT filter. A crash of the engine on a
-single sample only skips that one sample, not the main process.
+Model not found or load error → only that language stays ineffective
+(log entry, load state also visible per language on the config page),
+RadioZapper keeps running normally with the remaining languages/
+stations. A crash of the engine on a single sample only skips that one
+sample, not the main process.
 
 ## Web interface language
 

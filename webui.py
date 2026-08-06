@@ -140,8 +140,10 @@ class SwitcherState:
         self._news_break_file = None
         self._stt_filter_cfg = dict(settings_store.DEFAULTS["stt_filter"])
         self._stt_status = {"engine": None, "available": False, "error": None}
+        self._stt_language_status = {}  # lang -> Fehlertext|None, siehe set_stt_language_status()
         self._speech_probability = 0.0
         self._stt_probability = None  # siehe set_stt_probability()
+        self._stt_language = None  # siehe set_stt_language()
         self._fp_activity = None  # {"status", "label", "ts"} oder None, siehe set_fingerprint_activity()
         self.reload()
 
@@ -348,6 +350,19 @@ class SwitcherState:
         with self._lock:
             return dict(self._stt_status)
 
+    def set_stt_language_status(self, status: dict):
+        """Ladezustand jeder bisher für Vosk versuchten Sprache (siehe
+        stt_filter.SttFilter.language_status()) -- für die Sprachen-Tabelle
+        auf der Config-Seite (✅/⚠ pro Zeile), analog zu set_stt_status()
+        für den Gesamtzustand der Engine."""
+        with self._lock:
+            self._stt_language_status = dict(status)
+
+    @property
+    def stt_language_status(self) -> dict:
+        with self._lock:
+            return dict(self._stt_language_status)
+
     def set_speech_probability(self, value: float):
         """Vom Hauptloop nach jeder Klassifikation eines Analysefensters
         aufgerufen (VAD-Wahrscheinlichkeit, oder bei Heuristik-Fallback
@@ -382,6 +397,19 @@ class SwitcherState:
     def stt_probability(self):
         with self._lock:
             return self._stt_probability
+
+    def set_stt_language(self, value):
+        """Sprachcode des aktuell frischen STT-Befunds (siehe
+        stt_filter.live_language()) oder None -- fürs Sprachkürzel neben
+        dem STT-Balken auf der Player-Seite (nur mit Teil 1 aussagekräftig,
+        vorher immer der eine konfigurierte Sprachcode)."""
+        with self._lock:
+            self._stt_language = value
+
+    @property
+    def stt_language(self):
+        with self._lock:
+            return self._stt_language
 
     def set_fingerprint_activity(self, status: str, label: str = None):
         """status: "match" (bekannter Clip wiedererkannt) oder "learned"
@@ -721,6 +749,7 @@ def _build_status(state: SwitcherState, icecast_cfg: dict) -> dict:
         "stt_status": state.stt_status,
         "speech_probability": state.speech_probability,
         "stt_probability": state.stt_probability,
+        "stt_language": state.stt_language,
         "fingerprint_activity": _fresh_fingerprint_activity(state),
         "version": state.version,
     }
@@ -1097,7 +1126,10 @@ function applyStatus(data) {
     sttWrap.classList.add('paused');
   } else {
     const pct = Math.round(data.stt_probability * 100);
-    sttPct.textContent = pct + '%';
+    // Sprachkürzel neben dem Prozentwert (nur mit Teil 1/mehrsprachiger STT
+    // aussagekräftig -- ohne konfigurierte Zusatzsprachen ist es immer "de",
+    // dann trotzdem angezeigt statt versteckt, schadet nicht).
+    sttPct.textContent = data.stt_language ? `${pct}% (${data.stt_language})` : pct + '%';
     sttFill.style.width = pct + '%';
     const hue = Math.max(0, 120 - pct * 1.2);
     sttFill.style.backgroundColor = `hsl(${hue}, 70%, 45%)`;
@@ -1475,6 +1507,32 @@ _CONFIG_PAGE_HTML = """<!doctype html>
   form#news-break-form button, form#stt-form button { padding: .6rem; font-size: 1rem; cursor: pointer; }
   form#news-break-form .hint, form#stt-form .hint { font-size: .8rem; color: #888; margin: 0; }
   #stt-status-line { font-size: .85rem; font-weight: 600; }
+  section#stt-lang-section, section#stt-cat-lang-section {
+    margin-top: 1.5rem; padding: 1rem; border: 1px solid #8884; border-radius: .5rem;
+  }
+  table#stt-lang-table, table#stt-cat-lang-table {
+    width: 100%; border-collapse: collapse; font-size: .9rem; margin-top: .5rem;
+  }
+  table#stt-lang-table th, table#stt-lang-table td,
+  table#stt-cat-lang-table th, table#stt-cat-lang-table td {
+    text-align: left; padding: .3rem .4rem; border-bottom: 1px solid #8884;
+  }
+  table#stt-lang-table td.status-ok { color: #2a7a4a; }
+  table#stt-lang-table td.status-error { color: #d33; }
+  table#stt-lang-table button, table#stt-cat-lang-table select {
+    font-size: .85rem; padding: .25rem .5rem;
+  }
+  form#stt-lang-add-form {
+    margin-top: .8rem; padding-top: .8rem; border-top: 1px solid #8884;
+    display: flex; flex-wrap: wrap; gap: .5rem; align-items: center;
+  }
+  form#stt-lang-add-form input {
+    padding: .4rem; font-size: .9rem; box-sizing: border-box;
+  }
+  form#stt-lang-add-form #stt-lang-code { width: 5rem; }
+  form#stt-lang-add-form #stt-lang-vosk-path { flex: 1; min-width: 10rem; }
+  form#stt-lang-add-form #stt-lang-threshold { width: 5rem; }
+  form#stt-lang-add-form button { padding: .5rem 1rem; font-size: .9rem; cursor: pointer; }
   form#import-form {
     margin-top: 1.5rem; padding: 1rem; border: 1px solid #8884; border-radius: .5rem;
     display: grid; gap: .6rem;
@@ -1647,14 +1705,13 @@ _CONFIG_PAGE_HTML = """<!doctype html>
 <h2 data-i18n="cfg_stt_heading">🗣 STT-Sprachfilter</h2>
 <form id="stt-form">
   <p class="hint" data-i18n-html="cfg_stt_hint">Zusätzliches Signal per Speech-to-Text: erkennt, ob
-    gerade zusammenhängender deutscher Text zu hören ist (echte
-    Moderation) oder nicht (auch deutsch gesungene Musik zählt dann als
-    "keine Sprache") — ergänzt VAD/Heuristik, die reinen Gesang oft
-    fälschlich als Sprache werten. <strong>Vosk</strong> ist leichtgewichtig
-    und Pi-tauglich, <strong>Whisper</strong> genauer, aber deutlich
-    ressourcenhungriger. Modellpfad/-größe sind Container-interne Werte
-    (siehe README) — braucht ggf. einen Neustart des Containers, falls
-    das Modell erstmals gemountet wird.</p>
+    gerade zusammenhängender Text in der jeweils erwarteten Sprache zu hören
+    ist (echte Moderation) oder nicht (auch in dieser Sprache gesungene
+    Musik zählt dann als "keine Sprache") — ergänzt VAD/Heuristik, die
+    reinen Gesang oft fälschlich als Sprache werten. <strong>Vosk</strong>
+    ist leichtgewichtig und Pi-tauglich, <strong>Whisper</strong> genauer,
+    aber deutlich ressourcenhungriger. Welche Sprache für welchen Sender
+    gilt, wird unten über die Sender-Kategorie festgelegt.</p>
   <p id="stt-status-line" class="hint" data-i18n="cfg_stt_status_loading">Lade Status …</p>
   <label class="checkbox">
     <input type="checkbox" id="stt-enabled"> <span data-i18n="cfg_active_label">aktiv</span>
@@ -1665,18 +1722,11 @@ _CONFIG_PAGE_HTML = """<!doctype html>
       <option value="whisper" data-i18n="cfg_stt_engine_whisper_option">Whisper (genauer, ressourcenhungriger)</option>
     </select>
   </label>
-  <label><span data-i18n="cfg_stt_vosk_path_label">Vosk-Modellpfad (Container-Pfad)</span>
-    <input type="text" id="stt-vosk-path" placeholder="/app/vosk-model-de">
-  </label>
-  <p class="hint" id="stt-vosk-path-host"></p>
   <label><span data-i18n="cfg_stt_whisper_size_label">Whisper-Modellgröße</span>
     <input type="text" id="stt-whisper-size" placeholder="tiny">
   </label>
   <label><span data-i18n="cfg_stt_interval_label">Sample-Intervall (Sekunden)</span>
     <input type="number" id="stt-interval" min="2" max="60" step="0.5" required>
-  </label>
-  <label><span data-i18n="cfg_stt_threshold_label">Konfidenz-Schwelle (0–1)</span>
-    <input type="number" id="stt-threshold" min="0" max="1" step="0.05" required>
   </label>
   <label><span data-i18n="cfg_stt_combine_label">Verknüpfung mit VAD/Heuristik</span>
     <select id="stt-combine">
@@ -1686,6 +1736,42 @@ _CONFIG_PAGE_HTML = """<!doctype html>
   </label>
   <button type="submit" data-i18n="common_save">Speichern</button>
 </form>
+
+<section id="stt-lang-section">
+  <h2 style="margin-top:0" data-i18n="cfg_stt_lang_heading">🌐 STT-Sprachen</h2>
+  <p class="hint" data-i18n-html="cfg_stt_lang_hint">Pro Sprache ein Vosk-Modellpfad (nur bei Engine
+    "Vosk" relevant, jede Sprache braucht ein eigenes Modell) und eine
+    empirisch ermittelte Konfidenz-Schwelle (siehe README). Ein bereits
+    vorhandener Sprachcode wird beim erneuten Eintragen aktualisiert statt
+    doppelt angelegt.</p>
+  <p class="hint" id="stt-lang-vosk-host-hint"></p>
+  <table id="stt-lang-table">
+    <thead><tr>
+      <th data-i18n="cfg_stt_lang_col_code">Sprache</th>
+      <th data-i18n="cfg_stt_lang_col_vosk_path">Vosk-Modellpfad</th>
+      <th data-i18n="cfg_stt_lang_col_threshold">Schwelle</th>
+      <th data-i18n="cfg_stt_lang_col_status">Status</th>
+      <th></th>
+    </tr></thead>
+    <tbody id="stt-lang-tbody"></tbody>
+  </table>
+  <form id="stt-lang-add-form">
+    <div class="fields">
+      <input type="text" id="stt-lang-code" data-i18n-placeholder="cfg_stt_lang_code_placeholder" placeholder="z.B. en" required>
+      <input type="text" id="stt-lang-vosk-path" placeholder="/app/vosk-model-en">
+      <input type="number" id="stt-lang-threshold" min="0" max="1" step="0.05" value="0.6" required>
+    </div>
+    <button type="submit" data-i18n="cfg_stt_lang_add_btn">+ Sprache hinzufügen/aktualisieren</button>
+  </form>
+</section>
+
+<section id="stt-cat-lang-section">
+  <h2 style="margin-top:0" data-i18n="cfg_stt_cat_lang_heading">🏷 Kategorie-Sprachen</h2>
+  <p class="hint" data-i18n="cfg_stt_cat_lang_hint">Legt fest, welche der oben konfigurierten Sprachen für
+    Sender welcher Kategorie geprüft wird. Kategorien ohne Auswahl gelten als
+    Deutsch.</p>
+  <table id="stt-cat-lang-table"><tbody id="stt-cat-lang-tbody"></tbody></table>
+</section>
 
 <section id="fingerprint-section">
   <h2 style="margin-top:0" data-i18n="cfg_fingerprint_heading">🗑 Fingerprint-Datenbank</h2>
@@ -1777,6 +1863,7 @@ async function loadStations() {
     return;
   }
   categories = data.categories;
+  renderSttCategoryLanguages();  // categories jetzt bekannt -- siehe dortiger Docstring
 
   const addCategorySelect = document.getElementById('add-category');
   const prevAddCategory = addCategorySelect.value;
@@ -1978,6 +2065,97 @@ document.getElementById('add-form').addEventListener('submit', async (ev) => {
   }
 });
 
+// loadStations() (Kategorien) und loadSettings() (STT-Konfiguration) laufen
+// beim Seitenaufruf parallel, ohne aufeinander zu warten -- die Kategorie-
+// Sprachen-Tabelle braucht aber Daten aus BEIDEN. Statt eine Ladereihenfolge
+// zu erzwingen, merkt sich renderSttCategoryLanguages() den zuletzt
+// geladenen Stand hier und wird von beiden Ladefunktionen aufgerufen;
+// solange eine der beiden Quellen noch fehlt, ist der Aufruf ein No-Op.
+let lastSttCfg = null;
+let lastSttLangStatus = {};
+
+function renderSttLanguages(hostPaths) {
+  const stt = lastSttCfg;
+  if (!stt) return;
+  document.getElementById('stt-lang-vosk-host-hint').textContent = hostPaths.stt_filter_vosk_model_path
+    ? t('cfg_host_path_mounted', {path: hostPaths.stt_filter_vosk_model_path, envVar: 'VOSK_MODEL_FOLDER'})
+    : t('cfg_host_path_unknown');
+
+  const tbody = document.getElementById('stt-lang-tbody');
+  tbody.innerHTML = '';
+  const langs = stt.languages || {};
+  for (const code of Object.keys(langs).sort()) {
+    const entry = langs[code];
+    const err = lastSttLangStatus[code];
+    let statusText, statusClass;
+    if (err === undefined) { statusText = t('cfg_stt_lang_status_unknown'); statusClass = ''; }
+    else if (err === null) { statusText = t('cfg_stt_lang_status_ok'); statusClass = 'status-ok'; }
+    else { statusText = t('cfg_stt_lang_status_error', {error: err}); statusClass = 'status-error'; }
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${esc(code)}</td><td>${esc(entry.vosk_model_path || '')}</td>` +
+      `<td>${esc(entry.confidence_threshold)}</td><td class="${statusClass}">${esc(statusText)}</td>` +
+      `<td><button type="button" data-code="${esc(code)}">${esc(t('common_delete'))}</button></td>`;
+    tbody.appendChild(tr);
+    tr.querySelector('button').onclick = async () => {
+      if (!confirm(t('cfg_stt_lang_delete_confirm', {code}))) return;
+      try {
+        await api('/api/config/stt-languages/' + encodeURIComponent(code) + '/delete', {method: 'POST'});
+        showMsg(t('cfg_stt_lang_deleted'), false);
+        loadSettings();
+      } catch (e) {
+        showMsg(t('common_error', {msg: e.message}), true);
+      }
+    };
+  }
+}
+
+function renderSttCategoryLanguages() {
+  if (!categories.length || !lastSttCfg) return;  // siehe Kommentar oben
+  const tbody = document.getElementById('stt-cat-lang-tbody');
+  tbody.innerHTML = '';
+  const catLangs = lastSttCfg.category_languages || {};
+  const langCodes = Object.keys(lastSttCfg.languages || {}).sort();
+  for (const cat of categories) {
+    const current = catLangs[cat] || '';
+    const options = ['<option value="">' + esc(t('cfg_stt_cat_lang_default')) + '</option>']
+      .concat(langCodes.map(code =>
+        `<option value="${esc(code)}"${code === current ? ' selected' : ''}>${esc(code)}</option>`));
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${esc(cat)}</td><td><select>${options.join('')}</select></td>`;
+    tbody.appendChild(tr);
+    tr.querySelector('select').onchange = async (ev) => {
+      try {
+        await api('/api/config/stt-category-language', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({category: cat, lang_code: ev.target.value}),
+        });
+        showMsg(t('cfg_stt_cat_lang_saved'), false);
+      } catch (e) {
+        showMsg(t('common_error', {msg: e.message}), true);
+      }
+    };
+  }
+}
+
+document.getElementById('stt-lang-add-form').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const lang_code = document.getElementById('stt-lang-code').value;
+  const vosk_model_path = document.getElementById('stt-lang-vosk-path').value;
+  const confidence_threshold = parseFloat(document.getElementById('stt-lang-threshold').value);
+  try {
+    await api('/api/config/stt-languages', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({lang_code, vosk_model_path, confidence_threshold}),
+    });
+    document.getElementById('stt-lang-add-form').reset();
+    document.getElementById('stt-lang-threshold').value = '0.6';
+    showMsg(t('cfg_stt_lang_saved'), false);
+    loadSettings();
+  } catch (e) {
+    showMsg(t('common_error', {msg: e.message}), true);
+  }
+});
+
 async function loadSettings() {
   try {
     const settings = await api('/api/config/settings');
@@ -2009,13 +2187,14 @@ async function loadSettings() {
     const stt = settings.stt_filter || {};
     document.getElementById('stt-enabled').checked = !!stt.enabled;
     document.getElementById('stt-engine').value = stt.engine || 'vosk';
-    document.getElementById('stt-vosk-path').value = stt.vosk_model_path || '';
-    document.getElementById('stt-vosk-path-host').textContent =
-      hostPathHint(hostPaths.stt_filter_vosk_model_path, 'VOSK_MODEL_FOLDER');
     document.getElementById('stt-whisper-size').value = stt.whisper_model_size || '';
     document.getElementById('stt-interval').value = stt.sample_interval_seconds;
-    document.getElementById('stt-threshold').value = stt.confidence_threshold;
     document.getElementById('stt-combine').value = stt.combine_mode || 'and';
+
+    lastSttCfg = stt;
+    lastSttLangStatus = settings._stt_language_status || {};
+    renderSttLanguages(hostPaths);
+    renderSttCategoryLanguages();  // siehe Docstring dort (categories ggf. noch nicht da)
   } catch (e) {
     showMsg(t('cfg_load_settings_failed', {msg: e.message}), true);
   }
@@ -2130,19 +2309,17 @@ document.getElementById('stt-form').addEventListener('submit', async (ev) => {
   ev.preventDefault();
   const stt_filter_enabled = document.getElementById('stt-enabled').checked;
   const stt_filter_engine = document.getElementById('stt-engine').value;
-  const stt_filter_vosk_model_path = document.getElementById('stt-vosk-path').value;
   const stt_filter_whisper_model_size = document.getElementById('stt-whisper-size').value;
   const stt_filter_sample_interval_seconds = parseFloat(document.getElementById('stt-interval').value);
-  const stt_filter_confidence_threshold = parseFloat(document.getElementById('stt-threshold').value);
   const stt_filter_combine_mode = document.getElementById('stt-combine').value;
   try {
     await api('/api/config/settings', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
-        stt_filter_enabled, stt_filter_engine, stt_filter_vosk_model_path,
+        stt_filter_enabled, stt_filter_engine,
         stt_filter_whisper_model_size, stt_filter_sample_interval_seconds,
-        stt_filter_confidence_threshold, stt_filter_combine_mode,
+        stt_filter_combine_mode,
       }),
     });
     showMsg(t('cfg_stt_saved'), false);
@@ -2446,6 +2623,10 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                     "news_break_mp3_folder": host_paths.get("news_mp3_folder"),
                     "stt_filter_vosk_model_path": host_paths.get("vosk_model_folder"),
                 }
+                # Ladezustand pro Sprache (nur für engine="vosk"
+                # aussagekräftig, siehe SttFilter.language_status()) -- für
+                # die ✅/⚠-Anzeige pro Zeile in der Sprachen-Tabelle.
+                data["_stt_language_status"] = state.stt_language_status
                 self._send_json(data)
             elif self.path == "/api/config/import/status":
                 self._send_json(import_state.snapshot())
@@ -2477,6 +2658,12 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                 self._handle_category_action()
             elif self.path == "/api/config/settings":
                 self._handle_update_settings()
+            elif self.path == "/api/config/stt-languages":
+                self._handle_add_stt_language()
+            elif self.path.startswith("/api/config/stt-languages/"):
+                self._handle_stt_language_action()
+            elif self.path == "/api/config/stt-category-language":
+                self._handle_set_category_language()
             elif self.path == "/api/config/import/start":
                 self._handle_import_start()
             else:
@@ -2527,14 +2714,59 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                     ),
                     stt_filter_enabled=payload.get("stt_filter_enabled"),
                     stt_filter_engine=payload.get("stt_filter_engine"),
-                    stt_filter_vosk_model_path=payload.get("stt_filter_vosk_model_path"),
                     stt_filter_whisper_model_size=payload.get("stt_filter_whisper_model_size"),
                     stt_filter_sample_interval_seconds=payload.get("stt_filter_sample_interval_seconds"),
-                    stt_filter_confidence_threshold=payload.get("stt_filter_confidence_threshold"),
                     stt_filter_combine_mode=payload.get("stt_filter_combine_mode"),
                 )
                 state.request_reload()
                 self._send_json({"ok": True, "settings": settings})
+            except ValueError as e:
+                self._send_json({"ok": False, "error": str(e)}, status=400)
+
+        def _handle_add_stt_language(self):
+            # set_stt_language() ist ein Upsert (siehe settings_store.py) --
+            # ein einziger Endpoint für Anlegen UND Bearbeiten, anders als
+            # bei Sendern (dort zwei getrennte Endpoints), weil eine Sprache
+            # keine eigene stabile ID neben ihrem Code braucht.
+            payload = self._read_json_body()
+            try:
+                entry = settings_store.set_stt_language(
+                    payload.get("lang_code", ""),
+                    vosk_model_path=payload.get("vosk_model_path"),
+                    confidence_threshold=payload.get("confidence_threshold"),
+                )
+                state.request_reload()
+                self._send_json({"ok": True, "language": entry})
+            except ValueError as e:
+                self._send_json({"ok": False, "error": str(e)}, status=400)
+
+        def _handle_stt_language_action(self):
+            # Pfadschema: /api/config/stt-languages/<lang_code>/delete
+            rest = self.path[len("/api/config/stt-languages/"):]
+            parts = [p for p in rest.split("/") if p]
+            if len(parts) != 2 or parts[1] != "delete":
+                self.send_error(404)
+                return
+            lang_code = urllib.parse.unquote(parts[0])
+            try:
+                settings_store.delete_stt_language(lang_code)
+                state.request_reload()
+                self._send_json({"ok": True})
+            except KeyError:
+                self._send_json({"ok": False, "error": "Sprache nicht gefunden"}, status=404)
+            except ValueError as e:
+                self._send_json({"ok": False, "error": str(e)}, status=400)
+
+        def _handle_set_category_language(self):
+            payload = self._read_json_body()
+            category = payload.get("category", "")
+            if category not in stations_store.CATEGORIES:
+                self._send_json({"ok": False, "error": "Unbekannte Kategorie."}, status=400)
+                return
+            try:
+                settings_store.set_category_language(category, payload.get("lang_code", ""))
+                state.request_reload()
+                self._send_json({"ok": True})
             except ValueError as e:
                 self._send_json({"ok": False, "error": str(e)}, status=400)
 
