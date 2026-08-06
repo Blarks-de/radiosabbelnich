@@ -6,5 +6,5 @@ data/fingerprints.db
 data/fingerprint_clips/
 data/logs/
 data/news_mp3/
-data/vosk-model-de/
+data/vosk-model-*/
 data/whisper_cache/

@@ -1037,7 +1037,9 @@ def main():
                     log.debug("   ... Puffer von '%s' noch leer, probiere frisch.",
                               candidate["name"])
                 else:
-                    if classify(tail) == "music":
+                    candidate_stt_lang = settings_store.resolve_stt_language(
+                        candidate["category"], state.stt_filter_cfg)
+                    if classify(tail, candidate_stt_lang) == "music":
                         current = candidate
                         source.stop()
                         source = candidate_source
@@ -1063,7 +1065,9 @@ def main():
             probe_mono, probe_stereo = source.read_window(WINDOW_SECONDS)
             if probe_mono.size:
                 write_audio(probe_stereo)
-                if classify(probe_mono) == "music":
+                candidate_stt_lang = settings_store.resolve_stt_language(
+                    current["category"], state.stt_filter_cfg)
+                if classify(probe_mono, candidate_stt_lang) == "music":
                     break
             else:
                 # Gar nichts gekommen: der Sender ist nicht bloß gerade am

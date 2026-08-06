@@ -371,6 +371,18 @@ pflegen. "Übernehmen" nutzt bewusst den bestehenden
 Endpoints — eine Sprache mit neuer Schwelle speichern ist derselbe
 Vorgang wie manuell in der "🌐 STT-Sprachen"-Tabelle.
 
+**`add_calibration_sample()` verwirft Samples ohne erkannten Text**
+(live bei der ersten echten Kalibrierung entdeckt, siehe SESSION.md
+2026-08-06): leerer Text bedeutet "STT hat keine Wort-Hypothese
+gebildet" (Pause/Jingle/Werbeblock, reine Instrumentalpassage) — NICHT
+"mit niedriger Konfidenz erkannt". Beides ungefiltert in dieselbe
+Statistik geworfen zieht `speech_min` künstlich auf 0 herunter (jede
+Pause zählt sonst als "schlechtester Sprache-Sample") und macht
+`suggest_confidence_threshold()`s Vorschlag unbrauchbar. `text.strip()`
+leer ⇔ `confidence == 0.0` gilt für beide Engines (siehe deren
+`transcribe()`), der Text-Check ist aber semantisch richtiger als ein
+Float-Vergleich auf 0.0.
+
 - **Sampling läuft kontinuierlich, unabhängig vom aktuellen VAD-Label**
   (nicht nur während erkannter Sprache) — sonst wäre `combine_mode="or"`
   wirkungslos: der bräuchte STT-Urteile auch für Fenster, die VAD als

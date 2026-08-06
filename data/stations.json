@@ -2490,5 +2490,19 @@
     "url": "https://rs103-krk.rmfstream.pl/RMFFM48",
     "category": "Unsortiert",
     "enabled": false
+  },
+  {
+    "id": "lbc-uk",
+    "name": "LBC UK",
+    "url": "http://media-ice.musicradio.com/LBCUKMP3",
+    "category": "International",
+    "enabled": true
+  },
+  {
+    "id": "heart-london",
+    "name": "Heart London",
+    "url": "http://media-ice.musicradio.com/HeartLondonMP3",
+    "category": "International",
+    "enabled": true
   }
 ]

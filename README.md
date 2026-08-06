@@ -266,6 +266,16 @@ nur geführt statt manuell aus den Logs abgelesen:
    unkommentiert zu übernehmen — dann helfen meist mehr Samples oder ein
    anderer Test-Sender.
 
+Samples, bei denen STT gar keinen Text erkannt hat (Pause/Jingle/
+Werbeblock während der Sprache-Stufe, reine Instrumentalpassage während
+der Musik-Stufe), zählen NICHT in die Statistik — leerer Text bedeutet
+"kein Urteil gebildet", nicht "mit niedriger Konfidenz erkannt". Wichtig
+bei der Senderwahl für die Musik-Stufe: viele kommerzielle Radiosender
+haben erheblichen gesprochenen Anteil (Werbung, Moderation zwischen
+Songs) — das kann trotzdem zu einer unsauberen Trennung führen, auch
+ganz ohne Erkennungsfehler. Ein Sender mit möglichst wenig Wortanteil
+liefert bessere Ergebnisse.
+
 **Wichtig**: Die Kalibrierung schaltet selbst NICHTS um — welcher Sender
 gerade läuft, entscheidet ausschließlich die Player-Seite. Während einer
 laufenden Kalibrierung ist außerdem die automatische Sender-Umschaltung
@@ -896,6 +906,15 @@ hand:
    and music don't separate cleanly in the measured sample (overlap), the
    suggestion shows a warning instead of being applied silently — usually
    more samples or a different test station help.
+
+Samples where STT recognized no text at all (pause/jingle/ad break
+during the speech stage, a purely instrumental passage during the music
+stage) do NOT count toward the statistics — empty text means "no
+judgment formed", not "recognized with low confidence". Important when
+picking the music-stage station: many commercial radio stations have a
+substantial spoken share (ads, DJ links between songs) — that alone can
+cause an unclean separation, with no recognition error involved. A
+station with as little talk as possible gives better results.
 
 **Important**: calibration itself never switches anything — which
 station is playing is decided exclusively on the player page. While a

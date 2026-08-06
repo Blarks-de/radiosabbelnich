@@ -188,6 +188,12 @@ services:
       # Container-internen Pfad rechts vom Doppelpunkt, genau wie beim
       # NEWS_MP3_FOLDER-Muster oben. Nur relevant, wenn engine="vosk".
       - ${VOSK_MODEL_FOLDER:-./data/vosk-model-de}:/app/vosk-model-de:ro
+      # Zusätzliches Sprachmodell für Englisch (Mehrsprachigkeit, siehe
+      # SESSION.md 2026-08-06) -- gleiches Muster wie oben, eigener Mount
+      # pro zusätzlicher Sprache (siehe README, "Zusätzliche Vosk-Modelle
+      # mounten"). Der Container-Pfad rechts vom Doppelpunkt landet als
+      # vosk_model_path bei der Sprache "en" in settings.json.
+      - ${VOSK_MODEL_FOLDER_EN:-./data/vosk-model-en}:/app/vosk-model-en:ro
       # faster-whisper lädt Modelle beim ersten Gebrauch selbst von
       # HuggingFace nach -- beschreibbar (kein :ro) und dauerhaft, damit
       # der Download nicht bei jedem Container-Neustart wiederholt wird.

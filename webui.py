@@ -428,11 +428,27 @@ class SwitcherState:
         Befund zurück, ohne die Dedup-Prüfung würde derselbe Sample-Wert
         mehrfach gezählt. Auf MAX_CALIBRATION_SAMPLES pro Stufe gedeckelt
         -- gegen unbegrenztes Wachstum, falls eine Session vergessen im
-        Hintergrund weiterläuft."""
+        Hintergrund weiterläuft.
+
+        Samples OHNE erkannten Text werden verworfen (live an einer echten
+        Kalibrierung entdeckt, siehe SESSION.md 2026-08-06): leerer Text
+        bedeutet "STT hat gar kein Wort-Hypothese gebildet" (Pause/Jingle/
+        Werbeblock beim Sprache-Test, reine Instrumentalpassage beim
+        Musik-Test) -- NICHT "mit niedriger Konfidenz als Sprache erkannt".
+        Beides ungefiltert in dieselbe Statistik zu werfen zog speech_min
+        in echten Tests künstlich auf 0 herunter (jede Pause zählte als
+        "schlechtester Sprache-Sample") und machte suggest_confidence_
+        threshold()s Vorschlag unbrauchbar. _VoskEngine.transcribe()/
+        _WhisperEngine.transcribe() liefern beide confidence=0.0 GENAU
+        dann, wenn auch text leer ist (siehe stt_filter.py) -- der
+        Text-Check hier ist daher gleichbedeutend, aber semantisch
+        richtiger als ein Vergleich auf confidence==0.0."""
         with self._lock:
             if self._calibration is None or ts == self._calibration_last_ts:
                 return
             self._calibration_last_ts = ts
+            if not text.strip():
+                return
             key = "speech_samples" if self._calibration["stage"] == "speech" else "music_samples"
             samples = self._calibration[key]
             if len(samples) < MAX_CALIBRATION_SAMPLES:

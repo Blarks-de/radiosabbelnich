@@ -3926,3 +3926,122 @@ Container `Up`, kein Neustart-Loop.
 Damit ist der gesamte ursprüngliche Architektur-Vorschlag (Resource-
 Monitoring, Live-Statusanzeigen, mehrsprachige STT inkl.
 Kalibrierungs-Wizard) vollständig umgesetzt und live verifiziert.
+
+## 2026-08-06 (Fortsetzung 7) — Englisch kalibriert, zwei echte Bugs beim ersten produktiven Einsatz gefunden
+
+Erster tatsächlicher Produktiv-Einsatz des in "Fortsetzung 5/6" gebauten
+Mehrsprachigkeits-Features: Nutzerwunsch "Kalibriere Englisch für die
+BBC-Kategorie". Dabei zwei echte, vorher nicht entdeckte Fehler
+aufgedeckt UND live behoben — genau der Fall, für den dieses Protokoll
+da ist.
+
+### Bug 1 (kritisch, Absturz): `classify()`-Aufrufstellen in `do_switch()` nicht mitgezogen
+
+Beim manuellen Umschalten auf "BBC World Service" (dessen DASH-Stream
+sich als technisch nicht nutzbar herausstellte, siehe unten) griff der
+Watchdog nach 3 gescheiterten Reconnects und rief `do_switch()` auf —
+dessen zwei `classify()`-Aufrufstellen (Kandidaten-Vorwärmung aus dem
+Puffer, Frischer-Start-Probe) waren beim Signaturwechsel in "Fortsetzung
+5" (`classify(pcm)` → `classify(pcm, stt_lang)`) schlicht übersehen
+worden — nur die Aufrufstelle im normalen Hauptloop-Takt wurde
+angepasst. Ergebnis: `TypeError: classify() missing 1 required
+positional argument: 'stt_lang'`, unbehandelt bis zum Modul-Level,
+**Hauptprozess stürzte ab** (Docker-Neustart fing es auf, aber mit
+vollem State-Verlust: zurück zum ersten Sender der Rotation).
+
+Behoben: beide Stellen lösen jetzt `stt_lang` über
+`settings_store.resolve_stt_language(candidate["category"],
+state.stt_filter_cfg)` für den jeweils GEPRÜFTEN Kandidaten auf (nicht
+für `current` — an der Stelle in der Puffer-Vorwärmung ist `current`
+noch der ALTE Sender, an der Stelle nach dem frischen Start ist
+`current` bereits auf den Kandidaten aktualisiert, siehe Code-Kommentare
+dort). Lehre: Bei einer Signaturänderung an einer Closure-Funktion
+IMMER `grep -n "funktionsname("` über die GANZE Datei laufen lassen,
+nicht nur den offensichtlichen Haupt-Aufrufpfad testen — die
+isolierten Tests in "Fortsetzung 5" prüften `classify()` nur direkt,
+nie über den watchdog-getriggerten `do_switch()`-Pfad.
+
+### Bug 2 (Datenqualität, kein Crash): leere STT-Samples verfälschten die Kalibrierungs-Formel
+
+Erste echte Kalibrierungs-Session (Sprache: LBC UK, Musik: Heart London)
+lieferte einen offensichtlich unbrauchbaren Vorschlag (0.27,
+`clean_separation: false`) trotz eigentlich brauchbarer Rohdaten. Ursache:
+`add_calibration_sample()` zählte JEDES Sample, auch solche mit
+`confidence=0.0`/leerem Text (Pausen, Jingles, Werbeblöcke — STT bildet
+dabei gar keine Wort-Hypothese, das ist etwas anderes als "mit niedriger
+Konfidenz erkannt"). Dadurch wurde `speech_min` künstlich auf 0 gezogen,
+jede Pause zählte als "schlechtester Sprache-Sample".
+
+Behoben: `add_calibration_sample()` verwirft jetzt Samples mit leerem
+`text` (Details/Begründung siehe CLAUDE.md-Ergänzung im STT-Abschnitt).
+Nach dem Fix: 15/17 Samples pro Stufe, Sprache-Konfidenz durchgehend
+0.76–1.0 (statt vorher voller Nullen), deutlich sauberere Daten.
+
+### Kalibrierungs-Ablauf und Ergebnis
+
+- **Infrastruktur**: `vosk-model-small-en-us-0.15` (~40MB,
+  alphacephei.com) heruntergeladen nach `data/vosk-model-en/`, neuer
+  Mount in `docker-compose.yml` (`VOSK_MODEL_FOLDER_EN`, Default
+  `./data/vosk-model-en` → `/app/vosk-model-en:ro`) nach demselben Muster
+  wie der bestehende `VOSK_MODEL_FOLDER`-Mount, ergänzt in `env.example`.
+  `.gitignore`s `data/vosk-model-de/`-Eintrag zu `data/vosk-model-*/`
+  verallgemeinert — sonst wäre das 40MB-Modell beim nächsten Commit
+  versehentlich mit eingecheckt worden.
+- **BBC-Sender funktionieren technisch NICHT**: alle 15 importierten
+  BBC-Sender liefern DASH-Manifeste (`.mpd`). Direkter ffmpeg-Test (auf
+  dem Host, außerhalb des Containers) bestätigte das dokumentierte
+  DASH-Verhalten (siehe CLAUDE.md, Sender-Import-Abschnitt) live: ein
+  3-Sekunden-Test dekodiert sauber, ein 30-40-Sekunden-Test hängt nach
+  dem initialen Fragment-Burst komplett (kein weiterer Output, vom
+  `timeout`-Wrapper nach Ablauf hart beendet). Beide testweise
+  aktivierten BBC-Sender (World Service, Radio 2) wurden nach dem Fund
+  zurück auf `enabled: false`/Kategorie "Unsortiert" gesetzt — bleiben
+  als Kandidaten in der Liste, aber nicht produktiv nutzbar ohne
+  Weiteres (z.B. ein DASH-fähigeres Downstream-Tool, nicht evaluiert).
+- **Ersatz-Sender**: "LBC UK" (`media-ice.musicradio.com/LBCUKMP3`,
+  Sprache-Talk-Radio) und "Heart London"
+  (`media-ice.musicradio.com/HeartLondonMP3`, Popmusik) — beide vor dem
+  Anlegen per direktem ffmpeg-Test auf dem Host verifiziert (30s
+  Dauertest, kontinuierlicher Real-Time-Durchsatz, kein Burst-dann-Stille-
+  Muster). Kategorie "International" zugeordnet, aktiviert.
+- **Sprache-Stufe** (LBC UK, nach Bug-2-Fix): 17 Samples, Konfidenz
+  0.7556–1.0.
+- **Musik-Stufe** (Heart London): 16 Samples, Konfidenz 0.5849–0.9942 —
+  Trennung NICHT sauber (`clean_separation: false`), weil Heart London
+  als kommerzieller Sender erheblichen gesprochenen Anteil hat (Werbung,
+  Moderation zwischen Songs — im Sample sichtbar an Texten wie "only
+  took ninety seven messages to find today"). Kein Erkennungsfehler,
+  sondern eine Grenze der Sender-Wahl (dokumentiert jetzt in README).
+- **Vorschlag**: 0.85 (Mittelwert-Kompromiss wegen Überlappung). Nutzer
+  hat sich nach Rückfrage bewusst für "trotz Warnung übernehmen"
+  entschieden statt eines dritten Versuchs mit einem reineren
+  Musiksender — übernommen via `set_stt_language('en',
+  confidence_threshold=0.85)`.
+- **Kategorie-Zuordnung**: `category_languages["International"] = "en"`.
+
+### Verifiziert
+
+Nach dem Bug-1-Fix: `docker compose up -d --build radiozapper`, sauberer
+Start, kein Absturz mehr beim Umschalten auf einen toten Sender (LBC UK/
+Heart London-Wechsel mehrfach ohne Traceback). Nach dem Bug-2-Fix:
+zweite Kalibrierungs-Session lieferte durchgehend Samples mit echtem
+Text statt Nullen (siehe oben). Nach dem Anwenden des Vorschlags:
+`GET /api/config/settings` zeigt `languages: {"de": {...0.75}, "en":
+{...0.85}}`, `category_languages: {"International": "en"}`. Kein
+automatischer Wechsel während beider Kalibrierungs-Sessions (Switch-
+Pause griff, wie in "Fortsetzung 6" verifiziert). Player kehrte nach
+Kalibrierungsende zur normalen Rotation zurück (`filter_enabled: true`,
+automatischer Wechsel weg von Heart London beobachtet). Keine
+Fehler/Tracebacks im Log seit dem Bug-1-Fix.
+
+### Bewusst NICHT gemacht
+
+Kein dritter Kalibrierungsversuch mit einem werbefreien Musiksender für
+eine saubere Trennung — Nutzerentscheidung, 0.85 trotz Warnung zu
+übernehmen. BBC-Sender NICHT technisch nutzbar gemacht (kein
+DASH-fähiger Ingestion-Pfad evaluiert/gebaut) — bleiben deaktiviert in
+"Unsortiert". Kein automatisierter Test, der `do_switch()`s
+`classify()`-Aufrufstellen abgedeckt hätte (kein Test-Framework im
+Projekt, siehe CLAUDE.md) — die Lehre daraus (systematisches Grep aller
+Aufrufstellen bei Signaturänderungen) ist oben festgehalten, aber nicht
+in Werkzeug/Prozess gegossen.

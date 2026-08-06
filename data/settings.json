@@ -14,10 +14,21 @@
   "stt_filter": {
     "enabled": true,
     "engine": "vosk",
-    "vosk_model_path": "/app/vosk-model-de",
     "whisper_model_size": "tiny",
     "sample_interval_seconds": 8.0,
-    "confidence_threshold": 0.75,
-    "combine_mode": "and"
+    "combine_mode": "and",
+    "languages": {
+      "de": {
+        "vosk_model_path": "/app/vosk-model-de",
+        "confidence_threshold": 0.75
+      },
+      "en": {
+        "vosk_model_path": "/app/vosk-model-en",
+        "confidence_threshold": 0.85
+      }
+    },
+    "category_languages": {
+      "International": "en"
+    }
   }
 }
