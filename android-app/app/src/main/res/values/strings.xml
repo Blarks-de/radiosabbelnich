@@ -53,4 +53,7 @@
     <string name="delete_station_confirm_title">Sender löschen?</string>
     <string name="delete_station_confirm_message">„%1$s“ wirklich löschen?</string>
     <string name="station_action_error">%1$s</string>
+
+    <string name="lock_reason_speech">⏸ Pause wegen Sprache</string>
+    <string name="lock_reason_dead">⚠ Antwortet nicht</string>
 </resources>

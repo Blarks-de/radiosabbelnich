@@ -13,11 +13,15 @@ import androidx.core.app.ServiceCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import com.radiozapper.mvp.R
 import com.radiozapper.mvp.analysis.StreamAnalyzer
 import com.radiozapper.mvp.model.Station
 import com.radiozapper.mvp.model.StationRepository
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -36,6 +40,19 @@ private const val AUTO_SWITCH_PAUSE_SECONDS = 20L
 // naechsten Ringdurchlauf sofort wieder dran, obwohl die Moderation/der
 // Gesang (siehe README, "Bekannte Grenzen") vermutlich noch nicht vorbei ist.
 private const val STATION_COOLDOWN_SECONDS = 60L
+
+// Watchdog gegen tote/nicht antwortende Sender (analog zum Docker-Projekt,
+// dessen dead_until/alive_stations() - siehe dessen CLAUDE.md). Eigene Map,
+// eigene Konstante, bewusst getrennt von stationCooldownUntil (der ist fuer
+// "gerade als Sprache erkannt", hier geht's um "technisch kaputt") - beide
+// Gruende sollen unterscheidbar bleiben, siehe StationLockReason.
+private const val STATION_DEAD_LOCK_SECONDS = 300L
+
+// Wie lange Player.STATE_BUFFERING ununterbrochen anhalten darf, bevor der
+// Sender als tot gilt - deckt sowohl "verbindet nie" (Anfangsphase) als
+// auch "haengt mitten im Stream fest" ab, kein Sonderfall fuer die
+// Anfangsverbindung noetig, weil beides einfach "seit wann buffert es schon".
+private const val BUFFERING_TIMEOUT_SECONDS = 15L
 
 /**
  * Foreground Service: haelt den ExoPlayer fuer die eigentliche Wiedergabe UND
@@ -59,12 +76,25 @@ private const val STATION_COOLDOWN_SECONDS = 60L
  * editierbar, siehe model/StationRepository.kt) statt einer hartcodierten
  * Liste - kein Request/Pop-Mechanismus wie im Docker-Projekt noetig, weil
  * hier alles im selben Prozess laeuft und der aktuelle StateFlow-Wert nie
- * veraltet sein kann. Kein Watchdog/Ban-System (kommt erst spaeter) - nur
- * die einfache Ringlogik, ein Cooldown pro Sender (`STATION_COOLDOWN_SECONDS`,
- * siehe `nextStationOffCooldown()` - ein wegen Sprache verlassener Sender
+ * veraltet sein kann. Ein Cooldown pro Sender (`STATION_COOLDOWN_SECONDS`,
+ * siehe `nextAvailableStation()` - ein wegen Sprache verlassener Sender
  * kommt fuer diese Zeit beim Ringdurchlauf nicht sofort wieder an die Reihe)
  * und eine Obergrenze gegen die Endlosschleife, falls zufaellig ALLE Sender
- * gerade Sprache spielen oder im Cooldown sind.
+ * gerade Sprache spielen oder gesperrt sind.
+ *
+ * Watchdog gegen tote/nicht antwortende Sender (analog zum Docker-Projekt,
+ * dessen `dead_until`/`alive_stations()`): ein `Player.Listener` an ExoPlayer
+ * erkennt zwei Faelle - `onPlayerError()` (haretes Signal) und ein Sender,
+ * der laenger als `BUFFERING_TIMEOUT_SECONDS` ununterbrochen buffert (deckt
+ * "verbindet, liefert aber nie Daten" ab, das nie einen Error ausloest -
+ * siehe `handlePlaybackFailure()`). Eigene Sperr-Map (`deadUntil`), bewusst
+ * getrennt von `stationCooldownUntil` (siehe `StationLockReason`), aber
+ * dieselbe Auswahl-Logik (`nextAvailableStation()`/`findNextOrEscalate()`)
+ * behandelt beide Sperrgruende einheitlich - inkl. der "alle Sender
+ * gesperrt"-Eskalation (beide Maps leeren statt haengenzubleiben, wie
+ * `dead_until.clear()` im Docker-Projekt). Manuelle Sender-Wahl
+ * (`manualPlay()`) hebt beide Sperren fuer den gewaehlten Sender auf -
+ * expliziter Nutzerwunsch schlaegt Automatik.
  */
 class PlaybackService : LifecycleService() {
 
@@ -84,13 +114,55 @@ class PlaybackService : LifecycleService() {
     private var autoSwitchAttempts = 0
     private var autoSwitchPausedUntil = 0L
     private val stationCooldownUntil = mutableMapOf<String, Long>()
+    private val deadUntil = mutableMapOf<String, Long>()
+    private var bufferingTimeoutJob: Job? = null
+
+    private val _lockedStations = MutableStateFlow<Map<String, StationLockReason>>(emptyMap())
+    /** Momentaufnahme, neu berechnet bei jeder Aenderung einer der beiden Sperr-Maps - siehe refreshLockedStationsSnapshot(). */
+    val lockedStations: StateFlow<Map<String, StationLockReason>> = _lockedStations
+
+    private val playerListener = object : Player.Listener {
+        override fun onPlayerError(error: PlaybackException) {
+            Log.w(TAG, "ExoPlayer-Fehler bei '${_currentStation.value?.name}'", error)
+            handlePlaybackFailure()
+        }
+
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            if (playbackState == Player.STATE_BUFFERING) {
+                // Timer neu starten statt nur einmal zu pruefen - jeder erneute
+                // Eintritt in BUFFERING (auch ein Wiederanlauf mitten im Stream)
+                // bekommt seine volle Frist, kein Zusammenzaehlen ueber mehrere
+                // kurze Aussetzer hinweg.
+                bufferingTimeoutJob?.cancel()
+                bufferingTimeoutJob = lifecycleScope.launch {
+                    delay(BUFFERING_TIMEOUT_SECONDS * 1000)
+                    Log.w(
+                        TAG,
+                        "Kein Fortschritt seit ${BUFFERING_TIMEOUT_SECONDS}s - " +
+                            "'${_currentStation.value?.name}' antwortet nicht"
+                    )
+                    handlePlaybackFailure()
+                }
+            } else {
+                bufferingTimeoutJob?.cancel()
+                bufferingTimeoutJob = null
+                if (playbackState == Player.STATE_READY) {
+                    // Laeuft wieder - kein Grund, eine eventuelle Tot-Markierung
+                    // laenger zu halten als noetig (analog "jeder erfolgreiche
+                    // Read setzt den Zaehler zurueck" im Docker-Projekt).
+                    _currentStation.value?.let { deadUntil.remove(it.id) }
+                    refreshLockedStationsSnapshot()
+                }
+            }
+        }
+    }
 
     val status get() = analyzer.status
 
     override fun onCreate() {
         super.onCreate()
         analyzer = StreamAnalyzer(lifecycleScope)
-        player = ExoPlayer.Builder(this).build()
+        player = ExoPlayer.Builder(this).build().apply { addListener(playerListener) }
         createNotificationChannel()
 
         lifecycleScope.launch {
@@ -107,6 +179,20 @@ class PlaybackService : LifecycleService() {
     override fun onBind(intent: Intent): IBinder {
         super.onBind(intent)
         return binder
+    }
+
+    /**
+     * Fuer manuelle Sender-Wahl (Activity-Klick): explizite Nutzerwahl schlaegt
+     * jede Automatik, deshalb werden BEIDE Sperr-Gruende fuer diesen Sender
+     * aufgehoben, bevor ueberhaupt versucht wird - der Sender kann laengst
+     * wieder da sein. Automatische Aufrufe (attemptAutoSwitch/
+     * handlePlaybackFailure) rufen weiterhin direkt play() auf.
+     */
+    fun manualPlay(station: Station, modelPath: String?) {
+        stationCooldownUntil.remove(station.id)
+        deadUntil.remove(station.id)
+        refreshLockedStationsSnapshot()
+        play(station, modelPath)
     }
 
     fun play(station: Station, modelPath: String?) {
@@ -135,6 +221,10 @@ class PlaybackService : LifecycleService() {
         autoSwitchAttempts = 0
         autoSwitchPausedUntil = 0L
         stationCooldownUntil.clear()
+        deadUntil.clear()
+        refreshLockedStationsSnapshot()
+        bufferingTimeoutJob?.cancel()
+        bufferingTimeoutJob = null
         player?.stop()
         analyzer.stop()
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
@@ -150,11 +240,21 @@ class PlaybackService : LifecycleService() {
         when (status) {
             PlaybackStatus.MUSIC -> {
                 autoSwitchAttempts = 0 // Treffer - Zaehler fuer die naechste Sprache-Serie zuruecksetzen
-                // Kein Grund, einen Sender laenger im Cooldown zu halten, der
-                // sich inzwischen selbst als Musik bestaetigt hat.
-                _currentStation.value?.let { stationCooldownUntil.remove(it.id) }
+                // Kein Grund, einen Sender laenger gesperrt zu halten, der sich
+                // inzwischen selbst als Musik bestaetigt hat - egal aus welchem
+                // der beiden Gruende.
+                _currentStation.value?.let {
+                    stationCooldownUntil.remove(it.id)
+                    deadUntil.remove(it.id)
+                }
+                refreshLockedStationsSnapshot()
             }
             PlaybackStatus.SPEECH -> attemptAutoSwitch()
+            // StreamAnalyzers eigene, unabhaengige Dekodierung (siehe dessen
+            // Klassen-Doc) ist eine zweite, praktisch kostenlose Bestaetigung
+            // "diese URL ist kaputt" - haengt an denselben Sperr-Mechanismus
+            // wie ein ExoPlayer-Fehler.
+            PlaybackStatus.ERROR -> handlePlaybackFailure()
             else -> Unit
         }
     }
@@ -172,6 +272,7 @@ class PlaybackService : LifecycleService() {
         if (currentIndex < 0) return
 
         stationCooldownUntil[station.id] = now + STATION_COOLDOWN_SECONDS * 1000
+        refreshLockedStationsSnapshot()
 
         autoSwitchAttempts++
         if (autoSwitchAttempts > stations.size) {
@@ -185,11 +286,13 @@ class PlaybackService : LifecycleService() {
             return
         }
 
-        val next = nextStationOffCooldown(stations, currentIndex, now)
+        val next = findNextOrEscalate(stations, currentIndex, now)
         if (next == null) {
-            // Alle anderen Sender noch im Cooldown - dieselbe Sackgasse wie
-            // "alle Sender Sprache", also dieselbe Behandlung: kurze Pause.
-            Log.i(TAG, "Alle anderen Sender noch im Cooldown - Pause fuer ${AUTO_SWITCH_PAUSE_SECONDS}s")
+            // Alle anderen Sender noch gesperrt (Cooldown oder tot) - dieselbe
+            // Sackgasse wie "alle Sender Sprache", also dieselbe Behandlung:
+            // kurze Pause. findNextOrEscalate() hat die "alle gesperrt"-
+            // Eskalation (beide Maps leeren) bereits selbst einmal versucht.
+            Log.i(TAG, "Alle anderen Sender noch gesperrt - Pause fuer ${AUTO_SWITCH_PAUSE_SECONDS}s")
             autoSwitchAttempts = 0
             autoSwitchPausedUntil = now + AUTO_SWITCH_PAUSE_SECONDS * 1000
             return
@@ -197,6 +300,39 @@ class PlaybackService : LifecycleService() {
 
         Log.i(TAG, "Sprache erkannt auf '${station.name}' - schalte weiter zu '${next.name}'")
         play(next, activeModelPath)
+    }
+
+    /**
+     * Reagiert auf einen ExoPlayer-Fehler, einen Buffering-Timeout ODER einen
+     * StreamAnalyzer-Fehler (siehe handleStatusForAutoSwitch) - der Sender
+     * antwortet technisch nicht, unabhaengig vom Sprache/Musik-Inhalt. Sperrt
+     * ihn fuer STATION_DEAD_LOCK_SECONDS und schaltet weiter, analog zu
+     * attemptAutoSwitch(), aber mit dem eigenen Sperrgrund.
+     */
+    private fun handlePlaybackFailure() {
+        val station = _currentStation.value ?: return
+        val now = SystemClock.elapsedRealtime()
+
+        deadUntil[station.id] = now + STATION_DEAD_LOCK_SECONDS * 1000
+        refreshLockedStationsSnapshot()
+        Log.w(TAG, "Sender '${station.name}' antwortet nicht - fuer ${STATION_DEAD_LOCK_SECONDS / 60} Min. aus der Rotation")
+
+        val stations = StationRepository.activeStations()
+        val currentIndex = stations.indexOfFirst { it.id == station.id }
+        if (currentIndex < 0) {
+            // Sender ist zwischenzeitlich deaktiviert/geloescht worden -
+            // handleStationListChanged() kuemmert sich bereits darum.
+            return
+        }
+
+        val next = findNextOrEscalate(stations, currentIndex, now)
+        if (next != null) {
+            Log.i(TAG, "Schalte weiter zu '${next.name}'")
+            play(next, activeModelPath)
+        } else {
+            Log.i(TAG, "Keine verfuegbaren Sender mehr - stoppe Wiedergabe")
+            stopPlayback()
+        }
     }
 
     /**
@@ -222,14 +358,53 @@ class PlaybackService : LifecycleService() {
         }
     }
 
-    /** Naechster Sender im Ring ab currentIndex (exklusiv), der aktuell nicht im Cooldown ist. */
-    private fun nextStationOffCooldown(stations: List<Station>, currentIndex: Int, now: Long): Station? {
+    private fun isLocked(stationId: String, now: Long): Boolean {
+        val cooldownUntil = stationCooldownUntil[stationId] ?: 0L
+        val deadLockUntil = deadUntil[stationId] ?: 0L
+        return now < cooldownUntil || now < deadLockUntil
+    }
+
+    /** Naechster Sender im Ring ab currentIndex (exklusiv), der aktuell durch KEINEN der beiden Gruende gesperrt ist. */
+    private fun nextAvailableStation(stations: List<Station>, currentIndex: Int, now: Long): Station? {
         for (offset in 1..stations.size) {
             val candidate = stations[(currentIndex + offset) % stations.size]
-            val cooldownUntil = stationCooldownUntil[candidate.id] ?: 0L
-            if (now >= cooldownUntil) return candidate
+            if (!isLocked(candidate.id, now)) return candidate
         }
         return null
+    }
+
+    /**
+     * Wie nextAvailableStation(), aber mit der "alle gesperrt"-Eskalation:
+     * findet sich kein verfuegbarer Sender, WEIL wirklich jeder aktive Sender
+     * gerade durch Cooldown ODER Tot-Sperre ausgeschlossen ist, werden BEIDE
+     * Sperrlisten geleert und einmal neu versucht - wie dead_until.clear()
+     * im Docker-Projekt, statt in einer Runde aus lauter uebersprungenen
+     * Kandidaten haengenzubleiben.
+     */
+    private fun findNextOrEscalate(stations: List<Station>, currentIndex: Int, now: Long): Station? {
+        nextAvailableStation(stations, currentIndex, now)?.let { return it }
+
+        val allLocked = stations.isNotEmpty() && stations.all { isLocked(it.id, now) }
+        if (!allLocked) return null
+
+        Log.w(TAG, "Alle ${stations.size} aktiven Sender gesperrt - hebe beide Sperrlisten auf und probiere erneut")
+        stationCooldownUntil.clear()
+        deadUntil.clear()
+        refreshLockedStationsSnapshot()
+        return nextAvailableStation(stations, currentIndex, now)
+    }
+
+    private fun refreshLockedStationsSnapshot() {
+        val now = SystemClock.elapsedRealtime()
+        val snapshot = mutableMapOf<String, StationLockReason>()
+        // DEAD zuerst eingetragen, damit es im (seltenen) Fall einer
+        // Doppel-Sperre denselben Sender-Eintrag gewinnt - dringlicher als
+        // ein Sprache-Cooldown.
+        deadUntil.forEach { (id, until) -> if (now < until) snapshot[id] = StationLockReason.DEAD }
+        stationCooldownUntil.forEach { (id, until) ->
+            if (now < until) snapshot.putIfAbsent(id, StationLockReason.SPEECH_COOLDOWN)
+        }
+        _lockedStations.value = snapshot
     }
 
     private fun startForegroundNotification(stationName: String) {
@@ -261,6 +436,7 @@ class PlaybackService : LifecycleService() {
     }
 
     override fun onDestroy() {
+        bufferingTimeoutJob?.cancel()
         analyzer.stop()
         player?.release()
         player = null

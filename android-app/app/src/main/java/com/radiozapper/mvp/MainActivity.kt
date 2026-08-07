@@ -22,6 +22,7 @@ import com.radiozapper.mvp.model.Station
 import com.radiozapper.mvp.model.StationRepository
 import com.radiozapper.mvp.playback.PlaybackService
 import com.radiozapper.mvp.playback.PlaybackStatus
+import com.radiozapper.mvp.playback.StationLockReason
 import com.radiozapper.mvp.station.StationManagementActivity
 import com.radiozapper.mvp.update.UpdateManager
 import com.radiozapper.mvp.update.UpdateState
@@ -41,6 +42,8 @@ class MainActivity : AppCompatActivity() {
     private var pendingStation: Station? = null
     private var statusJob: Job? = null
     private var currentStationJob: Job? = null
+    private var lockedStationsJob: Job? = null
+    private var lockedStations: Map<String, StationLockReason> = emptyMap()
 
     private val requestNotificationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* Ablehnung: Notification bleibt einfach aus */ }
@@ -71,6 +74,17 @@ class MainActivity : AppCompatActivity() {
                     binding.currentStationText.text = station?.name ?: getString(R.string.current_station_none)
                 }
             }
+
+            // Reiner Anstoss fuer einen Re-Render der bestehenden Play-Liste
+            // (siehe renderStationRows()) - kein eigener Aufbau hier, sonst
+            // gaebe es zwei Stellen, die dieselben Zeilen erzeugen.
+            lockedStationsJob?.cancel()
+            lockedStationsJob = lifecycleScope.launch {
+                service.lockedStations.collect { locked ->
+                    lockedStations = locked
+                    renderStationRows(StationRepository.stations.value)
+                }
+            }
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
@@ -78,6 +92,8 @@ class MainActivity : AppCompatActivity() {
             serviceBound = false
             statusJob?.cancel()
             currentStationJob?.cancel()
+            lockedStationsJob?.cancel()
+            lockedStations = emptyMap()
         }
     }
 
@@ -142,6 +158,7 @@ class MainActivity : AppCompatActivity() {
         }
         statusJob?.cancel()
         currentStationJob?.cancel()
+        lockedStationsJob?.cancel()
     }
 
     /**
@@ -167,6 +184,17 @@ class MainActivity : AppCompatActivity() {
         stations.filter { it.enabled }.sortedBy { it.name.lowercase() }.forEach { station ->
             val row = ItemStationBinding.inflate(layoutInflater, binding.stationsContainer, false)
             row.stationNameText.text = station.name
+            when (lockedStations[station.id]) {
+                StationLockReason.SPEECH_COOLDOWN -> {
+                    row.lockReasonText.text = getString(R.string.lock_reason_speech)
+                    row.lockReasonText.visibility = android.view.View.VISIBLE
+                }
+                StationLockReason.DEAD -> {
+                    row.lockReasonText.text = getString(R.string.lock_reason_dead)
+                    row.lockReasonText.visibility = android.view.View.VISIBLE
+                }
+                null -> row.lockReasonText.visibility = android.view.View.GONE
+            }
             row.playButton.setOnClickListener { onPlayClicked(station) }
             binding.stationsContainer.addView(row.root)
         }
@@ -184,7 +212,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startPlayback(service: PlaybackService, station: Station) {
-        service.play(station, modelManager.modelPathOrNull())
+        // manualPlay() statt play(): explizite Nutzerwahl hebt eine eventuelle
+        // Sperre (Sprache-Cooldown ODER Watchdog) fuer diesen Sender auf, siehe
+        // PlaybackService-Klassen-Doc.
+        service.manualPlay(station, modelManager.modelPathOrNull())
     }
 
     private fun renderStatus(status: PlaybackStatus) {

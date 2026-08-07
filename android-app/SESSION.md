@@ -125,3 +125,93 @@ Bulk-Import, keine Sender-Suche, keine Drag-Sortierung, keine
 Reachability-Pruefung beim Anlegen - siehe README, "Bekannte Grenzen".
 Root-`CLAUDE.md`/`SESSION.md`/`VERSION` nicht angefasst - betrifft
 ausschliesslich `android-app/`, keine Aenderung am Docker-Dienst.
+
+## 2026-08-07 (Fortsetzung) — Watchdog gegen tote/nicht antwortende Sender (Plan-Mode, Phase 2 aus dem Fahrplan)
+
+Auslöser: `RadioZapper_Android_Fahrplan.md`, Phase 2 - seit der
+Senderverwaltung (siehe Eintrag oben) kann die Liste beliebige, auch
+kaputte URLs enthalten. Ohne Watchdog kann ein toter Stream die Rotation
+lahmlegen, genau wie im Docker-Projekt vor dessen `dead_until`/
+`alive_stations()` (siehe dessen `SESSION.md`, "Review-Befunde: Watchdog
+gegen tote Sender", 8,5h Stillstand durch BBC Radio Scotland). Wieder per
+Plan-Mode: zwei Explore-Agents (aktueller Android-Stand + Docker-Vorbild),
+Plan geschrieben, vom Nutzer freigegeben, danach umgesetzt.
+
+### Umsetzung
+
+- **Erkennung**: `Player.Listener` an ExoPlayer (vorher komplett
+  unbeobachtet) - `onPlayerError()` sperrt sofort (ExoPlayer versucht bei
+  transienten Fehlern bereits intern zu reconnecten, bevor der Callback
+  ueberhaupt feuert, ein weiterer eigener Retry waere doppelte Arbeit).
+  Zusaetzlich ein Timeout auf ununterbrochenes `Player.STATE_BUFFERING`
+  (`BUFFERING_TIMEOUT_SECONDS=15`) - deckt "verbindet, liefert aber nie
+  Daten" ab, das nie einen Error ausloest (der eigentliche BBC-Radio-
+  Scotland-Fall). Timer startet bei Eintritt in `STATE_BUFFERING`, wird
+  bei jedem anderen Zustand abgebrochen - deckt automatisch auch die
+  anfaengliche "Verbinde…"-Phase mit ab, kein Sonderfall noetig. Bonus:
+  `StreamAnalyzer`s bisher ignoriertes `PlaybackStatus.ERROR` (eigene,
+  unabhaengige Dekodierung, siehe deren Klassen-Doc) haengt jetzt ebenfalls
+  am selben Mechanismus - zweite, praktisch kostenlose Bestaetigung.
+- **Sperr-Mechanismus**: neue Map `deadUntil` (`STATION_DEAD_LOCK_SECONDS
+  =300`, 5 Min. wie im Docker-Projekt), bewusst getrennt von der
+  bestehenden `stationCooldownUntil` (Sprache-Cooldown) - neues Enum
+  `StationLockReason { SPEECH_COOLDOWN, DEAD }` haelt beide Gruende
+  unterscheidbar. `nextStationOffCooldown()` verallgemeinert zu
+  `nextAvailableStation()` (prueft BEIDE Maps) + `findNextOrEscalate()`
+  (neu: findet sich kein Kandidat, weil ALLE aktiven Sender durch
+  irgendeinen der beiden Gruende gesperrt sind, werden beide Maps geleert
+  und einmal neu versucht - wie `dead_until.clear()` im Docker-Projekt,
+  statt haengenzubleiben). Neue `manualPlay()` (statt `play()` direkt) fuer
+  jede Nutzer-Auswahl: hebt beide Sperren fuer den gewaehlten Sender auf -
+  expliziter Nutzerwunsch schlaegt Automatik. `MainActivity.startPlayback()`
+  nutzt jetzt `manualPlay()`.
+- **UI**: neuer `PlaybackService`-StateFlow `lockedStations: Map<String,
+  StationLockReason>`, in `MainActivity`s Play-Liste als kleiner
+  Zusatztext ("⏸ Pause wegen Sprache" / "⚠ Antwortet nicht") unter dem
+  Sendernamen. Bewusst kein Live-Countdown (keine zusaetzliche UI-Tick-
+  Schleife nur fuer Kosmetik) - Text verschwindet einfach beim naechsten
+  ohnehin eintretenden Re-Render. `PlaybackStatus`-Enum bewusst
+  unangetastet - beschreibt weiterhin nur den Vosk-Inhalts-Befund, nicht
+  die Sender-Verfuegbarkeit.
+
+### Verifiziert (Emulator, ueber die Verwaltungs-Activity aus Phase 1 einen echten toten Sender angelegt)
+
+- Sender mit nicht routbarer IP (`http://10.255.255.1:9999/...`) angelegt,
+  abgespielt → nach exakt 15s Logcat: "Kein Fortschritt seit 15s -
+  'TOT-Test' antwortet nicht" → "fuer 5 Min. aus der Rotation" →
+  automatischer Wechsel zu SWR3. Play-Liste zeigt "⚠ Antwortet nicht"
+  unter TOT-Test.
+- TOT-Test manuell erneut angetippt → Badge verschwindet sofort, "Verbinde…"
+  startet neu (Sperre korrekt aufgehoben) → nach weiteren 15s erneut
+  korrekt gesperrt (Wiederholbarkeit bestaetigt).
+- **Eskalationstest**: zusaetzlich SWR3 per Bearbeiten-Dialog auf eine
+  zweite tote URL umgestellt (beide aktiven Sender jetzt tot) →
+  abgespielt → Logcat: "Sender 'SWR3...' antwortet nicht..." → "Alle 2
+  aktiven Sender gesperrt - hebe beide Sperrlisten auf und probiere
+  erneut" → "Schalte weiter zu 'TOT-Test'". Weiterbeobachtet: stabiler
+  ~15s-Zyklus zwischen beiden (weiterhin toten) Sendern, kein Haengen-
+  bleiben, keine Exception - erwartetes Verhalten bei einem Zustand, in
+  dem tatsaechlich ALLES tot ist (gleiche Grenze wie im Docker-Projekt:
+  "alle Sperren aufheben" bedeutet nicht "alles ist jetzt reparierbar").
+- **Regressionscheck**: SWR3-URL zurueck auf die echte Adresse gesetzt,
+  abgespielt → 25s lang stabil "🎵 Musik", kein Watchdog-Fehlalarm auf
+  einem gesunden Sender, kein Log-Eintrag.
+- Crash-Log-Buffer nach jedem Schritt leer geprueft - keine Ausnahme in
+  der gesamten, recht langen Testreihe (inkl. mehrfacher Dialog-
+  Bedienfehler meinerseits beim Testen selbst, z.B. vergessenes Tippen
+  auf "Speichern" - jeweils ohne App-Absturz, nur ohne Wirkung).
+
+### Bewusst NICHT gemacht
+
+Kein Reconnect-Zaehler vor dem Sperren bei `onPlayerError` (anders als das
+Docker-Projekt mit seinem `STREAM_FAILURE_LIMIT`) - ExoPlayer haelt
+bereits eigene interne Retries fuer transiente Fehler, ein zusaetzlicher
+manueller Zaehler waere vermutlich redundant; falls sich das in der Praxis
+als zu aggressiv herausstellt, waere das ein guter naechster Schritt.
+Kein Sperr-Anzeige in der Verwaltungs-Activity (nur in der Play-Liste auf
+dem Hauptschirm) - dort ist ein gesperrter Sender tatsaechlich relevant
+(man will ihn abspielen), in der Verwaltung eher nicht. Kein Schutz gegen
+die theoretische Race (spaet eintreffender `onPlayerError`-Callback der
+ALTEN Quelle nach bereits erfolgtem `play()`-Wechsel auf eine neue) -
+schmales Zeitfenster, dokumentiert als bekannte Grenze statt Generation-
+Counter o.ae. einzubauen.

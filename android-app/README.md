@@ -66,6 +66,22 @@ Ban-System, kein News-Break, keine Settings-UI.
   oder geloescht, schaltet der Service automatisch auf den ersten
   aktivierten Sender weiter (oder stoppt sauber, falls keiner mehr aktiv
   ist) - live getestet, siehe unten.
+- **Watchdog gegen tote/nicht antwortende Sender** (`PlaybackService.kt`,
+  Vorbild `dead_until`/`alive_stations()` im Docker-Projekt) - ein
+  `Player.Listener` an ExoPlayer erkennt zwei Faelle: `onPlayerError()`
+  (hartes Signal, sofortige Sperre) und ununterbrochenes
+  `Player.STATE_BUFFERING` laenger als `BUFFERING_TIMEOUT_SECONDS=15`
+  (deckt "verbindet, liefert aber nie Daten" ab, das nie einen Error
+  ausloest). Eigene Sperr-Map (`deadUntil`, `STATION_DEAD_LOCK_SECONDS=
+  300` = 5 Min., wie im Docker-Projekt), bewusst getrennt vom
+  Sprache-Cooldown oben (`StationLockReason.SPEECH_COOLDOWN` vs. `.DEAD`) -
+  beide Sperrgruende sind in der Play-Liste unterscheidbar ("⏸ Pause wegen
+  Sprache" / "⚠ Antwortet nicht"). Sind ALLE aktiven Sender durch
+  irgendeinen der beiden Gruende gesperrt, werden beide Sperrlisten
+  geleert und einmal neu versucht, statt haengenzubleiben (wie
+  `dead_until.clear()` im Docker-Projekt). Manuelle Sender-Wahl
+  (`manualPlay()`) hebt beide Sperren fuer den gewaehlten Sender auf -
+  expliziter Nutzerwunsch schlaegt Automatik.
 - Foreground Service mit Notification, damit Wiedergabe+Analyse
   weiterlaufen, wenn die App im Hintergrund ist; UI zeigt den aktuellen
   Sender live mit, auch wenn der automatische Wechsel ihn geaendert hat
@@ -121,11 +137,25 @@ beendet und neu gestartet → aller Stand (inkl. des angelegten Testsenders)
 persistiert korrekt. Keine Abstuerze in der gesamten Sequenz (Crash-Log-
 Buffer nach jedem Schritt leer geprueft).
 
+**Vierter Durchlauf (Watchdog)**: Sender mit nicht routbarer IP ueber die
+Verwaltungs-Activity angelegt, abgespielt → nach exakt
+`BUFFERING_TIMEOUT_SECONDS` (15s) Logcat "Kein Fortschritt seit 15s -
+'TOT-Test' antwortet nicht" → automatischer Wechsel zum naechsten Sender,
+Play-Liste zeigt "⚠ Antwortet nicht" unter dem toten Sender. Manuelles
+erneutes Antippen hebt die Sperre sofort auf (Badge verschwindet,
+"Verbinde…" startet neu), nach weiteren 15s erneut korrekt gesperrt.
+Eskalationstest: BEIDE aktiven Sender auf tote URLs gesetzt → Logcat
+"Alle 2 aktiven Sender gesperrt - hebe beide Sperrlisten auf und probiere
+erneut" statt Haengenbleiben - danach stabiler ~15s-Zyklus zwischen beiden
+(weiterhin toten) Sendern, kein Absturz (erwartetes Verhalten, wenn
+tatsaechlich alles tot ist). Regressionscheck: URL zurueckgesetzt, 25s
+stabil "🎵 Musik", kein Fehlalarm auf einem gesunden Sender.
+
 ## Was NICHT funktioniert / nicht im Scope
 
-- Kein Watchdog/Ban-System fuer tote oder dauerhaft-sprachige Sender
-  (Obergrenze oben ist nur ein einfacher Endlosschleifen-Schutz, keine
-  Sperrliste)
+- Kein Ban-System, das eine Sperre ueber einen App-Neustart hinweg merkt
+  (der Watchdog unten ist reines In-Memory-Timing, siehe "Bekannte
+  Grenzen")
 - Kein News-Break, keine Settings-UI
 - Kein Play-Store-taugliches Icon (einfaches Vektor-Icon)
 - Keine Fehlerbehandlung fuer jeden Edge Case (z.B. Stream ohne
@@ -217,12 +247,15 @@ adb logcat -s PlaybackService:*   # zeigt jeden Sprache/Musik-Wechsel
   kein RecyclerView - Datenmenge klein), Add/Edit-`AlertDialog`.
 - `vosk/VoskModelManager.kt` - Download+Entpacken des Vosk-Modells nach
   `filesDir`, Fortschritt als `StateFlow<ModelState>`
+- `playback/StationLockReason.kt` - Enum `{SPEECH_COOLDOWN, DEAD}` fuer
+  die beiden unterscheidbaren Sperrgruende (siehe `PlaybackService`).
 - `playback/PlaybackService.kt` - Foreground Service, haelt ExoPlayer
   (Wiedergabe) UND `StreamAnalyzer` (Analyse); reagiert auf den
-  geglaetteten Status mit automatischem Umschalten UND auf Aenderungen aus
-  `StationRepository.stations` (siehe oben); exponiert `currentStation`/
-  `status` als StateFlows fuer die UI; Notification via
-  `NotificationCompat`/`ServiceCompat.startForeground`
+  geglaetteten Status mit automatischem Umschalten, auf Aenderungen aus
+  `StationRepository.stations` (siehe oben) UND auf ExoPlayer-Fehler/
+  Buffering-Timeouts (Watchdog, siehe eigener Abschnitt unten); exponiert
+  `currentStation`/`status`/`lockedStations` als StateFlows fuer die UI;
+  Notification via `NotificationCompat`/`ServiceCompat.startForeground`
 - `analysis/StreamAnalyzer.kt` - **eigene** MediaExtractor/MediaCodec-
   Dekodierung desselben Stream-URLs nur fuer die Analyse (unabhaengig
   vom ExoPlayer der Wiedergabe), Downmix+Resample auf 16kHz-Mono
@@ -263,6 +296,38 @@ scheitert) kann die Android-Variante echt atomar schreiben: Temp-Datei
 im selben Verzeichnis + `Files.move(..., ATOMIC_MOVE, REPLACE_EXISTING)`
 - `filesDir` ist normaler lokaler Speicher ohne diese Einschraenkung,
 eine bewusste Verbesserung gegenueber dem Original, keine blinde Kopie.
+
+### Watchdog gegen tote/nicht antwortende Sender
+
+Vorbild: `dead_until`/`alive_stations()` im Docker-Projekt (siehe dessen
+`CLAUDE.md`, "Watchdog gegen tote Sender"), technisch aber an ExoPlayer
+angepasst statt 1:1 uebersetzt. Zwei Erkennungswege, beide in
+`PlaybackService`s `Player.Listener`:
+
+- `onPlayerError()` - hartes Signal, sperrt sofort. Kein eigener
+  Reconnect-Zaehler wie `STREAM_FAILURE_LIMIT` im Docker-Projekt: ExoPlayer
+  versucht bei transienten Fehlern bereits intern zu reconnecten, bevor
+  der Callback ueberhaupt feuert.
+- Ununterbrochenes `Player.STATE_BUFFERING` laenger als
+  `BUFFERING_TIMEOUT_SECONDS=15` - deckt "verbindet, liefert aber nie
+  Daten" ab, das nie einen Error ausloest (der eigentliche BBC-Radio-
+  Scotland-Fall aus dem Docker-Projekt: DASH-Manifest technisch gueltig,
+  aber dauerhaft leer). Timer startet bei Eintritt in `STATE_BUFFERING`,
+  bricht bei jedem anderen Zustand ab - deckt automatisch auch die
+  anfaengliche "Verbinde…"-Phase mit ab.
+- Bonus, praktisch kostenlos: `StreamAnalyzer`s eigenes, unabhaengiges
+  `PlaybackStatus.ERROR` (vorher komplett ignoriert) haengt jetzt ebenfalls
+  am selben Mechanismus.
+
+Eigene Sperr-Map `deadUntil` (`STATION_DEAD_LOCK_SECONDS=300`, 5 Min. wie
+im Docker-Projekt), bewusst getrennt von `stationCooldownUntil` (Sprache-
+Cooldown) - `StationLockReason` haelt beide Gruende unterscheidbar,
+sowohl fuer die Sperr-Logik als auch fuer die UI. Eine gemeinsame Auswahl-
+Funktion (`nextAvailableStation()`/`findNextOrEscalate()`) behandelt
+beide Sperrgruende einheitlich, inkl. der "alle gesperrt"-Eskalation
+(beide Maps leeren statt haengenzubleiben, wie `dead_until.clear()`).
+Manuelle Sender-Wahl (`manualPlay()`, von `MainActivity` statt `play()`
+aufgerufen) hebt beide Sperren fuer den gewaehlten Sender auf.
 
 ## Update-Mechanismus (Tailscale, kein Play Store)
 
@@ -342,16 +407,30 @@ dafuer das Textfeld - einfach die Tailscale-IP `100.92.3.18` eintragen.
   gemessen, siehe dessen `CLAUDE.md`) sind `RATIO_TO_CONFIRM_SPEECH`/
   `RATIO_TO_CONFIRM_MUSIC` plausible Startwerte, keine Messwerte. Bei
   Gesang koennte das haeufiger falsch-positiv auf "Sprache" kippen.
-- **Cooldown ist reines In-Memory-Timing, kein Ban-System** - er verfaellt
-  einfach nach `STATION_COOLDOWN_SECONDS`, es gibt keine Eskalation (z.B.
-  laenger werdende Cooldowns bei wiederholten Treffern) und nichts
-  ueberlebt einen Neustart der App. Das eigentliche Watchdog/Ban-System
-  ist weiterhin nicht umgesetzt.
+- **Beide Sperr-Mechanismen (Sprache-Cooldown UND Watchdog) sind reines
+  In-Memory-Timing** - sie verfallen einfach nach ihrer jeweiligen
+  Konstante, es gibt keine Eskalation (z.B. laenger werdende Sperren bei
+  wiederholten Treffern) und nichts ueberlebt einen Neustart der App
+  (ein Sender, der beim Beenden gerade gesperrt war, ist nach dem
+  naechsten Start wieder unbefangen im Rennen).
 - **Keine Mindest-Verweildauer** vor dem naechsten Auto-Switch-Versuch -
   der Cooldown wirkt nur auf den VERLASSENEN Sender, nicht auf den NEUEN
   (der koennte theoretisch sofort wieder als Sprache gelten).
-- Kein Wiederverbindungsversuch bei Stream-Abbruch (ExoPlayer-Listener
-  fuer Fehler/Retry ist nicht angebunden).
+- **Watchdog hat keinen Reconnect-Zaehler vor dem Sperren** (anders als
+  `STREAM_FAILURE_LIMIT` im Docker-Projekt) - `onPlayerError()` sperrt
+  sofort, in der Annahme, dass ExoPlayers eigene interne Retries fuer
+  transiente Fehler bereits vorher gegriffen haben. Bei bestimmten
+  Netzwerk-Situationen (z.B. sehr kurze, wiederholte Aussetzer, die
+  ExoPlayer selbst gerade NICHT als Retry-wuerdigen Fehler einstuft)
+  koennte das aggressiver sperren als noetig - noch nicht gegen echte
+  Problemsender verifiziert, nur gegen eine garantiert tote IP.
+- **Schmale Race beim Watchdog**: ein spaet eintreffender
+  `onPlayerError()`-Callback der ALTEN Quelle nach einem bereits erfolgten
+  `play()`-Wechsel auf eine neue koennte theoretisch die NEUE (gerade erst
+  gestartete) Quelle faelschlich sperren - bewusst nicht durch einen
+  Generation-Counter o.ae. abgesichert, Zeitfenster sehr schmal.
+- **Kein Sperr-Anzeige in der Verwaltungs-Activity** (nur in der
+  Play-Liste auf dem Hauptschirm).
 - **Kategorienliste selbst ist weiterhin nur im Code aenderbar**
   (`model/Categories.kt`) - anders als die Sender ist sie keine
   Nutzerdateneinstellung. Kein Bulk-Import (M3U o.ae., anders als im
