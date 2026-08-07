@@ -4234,3 +4234,62 @@ Umschalten" und "ungetestet auf echtem Gerät").
 Kein Commit/Push in diesem Schritt (Nutzer hat nur die Doku-Änderungen
 angefordert, nicht explizit einen Commit). Root-`README.md` weiterhin
 NICHT angefasst — Begründung unverändert (siehe Eintrag oben).
+
+## 2026-08-07 (Fortsetzung 2) — Build-Zeitstempel in der UI (Diagnose: "Auto-Switch funktioniert auf dem Handy nicht")
+
+Nutzer testete auf seinem echten Handy: Sprache/Musik-Erkennung
+funktioniert schon gut (inkl. der bekannten Einschränkung, dass Gesang
+manchmal als Sprache erkannt wird), aber das automatische Umschalten bei
+Sprache schien nicht zu greifen. Code-Review von `PlaybackService.kt`
+zeigte keinen Fehler — dieselbe Logik lief im Emulator zuvor mehrfach
+nachweislich korrekt. Wahrscheinlichste Ursache: die App hatte bislang
+keine sichtbare Versionsanzeige, auf dem Handy lief vermutlich noch eine
+APK von vor dem Auto-Switch-Feature oder von vor der Richtungskorrektur.
+
+### Umsetzung
+
+- **`app/build.gradle.kts`**: `buildFeatures.buildConfig = true` +
+  `buildConfigField("String", "BUILD_TIME", ...)` mit
+  `SimpleDateFormat("yyyy-MM-dd HH:mm").format(Date())` — entsteht
+  automatisch bei jedem Build, keine manuell zu pflegende Versionsnummer
+  (bei mehreren Builds pro Tag waere Hochzaehlen schnell vergessen worden).
+  Erste Fassung nutzte volltqualifizierte `java.text.SimpleDateFormat`/
+  `java.util.Date` direkt im Gradle-Kotlin-DSL-Block — schlug fehl
+  ("Unresolved reference: text"/"util"), weil im Gradle-KTS-Scope ein
+  Bezeichner `java` offenbar mit einer Erweiterung/Property kollidiert;
+  behoben durch explizite `import java.text.SimpleDateFormat`/
+  `import java.util.Date` am Dateianfang statt Vollqualifizierung.
+- **UI**: neues `TextView` (`buildTimeText`) direkt unter dem App-Titel,
+  zeigt `"Build: " + BuildConfig.BUILD_TIME` (neuer String `build_time`
+  in `strings.xml`, gesetzt in `MainActivity.onCreate()`).
+
+### Verifiziert (Emulator, frischer Build)
+
+- Screenshot zeigt "Build: 2026-08-07 16:50" unter dem Titel.
+- Zweiter Auto-Switch-Testlauf mit genau diesem Build: Deutschlandfunk
+  → 1LIVE → SWR3 → Deutschlandfunk → 1LIVE → SWR3 im Kreis, jeweils
+  Logcat-Zeile "Sprache erkannt auf '...' - schalte weiter zu '...'".
+  Zeigt zwei Dinge: (1) die Umschalt-Logik funktioniert nachweislich mit
+  dem aktuellen Code — der Verdacht "Feature kaputt" war unbegründet,
+  (2) alle drei Sender lieferten in diesem Durchlauf irgendwann einen
+  bestätigten Sprache-Treffer (bei 1LIVE/SWR3 plausibel Gesang statt
+  echter Moderation), der Zähler wurde aber zwischendurch durch
+  Musik-Phasen wiederholt auf 0 zurückgesetzt, bevor die Obergrenze
+  (`AUTO_SWITCH_PAUSE_SECONDS`) je griff — reales, gemischtes
+  Radioprogramm, kein Bug.
+- `android-app/radiozapper.apk` mit diesem Build aktualisiert.
+- **Bestätigung auf echtem Gerät**: Nutzer hat `radiozapper.apk` neu auf
+  sein Handy installiert (Diagnose damit erhärtet: die alte Installation
+  war tatsächlich veraltet) — automatisches Umschalten bei Sprache
+  funktioniert dort jetzt ebenfalls. Erste Bestätigung des Auto-Switch-
+  Features auf realer Hardware, nicht nur im Emulator.
+
+### Bewusst NICHT gemacht
+
+Keine Behebung der Gesang-als-Sprache-Fehlerkennung selbst — bereits
+bekannte, dokumentierte Grenze (siehe `android-app/README.md`,
+"Bekannte Grenzen"), nicht Gegenstand dieser Diagnose. Kein Cooldown pro
+Sender eingebaut, obwohl der zweite Testlauf genau den Fall zeigt, in dem
+das nützlich wäre (Sender, der wiederholt faelschlich "Sprache" liefert,
+kommt sofort wieder an die Reihe) — bleibt wie zuvor für das
+Watchdog/Ban-System vorgesehen.

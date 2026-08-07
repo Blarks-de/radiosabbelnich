@@ -41,6 +41,11 @@ Ban-System, kein News-Break, keine Settings-UI.
   Sender live mit, auch wenn der automatische Wechsel ihn geaendert hat
 - Einfache UI: Senderliste mit Play-Buttons, Stop-Button, Statusanzeige,
   Modell-Download-Fortschritt
+- **Build-Zeitstempel in der UI** (`Build: YYYY-MM-DD HH:MM` direkt unter
+  dem App-Titel, `BuildConfig.BUILD_TIME`) - entsteht automatisch bei
+  jedem Build. Zweck: von aussen erkennbar, ob eine gerade installierte
+  APK noch ein aelterer Stand ist (Anlass: Auto-Switch schien auf einem
+  Test-Handy "nicht zu funktionieren" - war eine veraltete Installation).
 
 ### Live-Testergebnis (Android-Emulator auf diesem Host, API 34 x86_64)
 
@@ -49,6 +54,17 @@ erkannt → automatisch zu 1LIVE gewechselt → dort ueber 1 Minute stabil
 "🎵 Musik", kein Nachflackern, kein weiteres Springen. Keine Abstuerze/
 Exceptions im Logcat. Details und weitere Durchlaeufe siehe
 `../SESSION.md`, Eintrag "2026-08-07 — Android RadioZapper MVP".
+
+Zweiter Durchlauf (nach Ergaenzung des Build-Zeitstempels, gleicher
+Emulator): Deutschlandfunk → 1LIVE → SWR3 → Deutschlandfunk → 1LIVE →
+SWR3 im Kreis, jeweils nach "Sprache erkannt" - alle drei Sender lieferten
+also irgendwann einen bestaetigten Sprache-Treffer (bei 1LIVE/SWR3
+vermutlich Gesang, siehe "Bekannte Grenzen" unten), der Zaehler wurde
+aber zwischendurch durch Musik-Phasen immer wieder auf 0 zurueckgesetzt,
+bevor die Obergrenze (`AUTO_SWITCH_PAUSE_SECONDS`) je griff. Zeigt: die
+Umschalt-Logik selbst funktioniert zuverlaessig, das haeufige Springen in
+diesem Fall kam von echtem Radioinhalt (Musik+Moderation gemischt), nicht
+von einem Bug.
 
 ## Was NICHT funktioniert / nicht im Scope
 

@@ -80,6 +80,12 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        // Zeigt sichtbar, welcher Build installiert ist (siehe BuildConfig.BUILD_TIME-
+        // Kommentar in app/build.gradle.kts) - sonst nicht von aussen unterscheidbar,
+        // ob z.B. der Auto-Switch-Fix schon installiert ist oder nur noch eine
+        // aeltere APK laeuft.
+        binding.buildTimeText.text = getString(R.string.build_time, BuildConfig.BUILD_TIME)
+
         modelManager = VoskModelManager(applicationContext)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {

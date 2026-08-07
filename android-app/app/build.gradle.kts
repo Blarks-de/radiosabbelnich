@@ -1,3 +1,6 @@
+import java.text.SimpleDateFormat
+import java.util.Date
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -13,6 +16,19 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "0.1.0"
+
+        // Build-Zeitstempel statt manuell gepflegter versionName/versionCode:
+        // bei der Update-Frequenz dieses Prototyps (mehrere Builds pro Tag)
+        // waere das Hochzaehlen selbst schnell veraltet/vergessen. Der
+        // Zeitstempel entsteht automatisch bei jedem Build und macht auf
+        // einen Blick sichtbar, welcher Stand auf dem Handy installiert ist
+        // (siehe Anlass: Auto-Switch schien "nicht zu funktionieren" - war
+        // vermutlich nur eine veraltete APK).
+        buildConfigField(
+            "String",
+            "BUILD_TIME",
+            "\"${SimpleDateFormat("yyyy-MM-dd HH:mm").format(Date())}\""
+        )
     }
 
     buildTypes {
@@ -33,6 +49,7 @@ android {
 
     buildFeatures {
         viewBinding = true
+        buildConfig = true
     }
 
     packaging {
