@@ -7,7 +7,7 @@
 *[🇬🇧 English version further below](#radiozapper-english-version)*
 
 RadioZapper hört mehrere Internetradio-Sender gleichzeitig für dich mit
-und schaltet automatisch weiter, sobald irgendwo geredet wird —
+und schaltet automatisch weiter, sobald irgendwo geredet wird.
 Moderation, Nachrichten, Werbung, Jingles. Übrig bleibt (möglichst) nur
 Musik. Der ausgewählte Sender wird per Icecast neu ausgestrahlt, sodass
 man ihn im ganzen (Tail-)Netz mit VLC, im Browser oder sonst einem
