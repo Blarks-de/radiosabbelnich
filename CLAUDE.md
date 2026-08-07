@@ -6,6 +6,24 @@ RadioZapper hört mehrere Internetradio-Sender mit, schaltet bei Sprache
 (Moderation/Werbung/Jingles) automatisch weiter und strahlt das Ergebnis per
 Icecast neu aus. Überblick und Feature-Beschreibung: `README.md`.
 
+## Android-Prototyp (separates Projekt)
+
+`android-app/` ist ein eigenständiges natives Kotlin/Gradle-Projekt (media3 +
+Vosk-Android), das dasselbe Grundprinzip lokal auf dem Handy nachbildet — ein
+komplett anderer Tech-Stack, eigene Toolchain, eigenes `README.md` dort. Es
+läuft unabhängig von der hier beschriebenen Docker-Instanz und ändert nichts
+an deren Architektur/Verhalten; die obigen Konventionen (Deutsch, SESSION.md,
+VERSION-Pflege) gelten für den Docker-Dienst, nicht 1:1 für den Android-Code.
+Seit 2026-08-07 wird es aber mitgepflegt, dafür zwei feste Regeln:
+
+- **Nach jedem Android-Build** die entstandene Debug-APK nach
+  `android-app/radiozapper.apk` kopieren (fester, einfach auffindbarer Pfad
+  statt des tief verschachtelten `app/build/outputs/apk/debug/app-debug.apk`
+  — letzterer ist ohnehin gitignored).
+- **`android-app/README.md` bei jeder inhaltlichen Änderung an der App
+  nachziehen** (analog zur README-Pflicht des Docker-Projekts oben, nur
+  eben für die App statt den Dienst).
+
 ## Sprache und Konventionen
 
 - **Alles auf Deutsch**: Kommentare, Docstrings, Log-Meldungen, UI-Texte,

@@ -8,3 +8,7 @@ build/
 .externalNativeBuild
 .cxx
 local.properties
+
+# Bequemlichkeits-Kopie der Debug-APK (siehe CLAUDE.md, "Android-Prototyp")
+# - Build-Artefakt wie app-debug.apk selbst, deshalb ebenfalls nicht versioniert.
+/radiozapper.apk

@@ -4189,3 +4189,48 @@ NICHT um den Android-Prototyp ergänzt — der Abschnitt dort beschreibt
 den *deployten Docker-Dienst*, dessen Verhalten/Setup/Konfiguration durch
 `android-app/` unverändert bleibt; das MVP hat sein eigenes README direkt
 in `android-app/`.
+
+## 2026-08-07 (Fortsetzung) — Android-Prototyp wird ab jetzt mitgepflegt
+
+Nutzerentscheidung: `android-app/` ist kein Wegwerf-Experiment mehr,
+sondern wird künftig genauso dokumentiert gepflegt wie der Docker-Dienst.
+Auslöser war die Nachfrage, ob SESSION.md/README.md/CLAUDE.md aktuell
+sind — dabei fiel auf, dass `CLAUDE.md` den Android-Code gar nicht
+erwähnte (eine künftige Session könnte sonst unvorbereitet auf ein
+fremdes Kotlin-Projekt neben dem Python-Code stoßen) und dass
+`android-app/README.md` seit der Smoothing-/Auto-Switch-Änderung vom
+Vortag bereits veraltet war (behauptete noch "kein automatisches
+Umschalten" und "ungetestet auf echtem Gerät").
+
+### Umsetzung
+
+- **`CLAUDE.md`**: neuer kurzer Abschnitt "Android-Prototyp (separates
+  Projekt)" direkt nach der Einleitung — verweist auf `android-app/`,
+  stellt klar, dass die Docker-spezifischen Konventionen (Deutsch,
+  SESSION.md, VERSION) nicht 1:1 für den Android-Code gelten, und hält
+  die beiden neuen Arbeitsablauf-Regeln fest (siehe unten).
+- **Zwei neue Konventionen** (ab jetzt bei jeder Android-Änderung
+  anzuwenden): nach jedem Build die Debug-APK zusätzlich nach
+  `android-app/radiozapper.apk` kopieren (fester Pfad statt des tief
+  verschachtelten, gitignorten `app/build/outputs/apk/debug/
+  app-debug.apk`) — `radiozapper.apk` selbst ebenfalls gitignored
+  (Build-Artefakt, kein Quelltext). `android-app/README.md` bei jeder
+  inhaltlichen Änderung an der App nachziehen, analog zur
+  README-Pflicht des Docker-Projekts.
+- **`android-app/README.md` komplett aktualisiert**: "Was funktioniert"
+  spiegelt jetzt den Stand nach Smoothing-Fix + Auto-Switch (inkl. der
+  konkreten Konstanten `SMOOTHING_WINDOW_SECONDS`/
+  `RATIO_TO_CONFIRM_SPEECH`/`RATIO_TO_CONFIRM_MUSIC`/
+  `AUTO_SWITCH_PAUSE_SECONDS`) statt des überholten "nur Anzeige,
+  ungetestet"-Stands von der Ersterstellung. Live-Testergebnis vom
+  Vortag (Deutschlandfunk → 1LIVE, stabil) referenziert. Installation/
+  Bauen-Abschnitte um den neuen `radiozapper.apk`-Pfad und die
+  Emulator-Kurzform ergänzt. "Bekannte Grenzen" um Cooldown-pro-Sender
+  und Mindest-Verweildauer als offene Punkte ergänzt (vorher nur implizit
+  in der Chat-Antwort genannt, nicht im README).
+
+### Bewusst NICHT gemacht
+
+Kein Commit/Push in diesem Schritt (Nutzer hat nur die Doku-Änderungen
+angefordert, nicht explizit einen Commit). Root-`README.md` weiterhin
+NICHT angefasst — Begründung unverändert (siehe Eintrag oben).
