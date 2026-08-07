@@ -17,8 +17,21 @@ Ban-System, kein News-Break, keine Settings-UI.
 
 ## Was funktioniert (live im Emulator getestet, siehe unten)
 
-- 3 hartcodierte Sender (Deutschlandfunk, 1LIVE, SWR3 - alle drei
-  oeffentliche Streams, in `model/Station.kt` direkt austauschbar)
+- **Persistente Senderverwaltung** (`model/StationRepository.kt`, Vorbild
+  `stations_store.py` im Docker-Projekt) - Sender als `{id, name, url,
+  category, enabled}`, gespeichert als JSON-Datei (`filesDir/
+  stations.json`), nicht mehr im Code hartcodiert. Eigener Bildschirm
+  "⚙️ Sender verwalten" (`station/StationManagementActivity.kt`): Liste
+  gruppiert nach Kategorie (`Lokal`/`National`/`International`/
+  `Unsortiert`, feste Reihenfolge, auch leere Kategorien sichtbar),
+  Enabled-Checkbox pro Sender, Bearbeiten/Loeschen-Buttons, ein
+  wiederverwendeter Add/Edit-Dialog. Mindestens 1 Sender muss bestehen
+  bleiben (Loeschsperre, exakte Paritaet zum Docker-Vorbild). Rotation =
+  aktivierte Sender alphabetisch nach Name, wie im Docker-Projekt.
+  Beim allerersten Start (keine `stations.json` vorhanden) werden die
+  bisherigen 3 Sender (Deutschlandfunk/1LIVE/SWR3) als Startbestand
+  geschrieben statt geloescht - fuer Bestandsnutzer aendert sich beim
+  Update auf diese Version sichtbar nichts.
 - Wiedergabe ueber ExoPlayer (media3 1.4.1)
 - Vosk-Modell-Download: deutsches Kleinmodell `vosk-model-small-de-0.15`
   (~45MB, dasselbe Modell wie im Docker-Projekt) wird beim ersten Start
@@ -36,21 +49,30 @@ Ban-System, kein News-Break, keine Settings-UI.
   "N Sekunden ohne Unterbrechung"-Serie, die bei ganz normalen kurzen
   Sprechpausen zu haeufig zurueckgesetzt wurde (live beobachtet).
 - **Automatisches Umschalten** (`PlaybackService.kt`): bei bestaetigter
-  Sprache springt die App zum naechsten Sender in der Liste (Ring) -
-  wie das Docker-Projekt schaltet sie WEG von Sprache/Moderation, HIN zu
-  Musik. **Cooldown pro Sender** (`STATION_COOLDOWN_SECONDS=60`): ein
-  wegen Sprache verlassener Sender wird beim Ringdurchlauf fuer diese Zeit
-  uebersprungen, statt sofort wieder dran zu sein (Moderation/Gesang ist
-  ja vermutlich noch nicht vorbei) - endet automatisch mit der Zeit ODER
-  sobald der Sender selbst wieder Musik bestaetigt. Obergrenze gegen
-  Endlosschleife: sind entweder alle Sender einmal ohne Treffer probiert
-  ODER alle uebrigen gerade im Cooldown, folgt eine kurze Pause
-  (`AUTO_SWITCH_PAUSE_SECONDS=20`) statt endlos weiterzuspringen.
+  Sprache springt die App zum naechsten Sender im Ring - wie das
+  Docker-Projekt schaltet sie WEG von Sprache/Moderation, HIN zu Musik.
+  Der Ring liest `StationRepository.activeStations()` bei jedem Versuch
+  frisch (kein Request/Pop-Mechanismus wie im Docker-Projekt noetig, siehe
+  Architektur-Abschnitt unten). **Cooldown pro Sender**
+  (`STATION_COOLDOWN_SECONDS=60`): ein wegen Sprache verlassener Sender
+  wird beim Ringdurchlauf fuer diese Zeit uebersprungen, statt sofort
+  wieder dran zu sein (Moderation/Gesang ist ja vermutlich noch nicht
+  vorbei) - endet automatisch mit der Zeit ODER sobald der Sender selbst
+  wieder Musik bestaetigt. Obergrenze gegen Endlosschleife: sind entweder
+  alle Sender einmal ohne Treffer probiert ODER alle uebrigen gerade im
+  Cooldown, folgt eine kurze Pause (`AUTO_SWITCH_PAUSE_SECONDS=20`) statt
+  endlos weiterzuspringen. **Reagiert auch auf Aenderungen aus der
+  Verwaltungs-Activity**: wird der GERADE LAUFENDE Sender dort deaktiviert
+  oder geloescht, schaltet der Service automatisch auf den ersten
+  aktivierten Sender weiter (oder stoppt sauber, falls keiner mehr aktiv
+  ist) - live getestet, siehe unten.
 - Foreground Service mit Notification, damit Wiedergabe+Analyse
   weiterlaufen, wenn die App im Hintergrund ist; UI zeigt den aktuellen
   Sender live mit, auch wenn der automatische Wechsel ihn geaendert hat
-- Einfache UI: Senderliste mit Play-Buttons, Stop-Button, Statusanzeige,
-  Modell-Download-Fortschritt
+- Einfache UI: Senderliste mit Play-Buttons (nur aktivierte Sender, flach,
+  kein Kategorie-Gruppieren - das ist Aufgabe der Verwaltungs-Activity),
+  Stop-Button, Statusanzeige, Modell-Download-Fortschritt, Button
+  "Sender verwalten"
 - **Build-Zeitstempel in der UI** (`Build: YYYY-MM-DD HH:MM` direkt unter
   dem App-Titel, `BuildConfig.BUILD_TIME`) - entsteht automatisch bei
   jedem Build. Zweck: von aussen erkennbar, ob eine gerade installierte
@@ -82,6 +104,22 @@ bevor die Obergrenze (`AUTO_SWITCH_PAUSE_SECONDS`) je griff. Zeigt: die
 Umschalt-Logik selbst funktioniert zuverlaessig, das haeufige Springen in
 diesem Fall kam von echtem Radioinhalt (Musik+Moderation gemischt), nicht
 von einem Bug.
+
+**Dritter Durchlauf (Senderverwaltung, frischer Install)**: die 3
+geseedeten Sender erscheinen identisch zu vorher unter "National" in
+beiden Bildschirmen. Neuer Sender ("SWR3 Test", Kategorie "International")
+per Dialog angelegt → erscheint sofort in der flachen Play-Liste UND in
+der Verwaltungs-Activity, `adb shell run-as com.radiozapper.mvp cat
+files/stations.json` zeigt korrektes, menschenlesbares JSON mit
+generierter id `swr3-test`. 1LIVE gestartet, waehrend es lief in der
+Verwaltungs-Activity deaktiviert → Logcat: "Senderliste geaendert, '1LIVE
+...' nicht mehr aktiv - schalte auf 'Deutschlandfunk ...'" - automatischer
+Wechsel funktioniert. Sender geloescht bis auf einen einzigen uebrig →
+Loeschversuch auf dem letzten liefert korrekt "Mindestens ein Sender muss
+konfiguriert bleiben." statt die Liste zu leeren. App per `force-stop`
+beendet und neu gestartet → aller Stand (inkl. des angelegten Testsenders)
+persistiert korrekt. Keine Abstuerze in der gesamten Sequenz (Crash-Log-
+Buffer nach jedem Schritt leer geprueft).
 
 ## Was NICHT funktioniert / nicht im Scope
 
@@ -156,21 +194,43 @@ adb logcat -s PlaybackService:*   # zeigt jeden Sprache/Musik-Wechsel
 
 ## Architektur in Kuerze
 
-- `model/Station.kt` - hartcodierte Senderliste
+- `RadioZapperApplication.kt` - einziger Zweck: `StationRepository.init()`
+  garantiert VOR jeder Komponente aufrufen (`Application.onCreate()` laeuft
+  immer zuerst) - kein "wer zuerst dran ist, ruft init() auf"-Muster in
+  den einzelnen Komponenten, das ein neuer Einstiegspunkt leicht vergessen
+  koennte.
+- `model/Station.kt` - `data class Station(id, name, url, category,
+  enabled)`. `id` ist stabil (einmal vergeben, ueberlebt Umbenennungen),
+  Rotation/Cooldown referenzieren ausschliesslich darueber.
+- `model/Categories.kt` - feste Kategorienliste (`Lokal`/`National`/
+  `International`/`Unsortiert`, reduziertes Set ggue. den 7 Kategorien
+  des Docker-Projekts), selbst weiterhin nur im Code aenderbar.
+- `model/StationRepository.kt` - Singleton, haelt die Senderliste als
+  `StateFlow<List<Station>>`, persistiert als JSON-Datei (`filesDir/
+  stations.json`, atomarer Schreibvorgang via `Files.move(...,
+  ATOMIC_MOVE)`). CRUD (`addStation`/`updateStation`/`setEnabled`/
+  `deleteStation`), ID-Vergabe per Slugify+Kollisionssuffix (analog
+  `stations_store.py`s `_slugify`/`_unique_id`), Startbestand nur wenn die
+  Datei noch nicht existiert.
+- `station/StationManagementActivity.kt` - eigener Bildschirm fuer CRUD,
+  kategorie-gruppierte Liste (volles Neu-Aufbauen bei jeder Aenderung,
+  kein RecyclerView - Datenmenge klein), Add/Edit-`AlertDialog`.
 - `vosk/VoskModelManager.kt` - Download+Entpacken des Vosk-Modells nach
   `filesDir`, Fortschritt als `StateFlow<ModelState>`
 - `playback/PlaybackService.kt` - Foreground Service, haelt ExoPlayer
   (Wiedergabe) UND `StreamAnalyzer` (Analyse); reagiert auf den
-  geglaetteten Status mit automatischem Umschalten (siehe oben);
-  exponiert `currentStation`/`status` als StateFlows fuer die UI;
-  Notification via `NotificationCompat`/`ServiceCompat.startForeground`
+  geglaetteten Status mit automatischem Umschalten UND auf Aenderungen aus
+  `StationRepository.stations` (siehe oben); exponiert `currentStation`/
+  `status` als StateFlows fuer die UI; Notification via
+  `NotificationCompat`/`ServiceCompat.startForeground`
 - `analysis/StreamAnalyzer.kt` - **eigene** MediaExtractor/MediaCodec-
   Dekodierung desselben Stream-URLs nur fuer die Analyse (unabhaengig
   vom ExoPlayer der Wiedergabe), Downmix+Resample auf 16kHz-Mono
   (`MonoResampler.kt`), Fuetterung von Vosk, gleitendes Mehrheitsvotum
   mit Hysterese fuer den geglaetteten Sprache/Musik-Status
-- `MainActivity.kt` - bindet an den Service, zeigt Senderliste, Status
-  und Modell-Fortschritt live an (inkl. automatischer Senderwechsel)
+- `MainActivity.kt` - bindet an den Service, zeigt Senderliste (reaktiv
+  aus `StationRepository`), Status und Modell-Fortschritt live an, Button
+  zur Verwaltungs-Activity
 
 ### Bewusste Vereinfachung ggue. dem Docker-Projekt: zwei Dekodierungen
 
@@ -185,6 +245,24 @@ Fehlerflaeche. Preis: der Stream laeuft effektiv doppelt ueber das Netz
 (Mobilfunk-Datenvolumen!). Falls das MVP weitergefuehrt wird, waere das
 Anzapfen des ExoPlayer-Audio-Pfads via custom `AudioProcessor` der
 naheliegende naechste Schritt.
+
+### Persistenz: JSON-Datei statt Room
+
+`StationRepository` speichert als flache JSON-Datei (`org.json`, schon
+anderswo in der App genutzt, keine neue Dependency), bewusst nicht als
+Room-Datenbank. Begruendung: das Vorbild `stations_store.py` ist selbst
+ein flacher JSON-Store, keine SQL-Datenbank - Konsistenz zum Vorbild und
+Angemessenheit an die Datenmenge (Dutzende Sender, keine Relationen,
+keine komplexen Queries) zeigen in dieselbe Richtung. Room brächte einen
+Compiler/KSP-Dependency, Entity/DAO-Boilerplate und Migrations-
+Versionierung - fuer diese Groessenordnung unverhaeltnismaessig. Anders
+als `stations_store.py` (muss auf direktes Schreiben ausweichen, weil
+`stations.json` dort einzeln in Docker gebindmountet ist und
+`os.replace()` ueber einen Mountpoint mit "Device or resource busy"
+scheitert) kann die Android-Variante echt atomar schreiben: Temp-Datei
+im selben Verzeichnis + `Files.move(..., ATOMIC_MOVE, REPLACE_EXISTING)`
+- `filesDir` ist normaler lokaler Speicher ohne diese Einschraenkung,
+eine bewusste Verbesserung gegenueber dem Original, keine blinde Kopie.
 
 ## Update-Mechanismus (Tailscale, kein Play Store)
 
@@ -274,6 +352,15 @@ dafuer das Textfeld - einfach die Tailscale-IP `100.92.3.18` eintragen.
   (der koennte theoretisch sofort wieder als Sprache gelten).
 - Kein Wiederverbindungsversuch bei Stream-Abbruch (ExoPlayer-Listener
   fuer Fehler/Retry ist nicht angebunden).
+- **Kategorienliste selbst ist weiterhin nur im Code aenderbar**
+  (`model/Categories.kt`) - anders als die Sender ist sie keine
+  Nutzerdateneinstellung. Kein Bulk-Import (M3U o.ae., anders als im
+  Docker-Projekt), keine Drag-Sortierung innerhalb einer Kategorie,
+  keine Sender-Suche - bei der auf dem Handy erwarteten Senderzahl
+  (Dutzende, nicht Hunderte) bisher nicht als notwendig eingeschaetzt.
+- **Kein Import-Reachability-Check** (anders als `station_import.py`s
+  `check_reachable()` im Docker-Projekt) - ein neu angelegter Sender mit
+  kaputter URL faellt erst beim tatsaechlichen Abspielversuch auf.
 - **Update-Mechanismus braucht denselben Debug-Signierschluessel** ueber
   Installationen hinweg - Android verweigert ein Update, wenn der neue
   APK-Signer vom installierten abweicht. Solange `~/.android/

@@ -19,9 +19,10 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.radiozapper.mvp.databinding.ActivityMainBinding
 import com.radiozapper.mvp.databinding.ItemStationBinding
 import com.radiozapper.mvp.model.Station
-import com.radiozapper.mvp.model.Stations
+import com.radiozapper.mvp.model.StationRepository
 import com.radiozapper.mvp.playback.PlaybackService
 import com.radiozapper.mvp.playback.PlaybackStatus
+import com.radiozapper.mvp.station.StationManagementActivity
 import com.radiozapper.mvp.update.UpdateManager
 import com.radiozapper.mvp.update.UpdateState
 import com.radiozapper.mvp.vosk.ModelState
@@ -98,9 +99,13 @@ class MainActivity : AppCompatActivity() {
             requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
 
-        setupStationRows()
+        observeStations()
         observeModelState()
         observeUpdateState()
+
+        binding.manageStationsButton.setOnClickListener {
+            startActivity(Intent(this, StationManagementActivity::class.java))
+        }
 
         // Update-Server-Adresse bewusst NICHT hartcodiert (siehe UpdateManager.kt) -
         // wer die APK weitergibt, hat vermutlich nicht denselben Tailscale-Zugriff
@@ -139,8 +144,27 @@ class MainActivity : AppCompatActivity() {
         currentStationJob?.cancel()
     }
 
-    private fun setupStationRows() {
-        Stations.ALL.forEach { station ->
+    /**
+     * Ersetzt das frueher einmalige setupStationRows() - die Senderliste ist
+     * jetzt persistent und aus der Verwaltungs-Activity heraus aenderbar,
+     * die Zeilen muessen sich also bei jeder Aenderung neu aufbauen. Volles
+     * removeAllViews()+neu-Aufbauen statt RecyclerView/DiffUtil, weil die
+     * Datenmenge klein bleibt (siehe android-app/README.md) - kein Grund fuer
+     * eine neue Dependency. Zeigt nur aktivierte Sender (deaktivierte gehoeren
+     * per Definition nicht in eine Play-Liste), Kategorien werden hier NICHT
+     * gruppiert - das ist Aufgabe der Verwaltungs-Activity.
+     */
+    private fun observeStations() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                StationRepository.stations.collect { renderStationRows(it) }
+            }
+        }
+    }
+
+    private fun renderStationRows(stations: List<Station>) {
+        binding.stationsContainer.removeAllViews()
+        stations.filter { it.enabled }.sortedBy { it.name.lowercase() }.forEach { station ->
             val row = ItemStationBinding.inflate(layoutInflater, binding.stationsContainer, false)
             row.stationNameText.text = station.name
             row.playButton.setOnClickListener { onPlayClicked(station) }

@@ -1,0 +1,14 @@
+package com.radiozapper.mvp.model
+
+/**
+ * Reduziertes Set ggue. dem Docker-Projekt (dort 7 Kategorien inkl.
+ * "Interstellar") - auf dem Handy werden vermutlich eine Handvoll Sender
+ * verwaltet, nicht Hunderte nach einem M3U-Import. "Unsortiert" bleibt wie
+ * im Vorbild bewusst der letzte Eintrag (Catch-all, keine Sonderfall-Logik
+ * fuer die Anzeige-Reihenfolge noetig - die Verwaltungs-Activity iteriert
+ * einfach ueber ALL in dieser Reihenfolge).
+ */
+object Categories {
+    val ALL = listOf("Lokal", "National", "International", "Unsortiert")
+    const val DEFAULT = "National"
+}

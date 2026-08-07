@@ -17,7 +17,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import com.radiozapper.mvp.R
 import com.radiozapper.mvp.analysis.StreamAnalyzer
 import com.radiozapper.mvp.model.Station
-import com.radiozapper.mvp.model.Stations
+import com.radiozapper.mvp.model.StationRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -54,14 +54,17 @@ private const val STATION_COOLDOWN_SECONDS = 60L
  * (schaltet WEG von Sprache, siehe dessen README/CLAUDE.md - "schaltet bei
  * Sprache automatisch weiter") schaltet dieses MVP WEG von Sprache (Moderation/
  * Werbung/Jingles) - wer auf "Sprache" steht, ist per Definition (noch) kein
- * Treffer. Mit nur 3 hartcodierten Sendern laesst sich das so klar beobachten:
- * die App wandert bis zum ersten ueberwiegend musikalischen Sender (i.d.R.
- * 1LIVE oder SWR3) und bleibt dort stehen. Kein Watchdog/Ban-System (kommt
- * erst spaeter) - nur die einfache Ringlogik, ein Cooldown pro Sender
- * (`STATION_COOLDOWN_SECONDS`, siehe `nextStationOffCooldown()` - ein wegen
- * Sprache verlassener Sender kommt fuer diese Zeit beim Ringdurchlauf nicht
- * sofort wieder an die Reihe) und eine Obergrenze gegen die Endlosschleife,
- * falls zufaellig ALLE Sender gerade Sprache spielen oder im Cooldown sind.
+ * Treffer. Die Ringlogik liest die Senderliste bei jedem Versuch frisch aus
+ * `StationRepository.activeStations()` (persistent, per Verwaltungs-Activity
+ * editierbar, siehe model/StationRepository.kt) statt einer hartcodierten
+ * Liste - kein Request/Pop-Mechanismus wie im Docker-Projekt noetig, weil
+ * hier alles im selben Prozess laeuft und der aktuelle StateFlow-Wert nie
+ * veraltet sein kann. Kein Watchdog/Ban-System (kommt erst spaeter) - nur
+ * die einfache Ringlogik, ein Cooldown pro Sender (`STATION_COOLDOWN_SECONDS`,
+ * siehe `nextStationOffCooldown()` - ein wegen Sprache verlassener Sender
+ * kommt fuer diese Zeit beim Ringdurchlauf nicht sofort wieder an die Reihe)
+ * und eine Obergrenze gegen die Endlosschleife, falls zufaellig ALLE Sender
+ * gerade Sprache spielen oder im Cooldown sind.
  */
 class PlaybackService : LifecycleService() {
 
@@ -92,6 +95,12 @@ class PlaybackService : LifecycleService() {
 
         lifecycleScope.launch {
             analyzer.status.collect { status -> handleStatusForAutoSwitch(status) }
+        }
+
+        // Reagiert auf Aenderungen der persistenten Senderliste (z.B. aus der
+        // Verwaltungs-Activity) - siehe handleStationListChanged().
+        lifecycleScope.launch {
+            StationRepository.stations.collect { stations -> handleStationListChanged(stations) }
         }
     }
 
@@ -158,7 +167,7 @@ class PlaybackService : LifecycleService() {
         }
 
         val station = _currentStation.value ?: return
-        val stations = Stations.ALL
+        val stations = StationRepository.activeStations()
         val currentIndex = stations.indexOfFirst { it.id == station.id }
         if (currentIndex < 0) return
 
@@ -188,6 +197,29 @@ class PlaybackService : LifecycleService() {
 
         Log.i(TAG, "Sprache erkannt auf '${station.name}' - schalte weiter zu '${next.name}'")
         play(next, activeModelPath)
+    }
+
+    /**
+     * Prueft bei jeder Aenderung der persistenten Senderliste, ob der GERADE
+     * LAUFENDE Sender noch vorhanden UND aktiviert ist - z.B. weil er gerade
+     * aus der Verwaltungs-Activity heraus deaktiviert/geloescht wurde.
+     * Fruehes Return bei null: sonst wuerde jede Bearbeitung eines voellig
+     * UNBETEILIGTEN Senders faelschlich die Wiedergabe neu starten, waehrend
+     * gerade eigentlich gestoppt ist (siehe stopPlayback()).
+     */
+    private fun handleStationListChanged(stations: List<Station>) {
+        val current = _currentStation.value ?: return
+        val stillActive = stations.any { it.id == current.id && it.enabled }
+        if (stillActive) return
+
+        val fallback = StationRepository.activeStations().firstOrNull()
+        if (fallback != null) {
+            Log.i(TAG, "Senderliste geaendert, '${current.name}' nicht mehr aktiv - schalte auf '${fallback.name}'")
+            play(fallback, activeModelPath)
+        } else {
+            Log.i(TAG, "Senderliste geaendert, keine aktiven Sender mehr - stoppe Wiedergabe")
+            stopPlayback()
+        }
     }
 
     /** Naechster Sender im Ring ab currentIndex (exklusiv), der aktuell nicht im Cooldown ist. */

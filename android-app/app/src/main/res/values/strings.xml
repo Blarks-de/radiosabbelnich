@@ -36,4 +36,21 @@
     <string name="update_server_label">Update-Server:</string>
     <string name="btn_save_update_server">Speichern</string>
     <string name="update_server_saved">Update-Server gespeichert.</string>
+
+    <string name="btn_manage_stations">⚙️ Sender verwalten</string>
+    <string name="station_management_title">Sender verwalten</string>
+    <string name="btn_add_station">+ Neuer Sender</string>
+    <string name="btn_edit_station">Bearbeiten</string>
+    <string name="btn_delete_station">Löschen</string>
+    <string name="dialog_add_station_title">Neuer Sender</string>
+    <string name="dialog_edit_station_title">Sender bearbeiten</string>
+    <string name="label_station_name">Name</string>
+    <string name="label_station_url">URL</string>
+    <string name="label_station_category">Kategorie</string>
+    <string name="label_station_enabled">Aktiviert</string>
+    <string name="btn_save">Speichern</string>
+    <string name="btn_cancel">Abbrechen</string>
+    <string name="delete_station_confirm_title">Sender löschen?</string>
+    <string name="delete_station_confirm_message">„%1$s“ wirklich löschen?</string>
+    <string name="station_action_error">%1$s</string>
 </resources>
