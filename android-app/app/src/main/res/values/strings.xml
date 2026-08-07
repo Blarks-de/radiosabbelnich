@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">RadioZapper MVP</string>
+
+    <string name="status_idle">Gestoppt</string>
+    <string name="status_connecting">Verbinde…</string>
+    <string name="status_speech">🗣 Sprache</string>
+    <string name="status_music">🎵 Musik</string>
+    <string name="status_error">⚠ Fehler</string>
+
+    <string name="btn_play">▶ Abspielen</string>
+    <string name="btn_stop">■ Stopp</string>
+
+    <string name="model_not_ready">Vosk-Modell (DE) fehlt noch.</string>
+    <string name="model_downloading">Modell wird geladen: %1$d%%</string>
+    <string name="model_unpacking">Modell wird entpackt…</string>
+    <string name="model_ready">Vosk-Modell (DE) bereit.</string>
+    <string name="model_error">Modell-Download fehlgeschlagen: %1$s</string>
+    <string name="btn_download_model">Modell herunterladen (ca. 45 MB)</string>
+
+    <string name="notification_channel_name">Wiedergabe</string>
+    <string name="notification_playing">Läuft: %1$s</string>
+
+    <string name="current_station_none">Kein Sender ausgewählt</string>
+</resources>
