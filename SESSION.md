@@ -4102,3 +4102,90 @@ Settings-Feld) — Anforderung war "einfaches Gedächtnis", ein
 hartkodierter, begründeter Wert reicht dafür. Kein Persistieren der
 zuletzt gespielten Dateien über einen Neustart hinweg (explizit nicht
 gefordert, `deque` lebt nur im Hauptloop-Prozess).
+
+## 2026-08-07 — Android RadioZapper MVP (eigenständiger Kotlin-Prototyp)
+
+Nutzerwunsch: ein minimales, natives Android-MVP (kein Web-Wrapper),
+das dasselbe Grundprinzip lokal auf dem Handy abbildet — Radiostream
+per ExoPlayer abspielen, per Vosk (Speech-to-Text) grob Sprache/Musik
+unterscheiden, NICHT auf die laufende Docker-Instanz angewiesen. Neues,
+komplett eigenständiges Gradle-Projekt unter `android-app/` (eigenes
+`CLAUDE.md`-Regime gilt dort nicht 1:1 — andere Sprache/Toolchain —,
+aber Doku-Pflicht hier trotzdem beachtet, weil das Repo insgesamt
+betroffen ist).
+
+### Umsetzung
+
+- **Android-SDK/Emulator-Toolchain auf diesem Host neu aufgesetzt**
+  (vorher nicht vorhanden): cmdline-tools, platform-tools, platform 34,
+  build-tools 34, Emulator + `system-images;android-34;google_apis;
+  x86_64`, AVD `test_device` (Pixel-Profil, ressourcenschonend: 1536MB
+  RAM, Audio aus, `swiftshader_indirect`). `ANDROID_HOME`/PATH dauerhaft
+  in `~/.bashrc` ergänzt. Ermöglicht ab jetzt automatisiertes Bauen UND
+  Testen (Emulator, adb, Logcat, Screenshots) für Android-Arbeit auf
+  diesem Host, nicht nur Kompilieren.
+- **`android-app/`**: Kotlin/Gradle-Projekt (minSdk 26, targetSdk/
+  compileSdk 34, media3 1.4.1 statt neuerer Versionen — ab media3 1.5
+  ist compileSdk 35+ Pflicht, siehe AAR-Metadata-Check), Vosk-Android
+  0.3.47 (Maven Central, kein eigenes Repo mehr nötig), deutsches
+  Kleinmodell `vosk-model-small-de-0.15` (dasselbe wie im Docker-Projekt)
+  — Download+Entpacken beim ersten Start statt ins APK gebundlet.
+  Bewusst XML-Views statt Jetpack Compose (weniger
+  Versions-Fallstricke ohne Testgerät). 3 hartcodierte Platzhalter-Sender
+  (Deutschlandfunk/1LIVE/SWR3). `StreamAnalyzer` dekodiert den Stream
+  ein zweites Mal unabhängig vom ExoPlayer nur für die Analyse (kein
+  Anzapfen von ExoPlayers Audio-Pfad) — Preis: doppelter
+  Netzwerkverbrauch, siehe README.
+- **Erkennungsglättung nachgerüstet** (Nutzer beobachtete Flackern
+  zwischen Sprache/Musik): Ursache war eine strikte "N Sekunden ohne
+  Unterbrechung"-Serie (wie `CONSECUTIVE_SPEECH_TO_SWITCH` im
+  Docker-Projekt) bei 0.5s-Häppchen — normale kurze Sprechpausen (Vosk
+  liefert dann kurz ein leeres Partial-Result) warfen die Serie staendig
+  zurück. Ersetzt durch gleitendes Mehrheitsvotum über die letzten 4.0s
+  (`SMOOTHING_WINDOW_SECONDS`) mit Hysterese (`RATIO_TO_CONFIRM_SPEECH
+  =0.65` / `RATIO_TO_CONFIRM_MUSIC=0.30`) statt harter Serie. Dabei
+  einen zweiten, unabhängigen Bug gefunden und mitgefixt: die
+  Abbruchprüfung der Analyse-Schleife testete den dauerhaften
+  Service-Scope statt den eigenen, kurzlebigen Job — eine alte Analyse
+  wäre bei jedem Senderwechsel im Hintergrund weitergelaufen
+  (`coroutineContext.isActive` statt `scope.isActive`).
+- **Automatisches Umschalten aktiviert** (`PlaybackService`): reagiert
+  auf den geglätteten Status, schaltet bei bestätigter Sprache zum
+  nächsten Sender in der hartcodierten Liste (Ring), mit Obergrenze
+  (ein voller Durchlauf durch alle Sender ohne Treffer → 20s Pause statt
+  Endlosschleife). Erste Umsetzung hatte die Richtung versehentlich
+  umgedreht (schaltete weg von Musik statt weg von Sprache) — auf
+  Nutzerhinweis korrigiert, jetzt wie im Docker-Projekt: weg von
+  Sprache/Moderation/Werbung, hin zu Musik. `PlaybackService` exponiert
+  jetzt zusätzlich `currentStation` als StateFlow, damit die UI beim
+  automatischen Wechsel mitzieht (vorher blieb die Anzeige beim manuell
+  gestarteten Sender stehen).
+
+### Verifiziert (live im soeben aufgesetzten Emulator, nicht nur kompiliert)
+
+- `./gradlew assembleDebug` erfolgreich, Debug-APK unter
+  `android-app/app/build/outputs/apk/debug/app-debug.apk` (~46MB).
+- Modell-Download im Emulator: "Vosk-Modell (DE) fehlt noch." →
+  Button-Klick → "Vosk-Modell (DE) bereit." (Screenshot).
+- Vor der Richtungskorrektur: 1LIVE (Musik) gestartet → Logcat
+  `08:11:38 Musik erkannt auf '1LIVE...' - schalte weiter zu 'SWR3...'`
+  → `08:12:08 Musik erkannt auf 'SWR3...' - schalte weiter zu
+  'Deutschlandfunk...'` → über 1 Minute stabil auf Deutschlandfunk,
+  Status "🗣 Sprache", kein Nachflackern, kein Weiterspringen.
+- Nach der Richtungskorrektur: Deutschlandfunk (Sprache) gestartet →
+  Logcat `08:20:25 Sprache erkannt auf 'Deutschlandfunk...' - schalte
+  weiter zu '1LIVE...'` → danach stabil auf 1LIVE, Status "🎵 Musik"
+  (Screenshot), kein Weiterspringen — Richtung jetzt wie gewünscht.
+
+### Bewusst NICHT gemacht
+
+Kein Watchdog/Ban-System für tote/dauerhaft-musikalische Sender (explizit
+für später vorgesehen). Kein Wiederverwenden des geladenen Vosk-`Model`
+über Senderwechsel hinweg (kostet ~1-2s pro Wechsel, nicht optimiert).
+Keine Kalibrierung der Hysterese-Schwellen gegen echte Sender-Statistik
+wie im Docker-Projekt (Deutschlandfunk/Schlager-Messung) — die 65%/30%
+sind plausible Startwerte, nicht empirisch abgesichert. Root-`README.md`
+NICHT um den Android-Prototyp ergänzt — der Abschnitt dort beschreibt
+den *deployten Docker-Dienst*, dessen Verhalten/Setup/Konfiguration durch
+`android-app/` unverändert bleibt; das MVP hat sein eigenes README direkt
+in `android-app/`.
