@@ -23,4 +23,17 @@
     <string name="notification_playing">Läuft: %1$s</string>
 
     <string name="current_station_none">Kein Sender ausgewählt</string>
+
+    <string name="update_checking">Suche nach Update…</string>
+    <string name="update_up_to_date">Kein Update verfügbar (aktuell).</string>
+    <string name="update_available">Update verfügbar: %1$s</string>
+    <string name="update_downloading">Update wird geladen…</string>
+    <string name="update_ready">Update geladen — bereit zur Installation.</string>
+    <string name="update_error">Update-Check fehlgeschlagen: %1$s</string>
+    <string name="btn_check_update">🔄 Nach Update suchen</string>
+    <string name="btn_download_update">⬇ Update herunterladen</string>
+    <string name="btn_install_update">📲 Update installieren</string>
+    <string name="update_server_label">Update-Server:</string>
+    <string name="btn_save_update_server">Speichern</string>
+    <string name="update_server_saved">Update-Server gespeichert.</string>
 </resources>

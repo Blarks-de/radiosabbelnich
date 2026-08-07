@@ -19,10 +19,22 @@ Seit 2026-08-07 wird es aber mitgepflegt, dafür zwei feste Regeln:
 - **Nach jedem Android-Build** die entstandene Debug-APK nach
   `android-app/radiozapper.apk` kopieren (fester, einfach auffindbarer Pfad
   statt des tief verschachtelten `app/build/outputs/apk/debug/app-debug.apk`
-  — letzterer ist ohnehin gitignored).
+  — letzterer ist ohnehin gitignored) UND `android-app/version.json` mit
+  einem aktuellen `buildTime`-Stempel neu schreiben (siehe
+  `android-app/README.md`, Abschnitt "Update-Mechanismus" — sonst hält
+  die App den alten Stand weiterhin für aktuell).
 - **`android-app/README.md` bei jeder inhaltlichen Änderung an der App
   nachziehen** (analog zur README-Pflicht des Docker-Projekts oben, nur
   eben für die App statt den Dienst).
+
+Seit 2026-08-07 läuft dafür zusätzlich ein **eigenständiger
+Update-Server** (`android-app/update_server.py`, Port 8098, systemd-User-
+Service `radiozapper-android-update.service`, Linger aktiv) auf diesem
+Host — liefert `android-app/radiozapper.apk`/`version.json` übers
+Tailscale-Netz an die installierte App aus (kein Play Store, kein Auth,
+siehe README dort). Läuft unabhängig vom eigentlichen RadioZapper-Dienst;
+beim Aufräumen von Prozessen/Diensten auf diesem Host nicht mit dem
+Docker-Container verwechseln.
 
 ## Sprache und Konventionen
 

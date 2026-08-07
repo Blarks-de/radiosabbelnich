@@ -5,9 +5,11 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
+import android.provider.Settings
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -20,6 +22,8 @@ import com.radiozapper.mvp.model.Station
 import com.radiozapper.mvp.model.Stations
 import com.radiozapper.mvp.playback.PlaybackService
 import com.radiozapper.mvp.playback.PlaybackStatus
+import com.radiozapper.mvp.update.UpdateManager
+import com.radiozapper.mvp.update.UpdateState
 import com.radiozapper.mvp.vosk.ModelState
 import com.radiozapper.mvp.vosk.VoskModelManager
 import kotlinx.coroutines.Job
@@ -29,6 +33,7 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private lateinit var modelManager: VoskModelManager
+    private lateinit var updateManager: UpdateManager
 
     private var playbackService: PlaybackService? = null
     private var serviceBound = false
@@ -87,6 +92,7 @@ class MainActivity : AppCompatActivity() {
         binding.buildTimeText.text = getString(R.string.build_time, BuildConfig.BUILD_TIME)
 
         modelManager = VoskModelManager(applicationContext)
+        updateManager = UpdateManager(applicationContext)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -94,6 +100,18 @@ class MainActivity : AppCompatActivity() {
 
         setupStationRows()
         observeModelState()
+        observeUpdateState()
+
+        // Update-Server-Adresse bewusst NICHT hartcodiert (siehe UpdateManager.kt) -
+        // wer die APK weitergibt, hat vermutlich nicht denselben Tailscale-Zugriff
+        // wie der Entwickler. Vorbelegt mit dem aktuellen Default/gespeicherten Wert,
+        // per Textfeld jederzeit ohne Rebuild aenderbar.
+        binding.updateServerUrlInput.setText(updateManager.getBaseUrl())
+        binding.saveUpdateServerButton.setOnClickListener {
+            updateManager.setBaseUrl(binding.updateServerUrlInput.text.toString())
+            binding.updateServerUrlInput.setText(updateManager.getBaseUrl())
+            binding.updateStatusText.text = getString(R.string.update_server_saved)
+        }
 
         binding.downloadModelButton.setOnClickListener {
             lifecycleScope.launch { modelManager.downloadAndUnpack() }
@@ -197,5 +215,83 @@ class MainActivity : AppCompatActivity() {
                 binding.downloadModelButton.isEnabled = true
             }
         }
+    }
+
+    /**
+     * Ein einziger Button, dessen Beschriftung/Aktion sich mit dem
+     * UpdateState mitdreht (suchen -> laden -> installieren) statt drei
+     * getrennter Buttons - bewusst minimal, siehe restlicher UI-Ansatz.
+     */
+    private fun observeUpdateState() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                updateManager.state.collect { state -> renderUpdateState(state) }
+            }
+        }
+    }
+
+    private fun renderUpdateState(state: UpdateState) {
+        when (state) {
+            is UpdateState.Idle -> {
+                binding.updateStatusText.text = ""
+                binding.updateButton.text = getString(R.string.btn_check_update)
+                binding.updateButton.isEnabled = true
+                binding.updateButton.setOnClickListener { lifecycleScope.launch { updateManager.checkForUpdate() } }
+            }
+
+            is UpdateState.Checking -> {
+                binding.updateStatusText.text = getString(R.string.update_checking)
+                binding.updateButton.isEnabled = false
+            }
+
+            is UpdateState.UpToDate -> {
+                binding.updateStatusText.text = getString(R.string.update_up_to_date)
+                binding.updateButton.text = getString(R.string.btn_check_update)
+                binding.updateButton.isEnabled = true
+                binding.updateButton.setOnClickListener { lifecycleScope.launch { updateManager.checkForUpdate() } }
+            }
+
+            is UpdateState.Available -> {
+                binding.updateStatusText.text = getString(R.string.update_available, state.buildTime)
+                binding.updateButton.text = getString(R.string.btn_download_update)
+                binding.updateButton.isEnabled = true
+                binding.updateButton.setOnClickListener { lifecycleScope.launch { updateManager.downloadUpdate() } }
+            }
+
+            is UpdateState.Downloading -> {
+                binding.updateStatusText.text = getString(R.string.update_downloading)
+                binding.updateButton.isEnabled = false
+            }
+
+            is UpdateState.ReadyToInstall -> {
+                binding.updateStatusText.text = getString(R.string.update_ready)
+                binding.updateButton.text = getString(R.string.btn_install_update)
+                binding.updateButton.isEnabled = true
+                binding.updateButton.setOnClickListener { installUpdate(state.apkFile) }
+            }
+
+            is UpdateState.Error -> {
+                binding.updateStatusText.text = getString(R.string.update_error, state.message)
+                binding.updateButton.text = getString(R.string.btn_check_update)
+                binding.updateButton.isEnabled = true
+                binding.updateButton.setOnClickListener { lifecycleScope.launch { updateManager.checkForUpdate() } }
+            }
+        }
+    }
+
+    /**
+     * Vor dem eigentlichen Install-Intent pruefen, ob diese App ueberhaupt
+     * unbekannte Apps installieren darf (Android 8+, REQUEST_INSTALL_PACKAGES
+     * allein reicht nicht) - sonst wuerde der Installer stillschweigend
+     * nichts tun statt den Nutzer zur Freigabe zu leiten.
+     */
+    private fun installUpdate(apkFile: java.io.File) {
+        if (!packageManager.canRequestPackageInstalls()) {
+            startActivity(
+                Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName"))
+            )
+            return
+        }
+        startActivity(updateManager.installIntentFor(apkFile))
     }
 }

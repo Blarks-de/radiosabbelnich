@@ -1,5 +1,10 @@
 # RadioZapper MVP (Android)
 
+> ⚠️ **Aktiver Prototyp im Bau, kein fertiges Produkt.** Wird laufend
+> weiterentwickelt (siehe `../SESSION.md` fuer den aktuellen Verlauf) -
+> Verhalten, Konstanten und sogar die Architektur einzelner Teile koennen
+> sich zwischen zwei Sessions noch aendern.
+
 Eigenstaendiger Android-Prototyp, der dasselbe Grundprinzip wie das
 RadioZapper-Docker-Projekt (`../`) auf dem Handy abbildet: Radiostream
 abspielen und per Vosk (Speech-to-Text) grob erkennen, ob gerade Sprache
@@ -33,9 +38,14 @@ Ban-System, kein News-Break, keine Settings-UI.
 - **Automatisches Umschalten** (`PlaybackService.kt`): bei bestaetigter
   Sprache springt die App zum naechsten Sender in der Liste (Ring) -
   wie das Docker-Projekt schaltet sie WEG von Sprache/Moderation, HIN zu
-  Musik. Obergrenze gegen Endlosschleife: nach einem vollen Durchlauf
-  durch alle Sender ohne Treffer (`AUTO_SWITCH_PAUSE_SECONDS=20`) Sekunden
-  Pause statt weiter im Kreis zu springen.
+  Musik. **Cooldown pro Sender** (`STATION_COOLDOWN_SECONDS=60`): ein
+  wegen Sprache verlassener Sender wird beim Ringdurchlauf fuer diese Zeit
+  uebersprungen, statt sofort wieder dran zu sein (Moderation/Gesang ist
+  ja vermutlich noch nicht vorbei) - endet automatisch mit der Zeit ODER
+  sobald der Sender selbst wieder Musik bestaetigt. Obergrenze gegen
+  Endlosschleife: sind entweder alle Sender einmal ohne Treffer probiert
+  ODER alle uebrigen gerade im Cooldown, folgt eine kurze Pause
+  (`AUTO_SWITCH_PAUSE_SECONDS=20`) statt endlos weiterzuspringen.
 - Foreground Service mit Notification, damit Wiedergabe+Analyse
   weiterlaufen, wenn die App im Hintergrund ist; UI zeigt den aktuellen
   Sender live mit, auch wenn der automatische Wechsel ihn geaendert hat
@@ -46,6 +56,13 @@ Ban-System, kein News-Break, keine Settings-UI.
   jedem Build. Zweck: von aussen erkennbar, ob eine gerade installierte
   APK noch ein aelterer Stand ist (Anlass: Auto-Switch schien auf einem
   Test-Handy "nicht zu funktionieren" - war eine veraltete Installation).
+- **Update-Mechanismus mit konfigurierbarer Adresse** (`update/
+  UpdateManager.kt`, siehe eigener Abschnitt unten) - Textfeld "Update-
+  Server:" auf der Startseite (Default aktuell: Tailscale-Adresse dieses
+  Hosts, spaeter voraussichtlich `https://blarks.de`). Button "Nach
+  Update suchen" prueft den dort eingetragenen Server, laedt bei Bedarf
+  die neue APK und stoesst den System-Installer an. Kein Play Store,
+  keine Signatur-Pruefung ueber die Debug-Signierung hinaus.
 
 ### Live-Testergebnis (Android-Emulator auf diesem Host, API 34 x86_64)
 
@@ -113,7 +130,12 @@ etwas (ohne Modell laeuft nur die Wiedergabe, Status bleibt "Gestoppt").
 cd android-app
 ./gradlew assembleDebug
 cp app/build/outputs/apk/debug/app-debug.apk radiozapper.apk
+echo "{\"buildTime\": \"$(date '+%Y-%m-%d %H:%M')\"}" > version.json
 ```
+
+Der letzte Schritt versorgt den Update-Mechanismus (siehe eigener
+Abschnitt unten) mit einem aktuellen Versions-Stempel - ohne ihn denkt
+die App weiterhin, der alte Stand sei der neueste.
 
 Benoetigt Android SDK (`local.properties` mit `sdk.dir=...` oder
 `ANDROID_HOME`/`ANDROID_SDK_ROOT` gesetzt) sowie Internetzugriff beim
@@ -164,6 +186,67 @@ Fehlerflaeche. Preis: der Stream laeuft effektiv doppelt ueber das Netz
 Anzapfen des ExoPlayer-Audio-Pfads via custom `AudioProcessor` der
 naheliegende naechste Schritt.
 
+## Update-Mechanismus (Tailscale, kein Play Store)
+
+Damit eine neue APK nicht jedes Mal per USB/Datei-Transfer aufs Handy
+muss: `update_server.py` ist ein eigenstaendiger, minimaler HTTP-Server
+(Python-Stdlib, keine Abhaengigkeiten), der ausschliesslich zwei Dateien
+aus diesem Verzeichnis ausliefert - `radiozapper.apk` und `version.json`
+(`{"buildTime": "..."}`, siehe Bauen-Abschnitt oben). Kein Auth, genau
+wie der Rest des Projekts (siehe `../CLAUDE.md`, "Kein Auth, nur hinter
+VPN") - nur ueber Tailscale erreichbar, keine oeffentliche Portfreigabe.
+
+Laeuft als systemd-User-Service (`~/.config/systemd/user/
+radiozapper-android-update.service`, Linger aktiv, ueberlebt also auch
+ohne aktive Login-Session):
+
+```bash
+systemctl --user status radiozapper-android-update.service
+journalctl --user -u radiozapper-android-update.service -f
+```
+
+Port `8098`. **Die Server-Adresse ist bewusst NICHT hartcodiert** - sobald
+diese App an andere weitergegeben wird, hat niemand sonst Zugriff auf
+dieses Tailscale-Netz bzw. will den eigenen PC als Update-Server
+betreiben. `UpdateManager.kt` haelt sie in `SharedPreferences`
+(`getBaseUrl()`/`setBaseUrl()`), mit einem Textfeld direkt auf der
+Startseite ("Update-Server:") jederzeit ohne Rebuild aenderbar.
+`DEFAULT_UPDATE_BASE_URL` im Code ist nur der Startwert, falls noch
+nichts gespeichert ist - aktuell
+`http://dockfish.icefish-ghost.ts.net:8098` (Tailscale-MagicDNS-Name statt
+IP, damit ein IP-Wechsel des Hosts nichts bricht), weil das der einzige
+tatsaechlich existierende Server ist. **Geplant**: sobald ein oeffentlicher
+Server unter `https://blarks.de` steht, wird DAS der neue Default - bis
+dahin kann jeder, der die APK bekommt, einfach seine eigene Adresse ins
+Textfeld eintragen (oder leer/unveraendert lassen, wenn er ohnehin keinen
+eigenen Server hat und nur manuell aktualisieren will).
+
+Button "Nach Update suchen": laedt `version.json` von der aktuell
+eingestellten Adresse, vergleicht den `buildTime`-String 1:1 gegen
+`BuildConfig.BUILD_TIME` der laufenden App (reiner String-Vergleich, keine
+Datums-Ordnung - ein Rollback auf einen aelteren Server-Stand wuerde also
+ebenfalls als "Update verfuegbar" gemeldet). Bei Unterschied: Button laedt
+die APK in den Cache und stoesst danach ueber `FileProvider` +
+`Intent.ACTION_VIEW` (`android.permission.REQUEST_INSTALL_PACKAGES`) den
+normalen System-Installer an - keine stille Auto-Installation (dafuer
+waere die App Device-Owner/MDM, weit ausserhalb des Scopes). Vor dem
+allerersten Update fragt Android einmalig, ob diese App unbekannte Apps
+installieren darf (`Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES`) - das
+faengt `installUpdate()` in `MainActivity.kt` ab und leitet dorthin
+weiter, statt dass der Install-Intent kommentarlos ins Leere laeuft.
+
+**Emulator-Einschraenkung, kein App-Bug**: der Android-Emulator auf
+diesem Host loest Tailscale-MagicDNS-Namen nicht auf (eigenes NAT-Netz,
+nutzt nicht Tailscales DNS) - `adb shell ping dockfish.icefish-ghost.ts.net`
+schlaegt dort fehl, `ping 100.92.3.18` (dieselbe Tailscale-IP direkt)
+funktioniert. Deshalb im Emulator ueber das Textfeld auf
+`http://10.0.2.2:8098` umgestellt (Emulator-Alias fuer den Host) - damit
+den KOMPLETTEN Ablauf (Check → Download → System-Installer-Dialog "Do you
+want to update this app?") verifiziert, siehe SESSION.md. Auf einem
+echten, im Tailnet angemeldeten Handy mit aktiviertem "Use Tailscale DNS"
+sollte der Default-Hostname normal aufloesen; falls nicht, greift genau
+dafuer das Textfeld - einfach die Tailscale-IP `100.92.3.18` eintragen.
+
 ## Bekannte Grenzen / offene Punkte
 
 - **Doppelter Netzwerkverbrauch** durch die zwei unabhaengigen
@@ -181,9 +264,23 @@ naheliegende naechste Schritt.
   gemessen, siehe dessen `CLAUDE.md`) sind `RATIO_TO_CONFIRM_SPEECH`/
   `RATIO_TO_CONFIRM_MUSIC` plausible Startwerte, keine Messwerte. Bei
   Gesang koennte das haeufiger falsch-positiv auf "Sprache" kippen.
-- **Kein Cooldown pro einzelnem Sender** - die Pause nach einem vollen
-  Durchlauf gilt global, nicht "dieser eine Sender ist erstmal tabu".
-  Kommt frueher oder spaeter mit dem Watchdog/Ban-System.
-- **Keine Mindest-Verweildauer** vor dem naechsten Auto-Switch-Versuch.
+- **Cooldown ist reines In-Memory-Timing, kein Ban-System** - er verfaellt
+  einfach nach `STATION_COOLDOWN_SECONDS`, es gibt keine Eskalation (z.B.
+  laenger werdende Cooldowns bei wiederholten Treffern) und nichts
+  ueberlebt einen Neustart der App. Das eigentliche Watchdog/Ban-System
+  ist weiterhin nicht umgesetzt.
+- **Keine Mindest-Verweildauer** vor dem naechsten Auto-Switch-Versuch -
+  der Cooldown wirkt nur auf den VERLASSENEN Sender, nicht auf den NEUEN
+  (der koennte theoretisch sofort wieder als Sprache gelten).
 - Kein Wiederverbindungsversuch bei Stream-Abbruch (ExoPlayer-Listener
   fuer Fehler/Retry ist nicht angebunden).
+- **Update-Mechanismus braucht denselben Debug-Signierschluessel** ueber
+  Installationen hinweg - Android verweigert ein Update, wenn der neue
+  APK-Signer vom installierten abweicht. Solange `~/.android/
+  debug.keystore` auf diesem Host nicht geloescht/neu erzeugt wird, ist
+  das kein Problem (Gradle nutzt automatisch immer dieselbe Datei); falls
+  doch, muss die App auf dem Handy einmal deinstalliert werden, bevor die
+  naechste Update-Installation wieder klappt.
+- **Kein automatischer Update-Check, keine Benachrichtigung** - der
+  Nutzer muss selbst auf "Nach Update suchen" tippen. Kein Hintergrund-
+  Polling (bewusst - haette einen weiteren Dauer-Netzwerkzugriff bedeutet).

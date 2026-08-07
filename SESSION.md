@@ -4293,3 +4293,153 @@ Sender eingebaut, obwohl der zweite Testlauf genau den Fall zeigt, in dem
 das nützlich wäre (Sender, der wiederholt faelschlich "Sprache" liefert,
 kommt sofort wieder an die Reihe) — bleibt wie zuvor für das
 Watchdog/Ban-System vorgesehen.
+
+## 2026-08-07 (Fortsetzung 3) — Cooldown pro Sender + Update-Mechanismus über Tailscale
+
+Drei Anforderungen: (1) den im vorigen Eintrag skizzierten Cooldown pro
+Sender tatsächlich einbauen, (2) einen deutlichen "im Bau"-Hinweis ins
+README, (3) einen Update-Mechanismus, damit das Handy (im
+Tailscale-Netz) eine neue APK direkt vom Dockfish-Host ziehen kann, statt
+jedes Mal per USB/Datei-Transfer.
+
+### Umsetzung
+
+- **Cooldown pro Sender** (`PlaybackService.kt`): neue Konstante
+  `STATION_COOLDOWN_SECONDS=60` + `stationCooldownUntil`-Map (Sender-ID →
+  Ablaufzeitpunkt). `attemptAutoSwitch()` markiert den verlassenen Sender
+  beim Wegspringen; `nextStationOffCooldown()` sucht im Ring den nächsten
+  Sender, der NICHT im Cooldown ist, statt blind auf `+1` zu springen.
+  Kein passender Sender gefunden (alle im Cooldown) → dieselbe
+  Pausen-Behandlung wie "alle Sender Sprache". Cooldown-Eintrag wird
+  gelöscht, sobald der betroffene Sender selbst wieder Musik bestätigt
+  (kein Grund, ihn länger zu sperren als nötig).
+- **README-Hinweis**: prominente Box direkt unter der H1 in
+  `android-app/README.md` — "Aktiver Prototyp im Bau, kein fertiges
+  Produkt", Verweis auf SESSION.md für den laufenden Verlauf.
+- **Update-Mechanismus**:
+  - `android-app/update_server.py` — Python-Stdlib-`http.server`,
+    liefert ausschließlich `radiozapper.apk`/`version.json` aus diesem
+    Verzeichnis (expliziter Pfad-Whitelist-Check gegen Directory-Traversal
+    auf Quellcode/Keystore im selben Baum), Port 8098 (mit `ss -tlnp`
+    geprüft, dass frei — 8090 war auf diesem vielgenutzten Host schon von
+    einem anderen Dienst belegt).
+  - Als systemd-User-Service eingerichtet
+    (`~/.config/systemd/user/radiozapper-android-update.service`,
+    `enable --now`) — Linger war für diesen User bereits aktiv, der
+    Dienst überlebt also auch ohne aktive Login-Session. Das Anlegen der
+    Service-Datei wurde vom Auto-Mode-Classifier zunächst blockiert
+    (persistente System-Änderung) — auf explizite Nutzer-Bestätigung
+    (AskUserQuestion) danach umgesetzt.
+  - Android-seitig: `update/UpdateManager.kt` (neues Package) — holt
+    `version.json`, vergleicht `buildTime` 1:1 gegen
+    `BuildConfig.BUILD_TIME` (reiner String-Vergleich, kein Datums-
+    Vergleich), lädt bei Unterschied die APK in `cacheDir/updates/`.
+    `REQUEST_INSTALL_PACKAGES`-Permission + `FileProvider`
+    (`res/xml/file_paths.xml`, `<cache-path name="updates".../>`) statt
+    einer `file://`-Uri (seit Android 7 sonst `FileUriExposedException`).
+    Ein-Button-UI in `MainActivity.kt`, Beschriftung/Aktion wandert mit
+    dem `UpdateState` (Idle→Checking→Available→Downloading→
+    ReadyToInstall). Vor der eigentlichen Install-Intent wird
+    `packageManager.canRequestPackageInstalls()` geprüft — sonst bliebe
+    ein fehlender "Installation aus unbekannten Quellen"-Grant beim
+    ersten Update stillschweigend wirkungslos statt zur Freigabe-Seite zu
+    leiten.
+  - `UPDATE_BASE_URL` nutzt den Tailscale-MagicDNS-Namen
+    (`dockfish.icefish-ghost.ts.net`) statt der rohen IP, damit eine
+    Neuanmeldung des Hosts im Tailnet (→ neue IP) die App nicht bricht.
+  - Build-Skript um einen dritten Schritt ergänzt (`echo
+    '{"buildTime": "..."}' > version.json`) — ohne den würde die App den
+    jeweils letzten Stand dauerhaft für aktuell halten.
+- **Erste Gradle-KTS-Falle**: `buildConfigField` mit vollqualifiziertem
+  `java.text.SimpleDateFormat`/`java.util.Date` direkt im Skript schlug
+  fehl ("Unresolved reference: text"/"util", vermutlich Namenskollision
+  mit einer Gradle-Erweiterung `java` im KTS-Scope) — behoben mit
+  regulären `import`-Zeilen am Dateianfang statt Vollqualifizierung
+  (siehe auch Fortsetzung 2 oben, dort trat dasselbe Muster zuerst auf).
+
+### Verifiziert (Emulator, frischer Build inkl. version.json)
+
+- `javap -constants` auf der kompilierten `BuildConfig.class` bestätigt:
+  eingebetteter `BUILD_TIME`-Wert stimmt exakt mit dem parallel
+  geschriebenen `version.json` überein.
+- `curl` gegen den laufenden Update-Server (localhost UND direkt über die
+  Tailscale-IP 100.92.3.18): `radiozapper.apk` liefert 200 mit korrektem
+  Content-Type, `version.json` liefert den aktuellen Stempel,
+  `/README.md` (nicht auf der Whitelist) liefert 404 — Pfad-Filter
+  funktioniert.
+- App im Emulator: "Nach Update suchen" liefert erwartungsgemäß einen
+  Fehler ("Unable to resolve host dockfish.icefish-ghost.ts.net") -
+  Emulator-Gastsystem löst Tailscale-MagicDNS nicht auf (eigenes
+  NAT-Netz, nicht im Tailnet), `ping` auf die reine Tailscale-IP
+  funktioniert dagegen aus dem Emulator heraus. Kein Absturz, Fehlertext
+  korrekt angezeigt, Button bleibt bedienbar — die eigentliche
+  Erfolgs-Bestätigung (Download+Install-Intent) kann nur auf dem echten,
+  im Tailnet angemeldeten Handy erfolgen.
+- Cooldown live beobachtet: Deutschlandfunk → 1LIVE (nach 4s erneut
+  Sprache!) → SWR3 → dort "Alle anderen Sender noch im Cooldown - Pause
+  für 20s" statt eines dritten Sofort-Sprungs zurück zu Deutschlandfunk -
+  genau das Verhalten, das im vorigen Eintrag als fehlend identifiziert
+  wurde.
+
+### Bewusst NICHT gemacht
+
+Kein automatischer Update-Check/Push-Benachrichtigung (Nutzer muss selbst
+auf den Button tippen) - bewusst kein Hintergrund-Polling für einen
+zusätzlichen Dauer-Netzwerkzugriff. Keine Signatur-/Integritätsprüfung
+der heruntergeladenen APK über die ohnehin vom System erzwungene
+Debug-Signatur hinaus. Keine IP-Fallback-Konstante fest eingebaut, nur
+in der README als manuelle Option dokumentiert (Tailscale-IP kann sich
+bei Neuanmeldung ändern, der Hostname ist der robustere Default). Kein
+Commit/Push in diesem Schritt.
+
+## 2026-08-07 (Fortsetzung 4) — Update-Adresse konfigurierbar statt hartcodiert
+
+Nutzer-Einwand (berechtigt): die Tailscale-Adresse aus Fortsetzung 3 war
+als privater `const val` hartcodiert — sobald die App an andere
+weitergegeben wird, hat niemand sonst Zugriff auf dieses Tailscale-Netz
+oder will den eigenen PC als Update-Server betreiben. Später soll ein
+öffentlicher Server unter `https://blarks.de` (Strato) die eigentliche
+Verteilung übernehmen.
+
+### Umsetzung
+
+- **`UpdateManager.kt`**: `UPDATE_BASE_URL` (privater `const val`) ersetzt
+  durch `DEFAULT_UPDATE_BASE_URL` (bleibt vorerst die Tailscale-Adresse,
+  der einzige tatsächlich existierende Server) + `SharedPreferences`
+  (`getBaseUrl()`/`setBaseUrl()` — trimmt Leerzeichen/trailing Slash).
+  `checkForUpdate()`/`downloadUpdate()` lesen jetzt `getBaseUrl()` statt
+  der Konstante direkt.
+- **UI**: neues Textfeld "Update-Server:" + "Speichern"-Button auf der
+  Startseite, direkt über dem bestehenden Update-Button — vorbelegt mit
+  dem aktuell gespeicherten/Default-Wert, jederzeit ohne Rebuild änderbar.
+  Kein separater Settings-Screen (bewusst minimal, wie der Rest der App).
+
+### Verifiziert (Emulator, kompletter Roundtrip statt nur Fehlerfall wie in Fortsetzung 3)
+
+- Feld korrekt vorbelegt mit dem Tailscale-Default beim ersten Start.
+- Auf `http://10.0.2.2:8098` umgestellt (Emulator-Alias für den Host) +
+  Speichern → "Update-Server gespeichert." → "Nach Update suchen" meldet
+  korrekt "Kein Update verfügbar (aktuell)" (echter Server-Roundtrip über
+  die neu eingetragene Adresse, `version.json` stimmte exakt mit
+  `BuildConfig.BUILD_TIME` überein — mit `javap -constants` gegenprüft).
+- `version.json` auf dem Host temporär auf einen fiktiven Stand
+  (`2099-01-01 00:00`) gesetzt → App meldet "Update verfügbar:
+  2099-01-01 00:00" → "Update herunterladen" lädt die (identische) APK
+  erfolgreich (~46MB in Sekunden über die lokale Verbindung) →
+  "Update installieren" → `canRequestPackageInstalls()` war noch nicht
+  gesetzt → korrekte Weiterleitung zum System-Screen "Install unknown
+  apps" für genau diese App → nach Freigabe erneuter Tap → nativer
+  Android-Installer-Dialog "Do you want to update this app?" (korrekt als
+  UPDATE derselben App erkannt, nicht als Neuinstallation - Signatur
+  passt). Mit "Cancel" abgebrochen (keine echte neue Version vorhanden),
+  kompletter Ablauf damit aber lückenlos bestätigt. Danach `version.json`
+  auf den echten Stand zurückgesetzt.
+- Kein Absturz in beiden Durchläufen (Crash-Log-Buffer leer geprüft).
+
+### Bewusst NICHT gemacht
+
+Kein Umschalten des Defaults auf `https://blarks.de` — dieser Server
+existiert nach Nutzerangabe noch nicht ("wird später vermutlich...").
+Default bleibt die Tailscale-Adresse, bis der öffentliche Server
+tatsächlich steht. Keine Validierung der eingegebenen URL (z.B. Schema-
+Zwang `http(s)://`) - vertraut auf den Nutzer, der das Feld befüllt.

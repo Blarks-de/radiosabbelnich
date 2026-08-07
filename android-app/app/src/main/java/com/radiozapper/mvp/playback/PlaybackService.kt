@@ -27,9 +27,15 @@ private const val NOTIFICATION_CHANNEL_ID = "playback"
 private const val NOTIFICATION_ID = 1
 
 // Automatisches Umschalten: nach einem vollen Durchlauf durch die Senderliste
-// (jeder Sender einmal probiert, jeder davon Musik) kurze Pause statt endlos
+// (jeder Sender einmal probiert, jeder davon Sprache) kurze Pause statt endlos
 // weiterzuspringen - siehe Klassen-Doc unten fuer die Begruendung.
 private const val AUTO_SWITCH_PAUSE_SECONDS = 20L
+
+// Cooldown pro Sender: ein Sender, der gerade wegen Sprache verlassen wurde,
+// wird fuer diese Zeit beim Weiterspringen uebersprungen - sonst kommt er beim
+// naechsten Ringdurchlauf sofort wieder dran, obwohl die Moderation/der
+// Gesang (siehe README, "Bekannte Grenzen") vermutlich noch nicht vorbei ist.
+private const val STATION_COOLDOWN_SECONDS = 60L
 
 /**
  * Foreground Service: haelt den ExoPlayer fuer die eigentliche Wiedergabe UND
@@ -51,8 +57,11 @@ private const val AUTO_SWITCH_PAUSE_SECONDS = 20L
  * Treffer. Mit nur 3 hartcodierten Sendern laesst sich das so klar beobachten:
  * die App wandert bis zum ersten ueberwiegend musikalischen Sender (i.d.R.
  * 1LIVE oder SWR3) und bleibt dort stehen. Kein Watchdog/Ban-System (kommt
- * erst spaeter) - nur die einfache Ringlogik plus eine Obergrenze gegen die
- * Endlosschleife, falls zufaellig ALLE Sender gerade Sprache spielen.
+ * erst spaeter) - nur die einfache Ringlogik, ein Cooldown pro Sender
+ * (`STATION_COOLDOWN_SECONDS`, siehe `nextStationOffCooldown()` - ein wegen
+ * Sprache verlassener Sender kommt fuer diese Zeit beim Ringdurchlauf nicht
+ * sofort wieder an die Reihe) und eine Obergrenze gegen die Endlosschleife,
+ * falls zufaellig ALLE Sender gerade Sprache spielen oder im Cooldown sind.
  */
 class PlaybackService : LifecycleService() {
 
@@ -71,6 +80,7 @@ class PlaybackService : LifecycleService() {
     private var activeModelPath: String? = null
     private var autoSwitchAttempts = 0
     private var autoSwitchPausedUntil = 0L
+    private val stationCooldownUntil = mutableMapOf<String, Long>()
 
     val status get() = analyzer.status
 
@@ -115,6 +125,7 @@ class PlaybackService : LifecycleService() {
         activeModelPath = null
         autoSwitchAttempts = 0
         autoSwitchPausedUntil = 0L
+        stationCooldownUntil.clear()
         player?.stop()
         analyzer.stop()
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
@@ -128,7 +139,12 @@ class PlaybackService : LifecycleService() {
      */
     private fun handleStatusForAutoSwitch(status: PlaybackStatus) {
         when (status) {
-            PlaybackStatus.MUSIC -> autoSwitchAttempts = 0 // Treffer - Zaehler fuer die naechste Sprache-Serie zuruecksetzen
+            PlaybackStatus.MUSIC -> {
+                autoSwitchAttempts = 0 // Treffer - Zaehler fuer die naechste Sprache-Serie zuruecksetzen
+                // Kein Grund, einen Sender laenger im Cooldown zu halten, der
+                // sich inzwischen selbst als Musik bestaetigt hat.
+                _currentStation.value?.let { stationCooldownUntil.remove(it.id) }
+            }
             PlaybackStatus.SPEECH -> attemptAutoSwitch()
             else -> Unit
         }
@@ -146,6 +162,8 @@ class PlaybackService : LifecycleService() {
         val currentIndex = stations.indexOfFirst { it.id == station.id }
         if (currentIndex < 0) return
 
+        stationCooldownUntil[station.id] = now + STATION_COOLDOWN_SECONDS * 1000
+
         autoSwitchAttempts++
         if (autoSwitchAttempts > stations.size) {
             Log.i(
@@ -158,9 +176,28 @@ class PlaybackService : LifecycleService() {
             return
         }
 
-        val next = stations[(currentIndex + 1) % stations.size]
+        val next = nextStationOffCooldown(stations, currentIndex, now)
+        if (next == null) {
+            // Alle anderen Sender noch im Cooldown - dieselbe Sackgasse wie
+            // "alle Sender Sprache", also dieselbe Behandlung: kurze Pause.
+            Log.i(TAG, "Alle anderen Sender noch im Cooldown - Pause fuer ${AUTO_SWITCH_PAUSE_SECONDS}s")
+            autoSwitchAttempts = 0
+            autoSwitchPausedUntil = now + AUTO_SWITCH_PAUSE_SECONDS * 1000
+            return
+        }
+
         Log.i(TAG, "Sprache erkannt auf '${station.name}' - schalte weiter zu '${next.name}'")
         play(next, activeModelPath)
+    }
+
+    /** Naechster Sender im Ring ab currentIndex (exklusiv), der aktuell nicht im Cooldown ist. */
+    private fun nextStationOffCooldown(stations: List<Station>, currentIndex: Int, now: Long): Station? {
+        for (offset in 1..stations.size) {
+            val candidate = stations[(currentIndex + offset) % stations.size]
+            val cooldownUntil = stationCooldownUntil[candidate.id] ?: 0L
+            if (now >= cooldownUntil) return candidate
+        }
+        return null
     }
 
     private fun startForegroundNotification(stationName: String) {
