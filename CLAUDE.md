@@ -16,25 +16,28 @@ an deren Architektur/Verhalten; die obigen Konventionen (Deutsch, SESSION.md,
 VERSION-Pflege) gelten für den Docker-Dienst, nicht 1:1 für den Android-Code.
 Seit 2026-08-07 wird es aber mitgepflegt, dafür zwei feste Regeln:
 
-- **Nach jedem Android-Build** die entstandene Debug-APK nach
-  `android-app/keinsabbelradio.apk` kopieren (fester, einfach auffindbarer Pfad
-  statt des tief verschachtelten `app/build/outputs/apk/debug/app-debug.apk`
-  — letzterer ist ohnehin gitignored) UND `android-app/version.json` mit
-  einem aktuellen `buildTime`-Stempel neu schreiben (siehe
+- **Nach jedem Android-Build** die entstandene Debug-APK lokal nach
+  `android-app/keinsabbelradio.apk` kopieren (fester, einfach auffindbarer
+  Pfad statt des tief verschachtelten
+  `app/build/outputs/apk/debug/app-debug.apk` — letzterer ist ohnehin
+  gitignored) UND zusätzlich mit Zeitstempel im Dateinamen
+  (`keinsabbelradio-YYYYMMDD-HHMMSS.apk`) sowie ein passendes
+  `version.json` (`{"buildTime": "...", "apkFile": "..."}`) nach
+  `blarks.de/update_keinsabbelradio/` hochladen (siehe
   `android-app/README.md`, Abschnitt "Update-Mechanismus" — sonst hält
   die App den alten Stand weiterhin für aktuell).
 - **`android-app/README.md` bei jeder inhaltlichen Änderung an der App
   nachziehen** (analog zur README-Pflicht des Docker-Projekts oben, nur
   eben für die App statt den Dienst).
 
-Seit 2026-08-07 läuft dafür zusätzlich ein **eigenständiger
-Update-Server** (`android-app/update_server.py`, Port 8098, systemd-User-
-Service `keinsabbelradio-android-update.service`, Linger aktiv) auf diesem
-Host — liefert `android-app/keinsabbelradio.apk`/`version.json` übers
-Tailscale-Netz an die installierte App aus (kein Play Store, kein Auth,
-siehe README dort). Läuft unabhängig vom eigentlichen KeinSabbelRadio-Dienst;
-beim Aufräumen von Prozessen/Diensten auf diesem Host nicht mit dem
-Docker-Container verwechseln.
+Der Update-Mechanismus lief bis 2026-08-08 über einen eigenständigen
+lokalen Server (`update_server.py` + systemd-Service, nur übers
+Tailscale-Netz erreichbar) — seitdem stattdessen über den ganz normalen,
+öffentlich erreichbaren Webserver von `blarks.de`
+(`/srv/www/blarks.de/update_keinsabbelradio/`, statisches Verzeichnis,
+kein eigener Server-Prozess mehr nötig). Bewusste Ausnahme von "Kein Auth,
+nur hinter VPN" unten: verteilt nur eine App-Binary ohne Nutzerdaten,
+Details und Abwägung in `android-app/SESSION.md`.
 
 ## Sprache und Konventionen
 

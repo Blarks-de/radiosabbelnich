@@ -6,8 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > KeinSabbelRadio-Repos — siehe `../CLAUDE.md`, Abschnitt "Android-Prototyp
 > (separates Projekt)", für die Abgrenzung zum Docker-Dienst. Zwei feste
 > Regeln von dort gelten weiterhin unbedingt: nach jedem Build die APK
-> nach `keinsabbelradio.apk` kopieren + `version.json` neu schreiben (siehe
-> unten), und `README.md` bei jeder inhaltlichen Änderung nachziehen.
+> lokal nach `keinsabbelradio.apk` kopieren + `version.json` neu schreiben
+> UND beides zeitgestempelt nach `blarks.de/update_keinsabbelradio/`
+> hochladen (siehe unten), und `README.md` bei jeder inhaltlichen Änderung
+> nachziehen.
 
 Fertig im Sinne des Fahrplans (alle acht Phasen aus
 `KeinSabbelRadio_Android_Fahrplan.md` umgesetzt, zuletzt Phase 8 am
@@ -42,14 +44,25 @@ cd android-app
 ./gradlew assembleDebug
 
 # PFLICHT nach jedem Build (siehe ../CLAUDE.md):
-cp app/build/outputs/apk/debug/app-debug.apk keinsabbelradio.apk
-echo "{\"buildTime\": \"$(date '+%Y-%m-%d %H:%M')\"}" > version.json
+cp app/build/outputs/apk/debug/app-debug.apk keinsabbelradio.apk   # lokal, fuer adb install
+STAMP=$(date '+%Y%m%d-%H%M%S')
+APK_NAME="keinsabbelradio-${STAMP}.apk"
+cp keinsabbelradio.apk "$APK_NAME"
+echo "{\"buildTime\": \"$(date '+%Y-%m-%d %H:%M')\", \"apkFile\": \"$APK_NAME\"}" > version.json
+scp "$APK_NAME" version.json strato:/srv/www/blarks.de/update_keinsabbelradio/
+rm "$APK_NAME"   # blarks.de ist die Quelle der Wahrheit, keine doppelte lokale Ablage
 ```
 
-Ohne den zweiten Schritt hält die App den alten Stand weiterhin für
-aktuell (`UpdateManager` vergleicht `version.json` gegen
-`BuildConfig.BUILD_TIME` als reinen String, siehe unten) — der erste
-Schritt allein reicht nicht.
+Ohne den Upload-Schritt sieht der Update-Server weiterhin den alten Stand
+(`UpdateManager` vergleicht das dort liegende `version.json` gegen
+`BuildConfig.BUILD_TIME` als reinen String, siehe unten) — der lokale
+`keinsabbelradio.apk`-Schritt allein reicht nicht, der ist nur fürs
+Emulator-`adb install` gedacht. Jede Datei bekommt einen eigenen,
+zeitgestempelten Namen (`keinsabbelradio-YYYYMMDD-HHMMSS.apk`) statt
+überschrieben zu werden — `version.json`s `apkFile`-Feld sagt der App,
+welche genau die aktuelle ist (siehe "Update-Mechanismus" unten). Ältere
+Stände bleiben auf `blarks.de` liegen, es gibt aktuell kein automatisches
+Aufräumen.
 
 Benötigt Android SDK (`local.properties` mit `sdk.dir=...` oder
 `ANDROID_HOME`/`ANDROID_SDK_ROOT`) sowie Internetzugriff beim ersten Build
@@ -67,9 +80,9 @@ adb install -r keinsabbelradio.apk
 adb logcat -s PlaybackService:*   # jeder Sprache/Musik-Wechsel, Watchdog-Events
 ```
 
-Installation auf einem echten Gerät und Update-Server-Details (Tailscale,
-`update_server.py`, systemd-Service): siehe README-Abschnitte
-"Installation" und "Update-Mechanismus".
+Installation auf einem echten Gerät und Update-Server-Details
+(`blarks.de/update_keinsabbelradio`, statisch per Apache ausgeliefert):
+siehe README-Abschnitte "Installation" und "Update-Mechanismus".
 
 ## Architektur
 
@@ -228,24 +241,43 @@ Update auf diese Version nichts sichtbar ändert.
 
 Kein Play Store, keine Signaturprüfung über die Debug-Signierung hinaus.
 Lädt `version.json` vom in `SharedPreferences` gespeicherten Server
-(Textfeld auf der Startseite, Default `DEFAULT_UPDATE_BASE_URL` = die
-Tailscale-Adresse des Entwicklungs-Hosts), vergleicht `buildTime` als
+(Textfeld auf der Startseite, Default `DEFAULT_UPDATE_BASE_URL` =
+`https://blarks.de/update_keinsabbelradio`), vergleicht `buildTime` als
 reinen String gegen `BuildConfig.BUILD_TIME` — deshalb ist der
-`version.json`-Schritt beim Bauen (siehe oben) nicht optional. Bei
-Unterschied: APK-Download in den Cache, dann System-Installer über
-`FileProvider` + `ACTION_VIEW` (`REQUEST_INSTALL_PACKAGES`) — keine stille
-Auto-Installation. Server-seitige Gegenstelle ist `update_server.py` +
-der systemd-User-Service, beide außerhalb dieses Gradle-Projekts (siehe
-`../CLAUDE.md`, Abschnitt "Android-Prototyp") — liefert nur
-`keinsabbelradio.apk`/`version.json` aus diesem Verzeichnis aus, kein Auth,
-nur übers Tailscale-Netz erreichbar.
+`version.json`-Schritt beim Bauen (siehe oben) nicht optional. Seit dem
+Umzug von der lokalen Tailscale-Adresse auf `blarks.de` (2026-08-08,
+siehe SESSION.md) bekommt jede hochgeladene APK einen eigenen,
+zeitgestempelten Dateinamen statt eines fest überschriebenen
+`keinsabbelradio.apk` — `version.json`s zweites Feld `apkFile` sagt der
+App den exakten Namen, `UpdateManager` merkt sich das Ergebnis aus
+`checkForUpdate()` intern für den nachfolgenden `downloadUpdate()`-Aufruf
+(kein fest verdrahteter Dateiname mehr im Code). Bei Unterschied:
+APK-Download in den Cache, dann System-Installer über `FileProvider` +
+`ACTION_VIEW` (`REQUEST_INSTALL_PACKAGES`) — keine stille
+Auto-Installation. Server-seitige Gegenstelle ist keine eigene Software
+mehr, sondern der ganz normale Apache-Webserver von `blarks.de`
+(statisches Verzeichnis `/srv/www/blarks.de/update_keinsabbelradio/`,
+Verzeichnis-Listing per vhost-Konfiguration gesperrt, `.apk`-MIME-Type
+kommt automatisch aus `/etc/mime.types`) — kein Auth, dafür jetzt
+öffentlich statt nur übers Tailscale-Netz erreichbar (bewusste
+Entscheidung, siehe SESSION.md: nur eine App-Binary ohne Nutzerdaten,
+Risiko dadurch überschaubar). Der vorherige `update_server.py` +
+systemd-User-Service sind ersatzlos entfernt.
 
 Update-Installationen brauchen über die Zeit denselben Debug-Signierschlüssel
 (`~/.android/debug.keystore` auf diesem Host) — sonst verweigert Android
 das Update, weil sich der APK-Signer geändert hat.
 
-## Kein Auth, nur privater Rahmen
+## Kein Auth
 
-Wie das Docker-Projekt (siehe dessen `CLAUDE.md`, "Kein Auth, nur hinter
-VPN"): `update_server.py` hat keinerlei Authentifizierung. Keine Änderungen
-vorschlagen oder umsetzen, die auf öffentliche Erreichbarkeit hinauslaufen.
+Der Update-Mechanismus hat keinerlei Authentifizierung — seit 2026-08-08
+bewusst und explizit auf Nutzerwunsch öffentlich erreichbar unter
+`blarks.de/update_keinsabbelradio` (vorher: nur übers Tailscale-Netz,
+siehe SESSION.md für die Abwägung). Das ist eine bewusste Ausnahme, keine
+Blaupause: anders als beim Docker-Projekt (dessen `CLAUDE.md`, "Kein
+Auth, nur hinter VPN", weiterhin uneingeschränkt gilt — dort steht ein
+kontrollierbarer Live-Dienst samt urheberrechtlich sensiblem Restream
+dahinter) verteilt dieser Endpunkt nur eine App-Binary ohne Nutzerdaten.
+Für jede NEUE serverseitige Komponente in diesem Projekt gilt weiterhin
+der private Default — nicht ungefragt auf öffentliche Erreichbarkeit
+umstellen.

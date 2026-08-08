@@ -188,11 +188,11 @@ merkt (siehe "Bekannte Grenzen").
   Test-Handy "nicht zu funktionieren" - war eine veraltete Installation).
 - **Update-Mechanismus mit konfigurierbarer Adresse** (`update/
   UpdateManager.kt`, siehe eigener Abschnitt unten) - Textfeld "Update-
-  Server:" auf der Startseite (Default aktuell: Tailscale-Adresse dieses
-  Hosts, spaeter voraussichtlich `https://blarks.de`). Button "Nach
-  Update suchen" prueft den dort eingetragenen Server, laedt bei Bedarf
-  die neue APK und stoesst den System-Installer an. Kein Play Store,
-  keine Signatur-Pruefung ueber die Debug-Signierung hinaus.
+  Server:" auf der Startseite (Default `https://blarks.de/
+  update_keinsabbelradio`, oeffentlich erreichbar, kein VPN noetig).
+  Button "Nach Update suchen" prueft den dort eingetragenen Server, laedt
+  bei Bedarf die neue APK und stoesst den System-Installer an. Kein Play
+  Store, keine Signatur-Pruefung ueber die Debug-Signierung hinaus.
 
 ### Live-Testergebnis (Android-Emulator auf diesem Host, API 34 x86_64)
 
@@ -283,18 +283,38 @@ Service kann vom System eher beendet werden) und zeigt den Button zum
 Modell-Download an - erst danach liefert die Sprache/Musik-Erkennung
 etwas (ohne Modell laeuft nur die Wiedergabe, Status bleibt "Gestoppt").
 
+**Fehlermeldung "Es liegt ein Problem mit der App-Datei vor" beim
+Installieren, obwohl der Download vorher erfolgreich war**: fast immer
+ein Signatur-Konflikt mit einer bereits auf dem Gerät vorhandenen
+älteren/andersartig installierten Version derselben App (z.B. eine ganz
+frühe Testinstallation von einem anderen Rechner mit einem anderen
+Debug-Schlüssel) - Android akzeptiert dann kein Update, meldet das aber
+auf vielen Geräten nur als diese unspezifische Datei-Fehlermeldung statt
+eines klaren Signatur-Hinweises. Live so aufgetreten und bestätigt (siehe
+`SESSION.md`, 2026-08-08): **App komplett deinstallieren, danach neu
+installieren** (nicht als Update) behebt es zuverlässig. Voraussetzung
+für künftige nahtlose Updates ist danach derselbe Debug-Signierschlüssel
+über die Zeit (`~/.android/debug.keystore` auf dem Build-Host, siehe
+"Update-Mechanismus" unten).
+
 ## Bauen und Testen
 
 ```bash
 cd android-app
 ./gradlew assembleDebug
-cp app/build/outputs/apk/debug/app-debug.apk keinsabbelradio.apk
-echo "{\"buildTime\": \"$(date '+%Y-%m-%d %H:%M')\"}" > version.json
+cp app/build/outputs/apk/debug/app-debug.apk keinsabbelradio.apk   # lokal, adb install
+STAMP=$(date '+%Y%m%d-%H%M%S')
+APK_NAME="keinsabbelradio-${STAMP}.apk"
+cp keinsabbelradio.apk "$APK_NAME"
+echo "{\"buildTime\": \"$(date '+%Y-%m-%d %H:%M')\", \"apkFile\": \"$APK_NAME\"}" > version.json
+scp "$APK_NAME" version.json strato:/srv/www/blarks.de/update_keinsabbelradio/
+rm "$APK_NAME"
 ```
 
-Der letzte Schritt versorgt den Update-Mechanismus (siehe eigener
-Abschnitt unten) mit einem aktuellen Versions-Stempel - ohne ihn denkt
-die App weiterhin, der alte Stand sei der neueste.
+Der Upload versorgt den Update-Mechanismus (siehe eigener Abschnitt
+unten) mit einem aktuellen Versions-Stempel und der passenden Datei -
+ohne ihn denkt die App weiterhin, der alte Stand sei der neueste, bzw.
+findet gar keine neue Datei zum Herunterladen.
 
 Benoetigt Android SDK (`local.properties` mit `sdk.dir=...` oder
 `ANDROID_HOME`/`ANDROID_SDK_ROOT` gesetzt) sowie Internetzugriff beim
@@ -780,66 +800,91 @@ dass ein erneutes Binden (z.B. nach kurzem Backgrounding) `startCalibration()`
 ein zweites Mal fuer dieselbe Sprache aufruft, was die Sample-Listen sonst
 explizit leeren wuerde.
 
-## Update-Mechanismus (Tailscale, kein Play Store)
+## Update-Mechanismus (blarks.de, kein Play Store)
 
 Damit eine neue APK nicht jedes Mal per USB/Datei-Transfer aufs Handy
-muss: `update_server.py` ist ein eigenstaendiger, minimaler HTTP-Server
-(Python-Stdlib, keine Abhaengigkeiten), der ausschliesslich zwei Dateien
-aus diesem Verzeichnis ausliefert - `keinsabbelradio.apk` und `version.json`
-(`{"buildTime": "..."}`, siehe Bauen-Abschnitt oben). Kein Auth, genau
-wie der Rest des Projekts (siehe `../CLAUDE.md`, "Kein Auth, nur hinter
-VPN") - nur ueber Tailscale erreichbar, keine oeffentliche Portfreigabe.
+muss, liefert `UpdateManager.kt` sie per HTTP(S) direkt aus dem Netz nach.
+Seit 2026-08-08 (vorher: eigener Python-Server nur uebers Tailscale-Netz,
+siehe SESSION.md) ist die Gegenstelle keine eigene Software mehr, sondern
+ein ganz normales, statisches Verzeichnis auf dem oeffentlich erreichbaren
+Webserver von `blarks.de`: `/srv/www/blarks.de/update_keinsabbelradio/`
+(per SSH-Host-Alias `strato` erreichbar). Apache liefert Dateien von dort
+direkt aus - Verzeichnis-Listing ist per vhost-Konfiguration gesperrt
+(`Options -Indexes`), der `.apk`-MIME-Type (`application/vnd.android.
+package-archive`) kommt automatisch aus `/etc/mime.types`, kein
+Zusatzcode noetig.
 
-Laeuft als systemd-User-Service (`~/.config/systemd/user/
-keinsabbelradio-android-update.service`, Linger aktiv, ueberlebt also auch
-ohne aktive Login-Session):
+**Jede hochgeladene APK bekommt einen eigenen, zeitgestempelten Namen**
+(`keinsabbelradio-YYYYMMDD-HHMMSS.apk`) statt eine bestehende Datei zu
+ueberschreiben - `version.json` (`{"buildTime": "...", "apkFile":
+"keinsabbelradio-...apk"}`) sagt der App, welche Datei gerade aktuell
+ist. Kompletter Bauen-und-Verteilen-Schritt (siehe auch `../CLAUDE.md`):
 
 ```bash
-systemctl --user status keinsabbelradio-android-update.service
-journalctl --user -u keinsabbelradio-android-update.service -f
+./gradlew assembleDebug
+cp app/build/outputs/apk/debug/app-debug.apk keinsabbelradio.apk   # lokal, adb install
+STAMP=$(date '+%Y%m%d-%H%M%S')
+APK_NAME="keinsabbelradio-${STAMP}.apk"
+cp keinsabbelradio.apk "$APK_NAME"
+echo "{\"buildTime\": \"$(date '+%Y-%m-%d %H:%M')\", \"apkFile\": \"$APK_NAME\"}" > version.json
+scp "$APK_NAME" version.json strato:/srv/www/blarks.de/update_keinsabbelradio/
+rm "$APK_NAME"
 ```
 
-Port `8098`. **Die Server-Adresse ist bewusst NICHT hartcodiert** - sobald
-diese App an andere weitergegeben wird, hat niemand sonst Zugriff auf
-dieses Tailscale-Netz bzw. will den eigenen PC als Update-Server
-betreiben. `UpdateManager.kt` haelt sie in `SharedPreferences`
-(`getBaseUrl()`/`setBaseUrl()`), mit einem Textfeld direkt auf der
-Startseite ("Update-Server:") jederzeit ohne Rebuild aenderbar.
-`DEFAULT_UPDATE_BASE_URL` im Code ist nur der Startwert, falls noch
-nichts gespeichert ist - aktuell
-`http://dockfish.icefish-ghost.ts.net:8098` (Tailscale-MagicDNS-Name statt
-IP, damit ein IP-Wechsel des Hosts nichts bricht), weil das der einzige
-tatsaechlich existierende Server ist. **Geplant**: sobald ein oeffentlicher
-Server unter `https://blarks.de` steht, wird DAS der neue Default - bis
-dahin kann jeder, der die APK bekommt, einfach seine eigene Adresse ins
-Textfeld eintragen (oder leer/unveraendert lassen, wenn er ohnehin keinen
-eigenen Server hat und nur manuell aktualisieren will).
+Aeltere Staende bleiben auf `blarks.de` liegen (kein automatisches
+Aufraeumen) - nur `version.json` bestimmt, welcher als "aktuell" gilt.
+
+**Kein Auth** - bewusst, siehe `../CLAUDE.md`, Abschnitt "Kein Auth": eine
+App-Binary ohne Nutzerdaten oeffentlich zum Download bereitzustellen ist
+ein anderes Risiko als der Rest des Projekts (Live-Radiodienst,
+urheberrechtlich sensibler Restream), deshalb hier bewusst NICHT mehr
+hinter einem VPN.
+
+**Die Server-Adresse ist weiterhin NICHT hartcodiert** - `UpdateManager.kt`
+haelt sie in `SharedPreferences` (`getBaseUrl()`/`setBaseUrl()`), mit
+einem Textfeld direkt auf der Startseite ("Update-Server:") jederzeit
+ohne Rebuild aenderbar. `DEFAULT_UPDATE_BASE_URL` im Code ist nur der
+Startwert, falls noch nichts gespeichert ist - jetzt
+`https://blarks.de/update_keinsabbelradio`. Wer die APK von woanders
+bekommt oder einen eigenen Server betreiben will, traegt einfach eine
+andere Adresse ins Textfeld ein.
 
 Button "Nach Update suchen": laedt `version.json` von der aktuell
 eingestellten Adresse, vergleicht den `buildTime`-String 1:1 gegen
 `BuildConfig.BUILD_TIME` der laufenden App (reiner String-Vergleich, keine
 Datums-Ordnung - ein Rollback auf einen aelteren Server-Stand wuerde also
-ebenfalls als "Update verfuegbar" gemeldet). Bei Unterschied: Button laedt
-die APK in den Cache und stoesst danach ueber `FileProvider` +
-`Intent.ACTION_VIEW` (`android.permission.REQUEST_INSTALL_PACKAGES`) den
-normalen System-Installer an - keine stille Auto-Installation (dafuer
-waere die App Device-Owner/MDM, weit ausserhalb des Scopes). Vor dem
-allerersten Update fragt Android einmalig, ob diese App unbekannte Apps
-installieren darf (`Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES`) - das
-faengt `installUpdate()` in `MainActivity.kt` ab und leitet dorthin
-weiter, statt dass der Install-Intent kommentarlos ins Leere laeuft.
+ebenfalls als "Update verfuegbar" gemeldet) und merkt sich das `apkFile`
+aus der Antwort fuer den naechsten Schritt. Bei Unterschied: Button laedt
+GENAU diese Datei (`${baseUrl}/${apkFile}`) in den Cache und stoesst
+danach ueber `FileProvider` + `Intent.ACTION_VIEW`
+(`android.permission.REQUEST_INSTALL_PACKAGES`) den normalen
+System-Installer an - keine stille Auto-Installation (dafuer waere die
+App Device-Owner/MDM, weit ausserhalb des Scopes). Vor dem allerersten
+Update fragt Android einmalig, ob diese App unbekannte Apps installieren
+darf (`Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES`) - das faengt
+`installUpdate()` in `MainActivity.kt` ab und leitet dorthin weiter, statt
+dass der Install-Intent kommentarlos ins Leere laeuft.
 
-**Emulator-Einschraenkung, kein App-Bug**: der Android-Emulator auf
-diesem Host loest Tailscale-MagicDNS-Namen nicht auf (eigenes NAT-Netz,
-nutzt nicht Tailscales DNS) - `adb shell ping dockfish.icefish-ghost.ts.net`
-schlaegt dort fehl, `ping 100.92.3.18` (dieselbe Tailscale-IP direkt)
-funktioniert. Deshalb im Emulator ueber das Textfeld auf
-`http://10.0.2.2:8098` umgestellt (Emulator-Alias fuer den Host) - damit
-den KOMPLETTEN Ablauf (Check → Download → System-Installer-Dialog "Do you
-want to update this app?") verifiziert, siehe SESSION.md. Auf einem
-echten, im Tailnet angemeldeten Handy mit aktiviertem "Use Tailscale DNS"
-sollte der Default-Hostname normal aufloesen; falls nicht, greift genau
-dafuer das Textfeld - einfach die Tailscale-IP `100.92.3.18` eintragen.
+**`downloadUpdate()` prueft zusaetzlich den `Content-Type` der Antwort**
+(muss mit `application/vnd.android.package-archive` beginnen, sonst
+Fehler statt stillem Weiterlaufen) - der reine HTTP-Statuscode reicht
+NICHT: ein Webserver mit Catch-All-Route fuer unbekannte Pfade (wie
+`blarks.de`s SPA-Startseite) antwortet auf einen falschen/veralteten
+Dateinamen ebenfalls mit `200`, nur eben mit HTML statt der APK - live so
+aufgetreten, als eine bereits installierte AELTERE App-Version (vor der
+`apkFile`-Umstellung, siehe oben) noch den alten fest verdrahteten
+Dateinamen abfragte. Ohne diese Pruefung landet die HTML-Seite
+unbemerkt im APK-Cache und scheitert erst kommentarlos im
+System-Installer ("Es liegt ein Problem mit der App-Datei vor").
+
+**Live im Emulator verifiziert** (siehe SESSION.md, 2026-08-08): kompletter
+Ablauf Check ("Kein Update verfuegbar" gegen den echten aktuellen Stand)
+→ `version.json` auf `blarks.de` kurzzeitig auf einen fiktiven Stand
+gesetzt → "Update verfuegbar: 2099-01-01 00:00" → Download der exakten
+zeitgestempelten Datei (~46 MB ueber echtes Internet statt Emulator-NAT)
+→ System-Installer-Dialog "Do you want to update this app?" (korrekt als
+Update erkannt, Signatur passt) → abgebrochen, `version.json` auf den
+echten Stand zurueckgesetzt.
 
 ## Bekannte Grenzen / offene Punkte
 

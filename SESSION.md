@@ -4589,3 +4589,221 @@ echo "{\"buildTime\": \"2026-08-08 18:02\"}" > version.json
 Kein `adb install`/Emulator-Screenshot dieser spezifischen APK — reine
 Asset-Änderung ohne Verhaltensänderung. Die Quell-PNG nicht ins Repo
 aufgenommen (s.o.).
+
+## 2026-08-08 (Fortsetzung 3) — Android-Update-Server von Tailscale auf blarks.de umgezogen
+
+Auslöser: Nutzer hat SSH-Zugriff auf den Strato-Host (`~/.ssh/config`,
+Alias `strato`) eingerichtet und einen öffentlich erreichbaren Ordner
+unter `/srv/www/blarks.de/update_keinsabbelradio/` angelegt — der
+bisherige Update-Server lief nur lokal übers Tailscale-Netz (siehe
+Rename-Eintrag oben, "Zusätzlich (Host-Infrastruktur)").
+
+Vor der Umsetzung per SSH geprüft, ob der bestehende Apache-vhost für
+`blarks.de` ausreicht, ohne dass dort zusätzlich Code laufen muss:
+`AllowOverride All`/`Require all granted`/`Options -Indexes` sind im
+vhost bereits gesetzt (Verzeichnis-Listing also von Haus aus gesperrt,
+`403` statt Dateiliste bestätigt), `/etc/mime.types` kennt `.apk` bereits
+korrekt als `application/vnd.android.package-archive` — ein Live-Test
+mit der schon hochgeladenen Testdatei bestätigte HTTPS/HTTP2, korrekten
+Content-Type, keine Directory-Listing. Ergebnis: **kein eigener Server
+mehr nötig**, reines statisches Ausliefern über den vorhandenen Apache
+reicht.
+
+Auf Nutzerwunsch zusätzliche Anforderung: jede hochgeladene APK bekommt
+ab jetzt einen eigenen, **zeitgestempelten** Dateinamen
+(`keinsabbelradio-YYYYMMDD-HHMMSS.apk`) statt eine feste Datei zu
+überschreiben. Das ändert das Update-Protokoll, nicht nur den Ort:
+`UpdateManager.kt` kannte den APK-Dateinamen bisher fest im Code
+(`/keinsabbelradio.apk`) - das geht mit wechselnden Namen nicht mehr.
+
+- **`UpdateManager.kt`**: `DEFAULT_UPDATE_BASE_URL` →
+  `https://blarks.de/update_keinsabbelradio`. `version.json` bekommt ein
+  zweites Pflichtfeld `apkFile` (der exakte Dateiname); `checkForUpdate()`
+  merkt sich den Wert in `remoteApkFileName` (neues internes State-Feld),
+  `downloadUpdate()` baut die Download-URL daraus statt aus einem festen
+  Namen. Lokaler Cache-Dateiname (`keinsabbelradio.apk` im
+  App-Cache-Verzeichnis) bleibt unverändert - das ist reiner
+  Zwischenspeicher für den Installer, unabhängig vom Server-Namen.
+- **Build-und-Verteilen-Ablauf** (`CLAUDE.md`, `android-app/CLAUDE.md`,
+  `android-app/README.md` "Update-Mechanismus" nachgezogen): lokale Kopie
+  für `adb install` bleibt bestehen, zusätzlich eine zeitgestempelte Kopie
+  + `version.json` mit `apkFile`-Feld per `scp` nach
+  `strato:/srv/www/blarks.de/update_keinsabbelradio/`.
+- **`android-app/update_server.py` aus dem Repo entfernt** (`git rm`) -
+  ersatzlos, die Funktion übernimmt jetzt Apache. `.gitignore`-Kommentare
+  entsprechend angepasst, zusätzliches Ignore-Pattern
+  `/keinsabbelradio-*.apk` für die Wegwerf-Zwischenkopien vor dem Upload.
+- **Host-Infrastruktur** (außerhalb des Git-Repos, wie beim
+  systemd-Fix im Rename-Eintrag oben): alte Test-Datei `radiozapper.apk`
+  auf `blarks.de` gelöscht, neue zeitgestempelte APK + `version.json`
+  hochgeladen. Erst NACHDEM das neue Verfahren vollständig verifiziert war
+  (s.u.) den alten systemd-Service `keinsabbelradio-android-update.service`
+  gestoppt, deaktiviert und die Unit-Datei gelöscht (`daemon-reload`
+  danach) - explizite Nutzervorgabe: "wenn das neue läuft, kann das alte
+  weg".
+- **`CLAUDE.md`/`android-app/CLAUDE.md`, Abschnitt "Kein Auth"**:
+  klargestellt, dass der Update-Endpunkt jetzt bewusst öffentlich
+  erreichbar ist (nur eine App-Binary ohne Nutzerdaten, anderes Risiko
+  als der Live-Radiodienst) - die generelle "privat bleiben"-Vorgabe für
+  neue serverseitige Komponenten in beiden Projekten gilt unverändert
+  weiter, das ist eine bewusste Einzelfall-Ausnahme, keine Kehrtwende.
+
+### Verifiziert
+
+Vollständiger Live-Test im bereits laufenden Emulator (`test_device`,
+per Screenshot bei jedem Schritt geprüft, nicht nur Logcat):
+
+- App mit dem frisch gebauten Build (`buildTime: 2026-08-08 18:20`)
+  installiert, Update-Server-Textfeld enthielt noch einen alten
+  Tailscale-Testwert aus einer früheren Session (persistiert in
+  SharedPreferences über App-Updates hinweg) - manuell auf
+  `https://blarks.de/update_keinsabbelradio` umgestellt, "Update-Server
+  gespeichert." bestätigt.
+- "Nach Update suchen" gegen den echten aktuellen Serverstand →
+  "Kein Update verfügbar (aktuell)." - bestätigt, dass das neue
+  Pflichtfeld `apkFile` beim Parsen nicht zu einem Error-State führt.
+- `version.json` auf dem Server per SSH kurzzeitig auf einen fiktiven
+  Stand (`2099-01-01 00:00`) gesetzt → "Update verfügbar: 2099-01-01
+  00:00" → "Update herunterladen" → "Update geladen — bereit zur
+  Installation." (echter Download der zeitgestempelten Datei übers
+  offene Internet, ~46 MB) → "Update installieren" → nativer
+  Android-Installer-Dialog "Do you want to update this app?" mit Titel
+  "KeinSabbelRadio MVP" (korrekt als UPDATE derselben App erkannt, nicht
+  Neuinstallation - Signatur passt). Mit "Cancel" abgebrochen,
+  `version.json` auf dem Server auf den echten Stand
+  (`{"buildTime": "2026-08-08 18:20", "apkFile":
+  "keinsabbelradio-20260808-182045.apk"}`) zurückgesetzt und per `curl`
+  gegengeprüft.
+- Alter lokaler Update-Server nach dem Entfernen der Unit-Datei
+  tatsächlich nicht mehr erreichbar (`curl --max-time 3
+  http://localhost:8098/version.json` → Verbindung abgelehnt).
+
+### Bewusst NICHT gemacht
+
+Kein automatisches Aufräumen alter, zeitgestempelter APKs auf `blarks.de`
+- nicht angefragt, würde ungefragt Historie löschen. Kein Zurücksetzen
+des Update-Server-Textfelds in der App auf dem Test-Emulator (bleibt auf
+`https://blarks.de/update_keinsabbelradio` stehen, ist ja jetzt ohnehin
+der neue Default).
+
+## 2026-08-08 (Fortsetzung 4) — Bugfix: "Problem mit der App-Datei" auf echtem Handy
+
+Auslöser: Nutzer meldete direkt nach dem Umzug (voriger Eintrag), dass
+das Update über `blarks.de` auf dem echten Handy fehlschlägt mit "Es
+liegt ein Problem mit der App-Datei vor".
+
+Diagnose zuerst gegen Selbstverschulden auf Server-/Netzwerkseite
+geprüft, bevor Code verdächtigt wurde: `sha256sum` von lokaler Build-Datei,
+Datei auf dem Server (per SSH) und per echtem HTTPS-Download identisch;
+`unzip -t`/`file` bestätigten eine valide ZIP-/APK-Struktur;
+`apksigner verify` bestätigte eine gültige v2-Signatur. Die hochgeladene
+Datei selbst war also einwandfrei — das Problem lag woanders.
+
+Fund: `curl -I https://blarks.de/update_keinsabbelradio/keinsabbelradio.apk`
+(der ALTE, vor der `apkFile`-Umstellung fest verdrahtete Pfad, siehe
+voriger Eintrag) lieferte `HTTP 200` mit `content-type: text/html` —
+keine `404`, sondern die normale `blarks.de`-Startseite (Catch-All-Route
+des vhosts für unbekannte Pfade). Eine bereits auf dem Handy installierte
+ÄLTERE App-Version (gebaut vor der `apkFile`-Umstellung) fragt aber genau
+diesen festen Namen ab, nicht den zeitgestempelten aus `version.json`.
+`downloadUpdate()`s bestehende Statuscode-Prüfung (`!in 200..299`, siehe
+Review-Befund 14) griff hier NICHT, weil `200` ja technisch ein
+Erfolgscode ist — die HTML-Seite landete unbemerkt als vermeintliche APK
+im Cache und scheiterte erst im System-Installer, exakt das gemeldete
+Symptom.
+
+Zwei Korrekturen:
+
+1. **Sofort-Fix ohne Code-Änderung**: zusätzlich zur zeitgestempelten
+   APK eine Kopie unter dem alten festen Namen `keinsabbelradio.apk` auf
+   `blarks.de` abgelegt - dadurch kann sich eine bereits installierte
+   ältere App-Version noch ein letztes Mal reibungslos selbst auf den
+   neuen Stand heben (der danach die `apkFile`-Logik mitbringt und die
+   feste Kopie nicht mehr braucht).
+2. **`UpdateManager.kt`**: `downloadUpdate()` prüft jetzt zusätzlich den
+   `Content-Type` der Antwort (muss mit
+   `application/vnd.android.package-archive` beginnen) - Statuscode
+   allein ist bei einer Catch-All-Route nicht aussagekräftig genug. Bei
+   Abweichung ein klarer Fehler statt eines stillen Fehlschlags erst beim
+   System-Installer.
+
+### Verifiziert
+
+- `sha256sum` dreifach verglichen (lokal, Server per SSH, per HTTPS
+  heruntergeladen) - identisch. `unzip -t` + `file` + `apksigner verify
+  --verbose` auf der heruntergeladenen Datei - alles unauffällig, v2-Signatur
+  gültig.
+- `curl -I .../keinsabbelradio.apk` (alter fester Pfad) lieferte VOR dem
+  Fix `200`/`text/html` (Startseite), NACH Anlegen der Kompatibilitäts-
+  kopie `200`/`application/vnd.android.package-archive` (echte APK,
+  identische Größe wie die zeitgestempelte Datei).
+- Neuer Build (mit Content-Type-Prüfung) frisch im Emulator installiert
+  (`adb install -r`, `am force-stop` davor, damit kein alter Prozess-
+  Zustand die Zeit verfälscht), "Nach Update suchen" gegen den echten
+  aktuellen Serverstand → korrekt "Kein Update verfügbar (aktuell)." -
+  bestätigt, dass die neue Prüfung den normalen Erfolgspfad nicht
+  fälschlich blockiert.
+- Kein Test des tatsächlichen Fehlerpfads mit dem neuen Build (dafür
+  hätte `version.json`s `apkFile` erneut auf einen Catch-All-treffenden
+  Pfad gezeigt werden müssen) - Logik ist eine einzelne, einfache
+  String-`startsWith`-Prüfung direkt auf einem zuvor live beobachteten
+  echten Server-Verhalten, als ausreichend abgesichert bewertet.
+
+### Bewusst NICHT gemacht
+
+Die Kompatibilitätskopie (fester Name `keinsabbelradio.apk`) wird NICHT
+automatisch bei jedem künftigen Build mitgepflegt — sie war ein
+einmaliger Rettungsanker für zum Zeitpunkt des Umzugs bereits
+installierte Alt-Versionen. Sobald diese sich einmal aktualisiert haben,
+ist sie überflüssig; nicht aktiv gelöscht (schadet nicht, macht aber ab
+sofort auch keinen Sinn mehr, neu zu pflegen).
+
+## 2026-08-08 (Fortsetzung 5) — Nachtrag zum Bugfix: tatsächliche Ursache war ein Signatur-Konflikt
+
+Auslöser: Nutzer meldete nach dem Content-Type-Fix (voriger Eintrag)
+"selber Fehler, Download klappt, Installation nicht" — ein ANDERES
+Symptom als vorher (damals scheiterte bereits der Download an einer
+HTML-Seite statt der APK). Diesmal kam die Datei vollständig und korrekt
+an, aber der native Android-Installer verweigerte die Installation.
+
+Diagnose ohne Zugriff auf das reale Gerät: das Muster "Download
+erfolgreich, Installation scheitert mit unspezifischer Datei-
+Fehlermeldung" ist auf vielen Android-Versionen/OEM-Skins das typische
+(und einzige) sichtbare Symptom eines **Signatur-Konflikts** mit einer
+bereits installierten, anders signierten Version derselben App
+(`com.radiozapper.mvp`) — Android zeigt dafür oft keinen klaren
+Signatur-Hinweis, sondern dieselbe generische "Problem mit der App-
+Datei"-Meldung wie bei einer wirklich kaputten APK. Naheliegend, weil auf
+dem Handy vermutlich eine sehr frühe Testinstallation von einem anderen
+Rechner/einer anderen Toolchain lag, die nicht mit dem
+`~/.android/debug.keystore` DIESES Hosts signiert war (Fingerprint zur
+Referenz notiert: SHA256
+`94:8B:85:C3:51:05:5A:17:07:46:FC:4C:65:02:2C:6C:28:8E:89:B3:11:9E:AA:E4:6E:59:BF:C0:51:C4:15:9F`).
+
+Empfohlener Workaround (kein Code-Fix nötig, keiner möglich - ein
+Signatur-Wechsel lässt sich nachträglich nicht heilen, nur umgehen):
+App auf dem Handy komplett deinstallieren, dann neu installieren (nicht
+als Update). Nutzer hat das gemacht — funktioniert jetzt.
+
+`android-app/README.md` um einen Troubleshooting-Absatz im
+"Installation"-Abschnitt ergänzt (derselbe Hinweis für zukünftige
+Gerätewechsel/-probleme), außerdem den dortigen "Bauen und Testen"-
+Codeblock nachgezogen - der war beim Umzug auf blarks.de (siehe Eintrag
+weiter oben) übersehen worden und zeigte noch den alten
+Zwei-Zeilen-Ablauf ohne Zeitstempel-Upload.
+
+### Verifiziert
+
+Nutzer-Bestätigung: nach Deinstallation + Neuinstallation funktioniert
+die Installation. Kein eigener Test möglich (kein Zugriff auf das reale
+Gerät) - Diagnose stützt sich auf das beobachtete Fehlerbild und dessen
+Behebung, nicht auf eine direkte Fehlerursachen-Prüfung vor Ort.
+
+### Bewusst NICHT gemacht
+
+Keine Code-Änderung - ein Signatur-Konflikt ist kein Bug im
+Update-Mechanismus, sondern eine Eigenschaft von Android selbst (siehe
+oben, "Update-Installationen brauchen über die Zeit denselben
+Debug-Signierschlüssel"). Für zukünftige Installationen auf demselben
+Gerät, solange derselbe Build-Host/Keystore verwendet wird, sollte das
+Problem nicht wieder auftreten.

@@ -1312,3 +1312,65 @@ nichts angefasst.
 
 Update-Server liefert nach dem Rebuild die neue `version.json` (`curl
 http://localhost:8098/version.json` → `200`, `buildTime` passend).
+
+## 2026-08-08 (Fortsetzung 11) — Update-Mechanismus auf blarks.de umgezogen, alter Tailscale-Server entfernt
+
+Auslöser + vollständige Umsetzung/Verifikation: siehe `../SESSION.md`,
+Eintrag vom selben Tag ("Android-Update-Server von Tailscale auf
+blarks.de umgezogen") - dort steht die App-uebergreifende Abwägung,
+hier nur die App-spezifische Kurzfassung.
+
+`UpdateManager.kt` lädt `version.json` jetzt von
+`https://blarks.de/update_keinsabbelradio` (neuer
+`DEFAULT_UPDATE_BASE_URL`), erwartet darin ein zusätzliches Feld
+`apkFile` (der Server benennt jede APK ab jetzt zeitgestempelt statt
+eine feste Datei zu überschreiben) und baut die Download-URL daraus statt
+aus einem im Code fest verdrahteten Namen. `update_server.py` ist aus dem
+Repo entfernt - ausgeliefert wird jetzt vom ganz normalen Apache-vhost
+von `blarks.de`, kein eigener Server-Prozess mehr für dieses Projekt
+nötig.
+
+### Verifiziert
+
+Kompletter Ablauf live im Emulator (Screenshots bei jedem Schritt, nicht
+nur Logcat) - Details in `../SESSION.md`: Check gegen echten Serverstand
+→ "Kein Update verfügbar", Check gegen kurzzeitig gefälschten
+2099er-Stand → "Update verfügbar" → Download der zeitgestempelten Datei
+→ "Update geladen" → nativer Installer-Dialog erkennt es korrekt als
+Update von "KeinSabbelRadio MVP". Bestätigt: das neue Pflichtfeld
+`apkFile` bricht den bestehenden UpToDate-Pfad nicht (kein Error-State
+bei fehlendem/vorhandenem Feld).
+
+## 2026-08-08 (Fortsetzung 12) — Bugfix: Content-Type-Prüfung in downloadUpdate()
+
+Auslöser + vollständige Diagnose: siehe `../SESSION.md`, Eintrag vom
+selben Tag ("Bugfix: 'Problem mit der App-Datei' auf echtem Handy") - der
+alte, vor der `apkFile`-Umstellung fest verdrahtete APK-Pfad liefert auf
+`blarks.de`s Catch-All-Route `HTTP 200` mit HTML statt `404`, wodurch die
+bestehende Statuscode-Prüfung in `downloadUpdate()` (Review-Befund 14)
+eine bereits installierte ältere App-Version nicht vor dem Herunterladen
+einer HTML-Seite als vermeintliche APK schützte.
+
+`downloadUpdate()` prüft jetzt zusätzlich `connection.contentType` (muss
+mit `application/vnd.android.package-archive` beginnen) - bei Abweichung
+klarer Fehler statt eines Downloads, der erst beim System-Installer
+kommentarlos scheitert.
+
+### Verifiziert
+
+Frisch installierter Build im Emulator (`adb install -r` + `am
+force-stop` gegen Verwechslung mit altem Prozess-Zustand) meldet gegen
+den echten aktuellen Serverstand korrekt "Kein Update verfügbar
+(aktuell)." - die neue Prüfung blockiert den normalen Erfolgspfad nicht.
+
+## 2026-08-08 (Fortsetzung 13) — Nachtrag: Installationsfehler war ein Signatur-Konflikt, kein Code-Bug
+
+Vollständige Diagnose in `../SESSION.md` (Eintrag vom selben Tag,
+"Nachtrag zum Bugfix: tatsächliche Ursache war ein Signatur-Konflikt").
+Kurzfassung: nach dem Content-Type-Fix kam die APK korrekt an, aber der
+Installer verweigerte mit derselben unspezifischen Meldung wie zuvor -
+Ursache war eine bereits auf dem Gerät vorhandene, anders signierte
+Alt-Installation von `com.radiozapper.mvp`, kein Fehler im
+Update-Mechanismus selbst. Deinstallieren + Neuinstallieren hat es
+behoben (Nutzer-bestätigt). `README.md` bekam dafür einen
+Troubleshooting-Absatz.

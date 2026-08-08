@@ -13,17 +13,14 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
-// Absichtlich NICHT hartcodiert: solange nur der Entwickler selbst testet,
-// ist die eigene Tailscale-Adresse ein sinnvoller Default - sobald die App
-// aber an andere weitergegeben wird, hat niemand sonst Zugriff auf dieses
-// Tailscale-Netz bzw. will nicht den eigenen PC als Update-Server betreiben.
-// Der Wert liegt deshalb in SharedPreferences (siehe getBaseUrl()/
-// setBaseUrl() unten), per Textfeld in der UI aenderbar, ohne Rebuild - nur
-// der DEFAULT (aktueller Entwicklungsstand: Tailscale) ist fest im Code.
-// Geplant: sobald der oeffentliche Server unter https://blarks.de steht,
-// wird DAS der neue Default (siehe SESSION.md) - bis dahin bewusst noch
-// Tailscale, weil das der einzige tatsaechlich existierende Server ist.
-private const val DEFAULT_UPDATE_BASE_URL = "http://dockfish.icefish-ghost.ts.net:8098"
+// Absichtlich NICHT hartcodiert: der Wert liegt in SharedPreferences (siehe
+// getBaseUrl()/setBaseUrl() unten), per Textfeld in der UI aenderbar, ohne
+// Rebuild - nur der DEFAULT ist fest im Code. Seit 2026-08-08 der oeffentliche
+// Server unter https://blarks.de/update_keinsabbelradio (vorher: private
+// Tailscale-Adresse eines einzelnen Hosts, siehe SESSION.md) - kein VPN mehr
+// noetig, damit koennte die APK jetzt auch tatsaechlich an andere
+// weitergegeben werden, ohne dass die den Default erst umstellen muessten.
+private const val DEFAULT_UPDATE_BASE_URL = "https://blarks.de/update_keinsabbelradio"
 private const val PREFS_NAME = "update_prefs"
 private const val PREF_BASE_URL = "base_url"
 
@@ -50,6 +47,14 @@ class UpdateManager(private val context: Context) {
 
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
+    // Von checkForUpdate() befuellt, von downloadUpdate() gelesen: seit dem
+    // Umzug auf blarks.de bekommt jede hochgeladene APK einen eigenen,
+    // zeitgestempelten Dateinamen (keinsabbelradio-YYYYMMDD-HHMMSS.apk,
+    // siehe README "Update-Mechanismus") statt eines fest ueberschriebenen
+    // "keinsabbelradio.apk" - der tatsaechliche Name steht deshalb nur noch
+    // in version.json, nicht mehr fest im Code.
+    private var remoteApkFileName: String? = null
+
     fun getBaseUrl(): String = prefs.getString(PREF_BASE_URL, null) ?: DEFAULT_UPDATE_BASE_URL
 
     fun setBaseUrl(url: String) {
@@ -60,11 +65,12 @@ class UpdateManager(private val context: Context) {
         _state.value = UpdateState.Checking
         withContext(Dispatchers.IO) {
             try {
-                val remoteBuildTime = fetchRemoteBuildTime()
-                _state.value = if (remoteBuildTime == BuildConfig.BUILD_TIME) {
+                val remote = fetchRemoteVersion()
+                remoteApkFileName = remote.apkFile
+                _state.value = if (remote.buildTime == BuildConfig.BUILD_TIME) {
                     UpdateState.UpToDate
                 } else {
-                    UpdateState.Available(remoteBuildTime)
+                    UpdateState.Available(remote.buildTime)
                 }
             } catch (e: Exception) {
                 _state.value = UpdateState.Error(e.message ?: e.toString())
@@ -72,22 +78,30 @@ class UpdateManager(private val context: Context) {
         }
     }
 
-    private fun fetchRemoteBuildTime(): String {
+    private data class RemoteVersion(val buildTime: String, val apkFile: String)
+
+    private fun fetchRemoteVersion(): RemoteVersion {
         val connection = URL("${getBaseUrl()}/version.json").openConnection() as HttpURLConnection
         connection.connectTimeout = 10_000
         connection.readTimeout = 10_000
         val json = connection.inputStream.bufferedReader().use { it.readText() }
         connection.disconnect()
-        return JSONObject(json).getString("buildTime")
+        val obj = JSONObject(json)
+        return RemoteVersion(obj.getString("buildTime"), obj.getString("apkFile"))
     }
 
     suspend fun downloadUpdate() {
         _state.value = UpdateState.Downloading
         withContext(Dispatchers.IO) {
             try {
+                // Erfordert einen vorherigen checkForUpdate()-Aufruf (fuellt
+                // remoteApkFileName) - fuer den bestehenden UI-Ablauf immer
+                // der Fall (Button-Reihenfolge: erst Check, dann Download).
+                val fileName = remoteApkFileName
+                    ?: throw IllegalStateException("Kein Update-Dateiname bekannt - erst nach Update suchen.")
                 val updatesDir = File(context.cacheDir, "updates").apply { mkdirs() }
                 val apkFile = File(updatesDir, "keinsabbelradio.apk")
-                val connection = URL("${getBaseUrl()}/keinsabbelradio.apk").openConnection() as HttpURLConnection
+                val connection = URL("${getBaseUrl()}/$fileName").openConnection() as HttpURLConnection
                 connection.connectTimeout = 15_000
                 connection.readTimeout = 15_000
                 // Ohne diese Pruefung landete z.B. eine 404-Fehlerseite als
@@ -95,6 +109,19 @@ class UpdateManager(private val context: Context) {
                 // im System-Installer (Review-Befund 14, siehe SESSION.md).
                 if (connection.responseCode !in 200..299) {
                     throw IllegalStateException("Server antwortete mit HTTP ${connection.responseCode}")
+                }
+                // Der Statuscode allein reicht nicht: ein falscher/veralteter
+                // Pfad auf einem Webserver mit Catch-All-Route (z.B. eine SPA-
+                // Startseite fuer unbekannte URLs) antwortet ebenfalls mit 200,
+                // nur eben mit HTML statt der APK - live so auf blarks.de
+                // aufgetreten (aeltere, bereits installierte App-Version fragte
+                // noch den alten fest verdrahteten Pfad ab, siehe SESSION.md).
+                val contentType = connection.contentType
+                if (contentType == null || !contentType.startsWith("application/vnd.android.package-archive")) {
+                    throw IllegalStateException(
+                        "Server lieferte kein APK zurueck (Content-Type: $contentType) - " +
+                            "falsche Update-Server-Adresse oder falscher Dateiname?"
+                    )
                 }
                 connection.inputStream.use { input ->
                     apkFile.outputStream().use { output -> input.copyTo(output) }
