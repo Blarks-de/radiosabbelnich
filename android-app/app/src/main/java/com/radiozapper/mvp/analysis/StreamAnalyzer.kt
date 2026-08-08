@@ -8,6 +8,7 @@ import com.radiozapper.mvp.fingerprint.Fingerprint
 import com.radiozapper.mvp.fingerprint.FingerprintDb
 import com.radiozapper.mvp.fingerprint.FingerprintOutcome
 import com.radiozapper.mvp.playback.PlaybackStatus
+import com.radiozapper.mvp.vosk.VoskModelCache
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -45,11 +46,6 @@ private const val FINGERPRINT_TRIGGER_CHUNKS = 4
 private const val SMOOTHING_WINDOW_SECONDS = 4.0
 private val SMOOTHING_WINDOW_CHUNKS = (SMOOTHING_WINDOW_SECONDS * TARGET_SAMPLE_RATE / CHUNK_SAMPLES).toInt() // 8
 
-// Hysterese (Schmitt-Trigger): unterschiedliche Schwellen fuer "wird zu Sprache"
-// vs. "wird zu Musik", damit ein Anteil nahe 50% nicht bei jedem Chunk umkippt.
-// RATIO_TO_CONFIRM_SPEECH > RATIO_TO_CONFIRM_MUSIC ist Pflicht (Hysterese-Band).
-private const val RATIO_TO_CONFIRM_SPEECH = 0.65
-private const val RATIO_TO_CONFIRM_MUSIC = 0.30
 
 /**
  * Dekodiert denselben Stream ein zweites Mal ausschliesslich fuer die
@@ -71,7 +67,18 @@ private const val RATIO_TO_CONFIRM_MUSIC = 0.30
  * dann kurz ein leeres Partial-Result) auf 0 zurueckgesetzt und dadurch der
  * ANGEZEIGTE Status flackern (live beobachtet). Deshalb hier bewusst ein
  * gleitendes Mehrheitsvotum mit Hysterese statt einer harten Serie - toleriert
- * einzelne kurze Aussetzer in beide Richtungen, siehe Konstanten oben.
+ * einzelne kurze Aussetzer in beide Richtungen. Die beiden Hysterese-
+ * Schwellen (`ratioToConfirmSpeech`/`ratioToConfirmMusic`,
+ * `ratioToConfirmSpeech > ratioToConfirmMusic` ist Pflicht) sind seit Phase 7
+ * (Mehrsprachigkeit) `start()`-Parameter statt globaler Konstanten - jede
+ * Sprache kann eigene Werte haben (Default beider Werte: 0.65/0.30, siehe
+ * stt/SttSettings.kt), vorbereitet fuer den in Schritt 2 geplanten
+ * Kalibrierungs-Wizard.
+ *
+ * Mehrsprachigkeit (Phase 7): `voskModelCache` liefert das `Model`-Objekt
+ * fuer `language` (Lazy-Load + LRU, siehe vosk/VoskModelCache.kt) - der
+ * Cache BESITZT das Model, `StreamAnalyzer` darf es deshalb nie selbst
+ * `close()`n (siehe `runAnalysis()`s `finally`-Block).
  */
 class StreamAnalyzer(private val scope: CoroutineScope) {
 
@@ -95,11 +102,23 @@ class StreamAnalyzer(private val scope: CoroutineScope) {
 
     private var job: Job? = null
 
-    fun start(url: String, modelPath: String, stationLabel: String, fingerprintDb: FingerprintDb?) {
+    fun start(
+        url: String,
+        modelPath: String,
+        language: String,
+        voskModelCache: VoskModelCache,
+        ratioToConfirmSpeech: Double,
+        ratioToConfirmMusic: Double,
+        stationLabel: String,
+        fingerprintDb: FingerprintDb?,
+    ) {
         stop()
         _status.value = PlaybackStatus.CONNECTING
         job = scope.launch(Dispatchers.IO) {
-            runAnalysis(url, modelPath, stationLabel, fingerprintDb)
+            runAnalysis(
+                url, modelPath, language, voskModelCache,
+                ratioToConfirmSpeech, ratioToConfirmMusic, stationLabel, fingerprintDb,
+            )
         }
     }
 
@@ -110,14 +129,26 @@ class StreamAnalyzer(private val scope: CoroutineScope) {
         _speechRatio.value = null
     }
 
-    private suspend fun runAnalysis(url: String, modelPath: String, stationLabel: String, fingerprintDb: FingerprintDb?) {
+    private suspend fun runAnalysis(
+        url: String,
+        modelPath: String,
+        language: String,
+        voskModelCache: VoskModelCache,
+        ratioToConfirmSpeech: Double,
+        ratioToConfirmMusic: Double,
+        stationLabel: String,
+        fingerprintDb: FingerprintDb?,
+    ) {
         var extractor: MediaExtractor? = null
         var codec: MediaCodec? = null
-        var model: Model? = null
         var recognizer: Recognizer? = null
 
         try {
-            model = Model(modelPath)
+            // Model gehoert dem Cache (LRU, ggf. ueber mehrere Sender-Wechsel
+            // hinweg wiederverwendet) - NICHT selbst schliessen, siehe
+            // Klassen-Doc oben.
+            val model: Model = voskModelCache.get(modelPath, language)
+                ?: throw IllegalStateException("Vosk-Modell fuer Sprache '$language' nicht ladbar")
             recognizer = Recognizer(model, TARGET_SAMPLE_RATE.toFloat())
 
             extractor = MediaExtractor()
@@ -230,8 +261,8 @@ class StreamAnalyzer(private val scope: CoroutineScope) {
                                     _speechRatio.value = speechRatio
                                     val shouldBeSpeech = when {
                                         !hasConfirmedOnce -> speechRatio >= 0.5
-                                        confirmedSpeech -> speechRatio > RATIO_TO_CONFIRM_MUSIC
-                                        else -> speechRatio >= RATIO_TO_CONFIRM_SPEECH
+                                        confirmedSpeech -> speechRatio > ratioToConfirmMusic
+                                        else -> speechRatio >= ratioToConfirmSpeech
                                     }
                                     if (!hasConfirmedOnce || shouldBeSpeech != confirmedSpeech) {
                                         confirmedSpeech = shouldBeSpeech
@@ -267,7 +298,9 @@ class StreamAnalyzer(private val scope: CoroutineScope) {
             runCatching { codec?.release() }
             runCatching { extractor?.release() }
             runCatching { recognizer?.close() }
-            runCatching { model?.close() }
+            // Model bewusst NICHT geschlossen - gehoert dem VoskModelCache
+            // (siehe oben), das duerfte hier noch fuer andere Sender/
+            // Sprachwechsel gebraucht werden.
         }
     }
 

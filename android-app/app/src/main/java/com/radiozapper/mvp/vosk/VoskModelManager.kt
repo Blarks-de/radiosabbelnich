@@ -5,18 +5,15 @@ import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.concurrent.ConcurrentHashMap
 import java.util.zip.ZipInputStream
 
 private const val TAG = "VoskModelManager"
-
-// Gleiches Modell wie im Docker-Projekt (vosk-model-small-de-0.15) - Konsistenzgrund:
-// dort bereits gegen echte Sender kalibriert (siehe CLAUDE.md des Docker-Projekts).
-private const val MODEL_NAME = "vosk-model-small-de-0.15"
-private const val MODEL_URL = "https://alphacephei.com/vosk/models/$MODEL_NAME.zip"
 
 sealed class ModelState {
     data object NotReady : ModelState()
@@ -27,53 +24,87 @@ sealed class ModelState {
 }
 
 /**
- * Laedt das deutsche Vosk-Modell beim ersten Start herunter und entpackt es in
- * filesDir - NICHT im APK gebundlet (Vorgabe), weil das Modell mit ~45MB das
- * Debug-APK unnoetig aufblaehen wuerde und Updates des Modells sonst einen
- * neuen APK-Build erfordern wuerden.
+ * Laedt Vosk-Sprachmodelle bei Bedarf herunter und entpackt sie in filesDir -
+ * NICHT im APK gebundlet, weil ein Modell mit ~40-50MB das Debug-APK unnoetig
+ * aufblaehen wuerde und Updates sonst einen neuen APK-Build erfordern
+ * wuerden. Seit Phase 7 (Mehrsprachigkeit) ein Singleton statt einer
+ * Instanz-Klasse - mehrere Activities (MainActivity, die neue
+ * SttSettingsActivity) muessen sich denselben Download-Fortschritt/StateFlow
+ * teilen, sonst saehe eine Activity einen Download nicht, der gerade in der
+ * anderen laeuft (gleiche Begruendung wie bei `StationRepository`s
+ * Singleton-Status).
+ *
+ * Der Modell-Ordnername wird aus dem Dateinamen der Download-URL abgeleitet
+ * (ohne `.zip`) statt sprachcode-basiert vergeben - fuer Deutsch mit der
+ * unveraenderten Default-URL (siehe stt/SttSettings.kt) ergibt sich dadurch
+ * exakt derselbe Pfad wie vor der Mehrsprachigkeit
+ * (`vosk-model-small-de-0.15`), bestehende Installationen mit bereits
+ * heruntergeladenem Modell brauchen also KEINEN Migrationsschritt.
  */
-class VoskModelManager(private val context: Context) {
+object VoskModelManager {
 
-    private val modelDir = File(context.filesDir, MODEL_NAME)
+    private val states = ConcurrentHashMap<String, MutableStateFlow<ModelState>>()
 
-    private val _state = MutableStateFlow<ModelState>(
-        if (isModelPresent()) ModelState.Ready(modelDir.absolutePath) else ModelState.NotReady
-    )
-    val state: StateFlow<ModelState> = _state
+    private fun modelDirFor(context: Context, modelUrl: String): File {
+        val fileName = modelUrl.substringAfterLast('/')
+        val dirName = fileName.removeSuffix(".zip")
+        return File(context.filesDir, dirName)
+    }
 
-    fun isModelPresent(): Boolean =
+    private fun isModelPresent(modelDir: File): Boolean =
         File(modelDir, "am/final.mdl").exists() && File(modelDir, "conf/model.conf").exists()
 
-    fun modelPathOrNull(): String? = if (isModelPresent()) modelDir.absolutePath else null
+    /** Ein StateFlow pro Sprachcode, ueber Activity-Instanzen hinweg geteilt (siehe Klassen-Doc). */
+    fun state(context: Context, code: String, modelUrl: String): StateFlow<ModelState> =
+        states.getOrPut(code) {
+            val dir = modelDirFor(context, modelUrl)
+            MutableStateFlow(if (isModelPresent(dir)) ModelState.Ready(dir.absolutePath) else ModelState.NotReady)
+        }.asStateFlow()
 
-    suspend fun downloadAndUnpack() {
-        if (isModelPresent()) {
-            _state.value = ModelState.Ready(modelDir.absolutePath)
+    // 'code' bewusst Teil der Signatur (API-Symmetrie mit state()/downloadAndUnpack()),
+    // aber hier ungenutzt - der Pfad haengt ausschliesslich von modelUrl ab (siehe modelDirFor()).
+    @Suppress("UNUSED_PARAMETER")
+    fun modelPathOrNull(context: Context, code: String, modelUrl: String): String? {
+        val dir = modelDirFor(context, modelUrl)
+        return if (isModelPresent(dir)) dir.absolutePath else null
+    }
+
+    suspend fun downloadAndUnpack(context: Context, code: String, modelUrl: String) {
+        val dir = modelDirFor(context, modelUrl)
+        val flow = states.getOrPut(code) { MutableStateFlow(ModelState.NotReady) }
+        if (isModelPresent(dir)) {
+            flow.value = ModelState.Ready(dir.absolutePath)
             return
         }
         withContext(Dispatchers.IO) {
-            val zipFile = File(context.cacheDir, "$MODEL_NAME.zip")
+            val zipFile = File(context.cacheDir, "${dir.name}.zip")
             try {
-                downloadWithProgress(zipFile)
-                _state.value = ModelState.Unpacking
+                downloadWithProgress(modelUrl, zipFile, flow)
+                flow.value = ModelState.Unpacking
                 unzip(zipFile, context.filesDir)
                 zipFile.delete()
-                if (isModelPresent()) {
-                    _state.value = ModelState.Ready(modelDir.absolutePath)
+                if (isModelPresent(dir)) {
+                    flow.value = ModelState.Ready(dir.absolutePath)
                 } else {
-                    _state.value = ModelState.Error("Entpacktes Modell unvollstaendig")
+                    flow.value = ModelState.Error("Entpacktes Modell unvollstaendig")
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Modell-Download/Entpacken fehlgeschlagen", e)
+                Log.e(TAG, "Modell-Download/Entpacken fehlgeschlagen fuer '$code'", e)
                 zipFile.delete()
-                modelDir.deleteRecursively()
-                _state.value = ModelState.Error(e.message ?: e.toString())
+                dir.deleteRecursively()
+                flow.value = ModelState.Error(e.message ?: e.toString())
             }
         }
     }
 
-    private fun downloadWithProgress(destination: File) {
-        val connection = URL(MODEL_URL).openConnection() as HttpURLConnection
+    /** Loescht die heruntergeladenen Modelldateien - fuer SttSettings.deleteLanguage() (Speicherplatz freigeben, keine verwaisten Dateien). */
+    fun deleteModel(context: Context, code: String, modelUrl: String) {
+        modelDirFor(context, modelUrl).deleteRecursively()
+        states[code]?.value = ModelState.NotReady
+    }
+
+    private fun downloadWithProgress(modelUrl: String, destination: File, flow: MutableStateFlow<ModelState>) {
+        val connection = URL(modelUrl).openConnection() as HttpURLConnection
         connection.connectTimeout = 15_000
         connection.readTimeout = 15_000
         connection.connect()
@@ -92,7 +123,7 @@ class VoskModelManager(private val context: Context) {
                         val percent = ((readTotal * 100) / total).toInt()
                         if (percent != lastPercent) {
                             lastPercent = percent
-                            _state.value = ModelState.Downloading(percent)
+                            flow.value = ModelState.Downloading(percent)
                         }
                     }
                 }
@@ -102,8 +133,9 @@ class VoskModelManager(private val context: Context) {
     }
 
     /**
-     * Das Zip enthaelt ein Wurzelverzeichnis "$MODEL_NAME/..." - wird 1:1 nach
-     * filesDir entpackt, damit modelDir danach direkt stimmt.
+     * Das Zip enthaelt ein Wurzelverzeichnis "<name>/..." - wird 1:1 nach
+     * filesDir entpackt, damit der abgeleitete Modell-Ordnername danach
+     * direkt stimmt.
      */
     private fun unzip(zipFile: File, targetDir: File) {
         ZipInputStream(zipFile.inputStream().buffered()).use { zis ->

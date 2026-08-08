@@ -39,6 +39,11 @@
             android:exported="false"
             android:theme="@style/Theme.RadioZapperMvp" />
 
+        <activity
+            android:name=".stt.SttSettingsActivity"
+            android:exported="false"
+            android:theme="@style/Theme.RadioZapperMvp" />
+
         <service
             android:name=".playback.PlaybackService"
             android:exported="false"

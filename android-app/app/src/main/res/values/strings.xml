@@ -12,12 +12,26 @@
     <string name="btn_play">▶ Abspielen</string>
     <string name="btn_stop">■ Stopp</string>
 
-    <string name="model_not_ready">Vosk-Modell (DE) fehlt noch.</string>
+    <string name="model_not_ready">Modell fehlt noch.</string>
     <string name="model_downloading">Modell wird geladen: %1$d%%</string>
     <string name="model_unpacking">Modell wird entpackt…</string>
-    <string name="model_ready">Vosk-Modell (DE) bereit.</string>
+    <string name="model_ready">Modell bereit.</string>
     <string name="model_error">Modell-Download fehlgeschlagen: %1$s</string>
-    <string name="btn_download_model">Modell herunterladen (ca. 45 MB)</string>
+    <string name="btn_download_model">Modell herunterladen</string>
+
+    <string name="btn_manage_stt_languages">🌐 STT-Sprachen verwalten</string>
+    <string name="stt_model_missing">⚠ Kein Modell für „%1$s“ – Analyse pausiert.</string>
+    <string name="stt_settings_title">STT-Sprachen verwalten</string>
+    <string name="stt_languages_heading">🌐 STT-Sprachen</string>
+    <string name="btn_add_language">+ Neue Sprache</string>
+    <string name="btn_delete_language">Löschen</string>
+    <string name="dialog_add_language_title">Neue Sprache</string>
+    <string name="label_language_code">Sprachcode (z.B. „en“)</string>
+    <string name="label_language_model_url">Vosk-Modell-Download-URL (.zip)</string>
+    <string name="language_action_error_empty">Sprachcode und Modell-URL dürfen nicht leer sein.</string>
+    <string name="delete_language_confirm_title">Sprache löschen?</string>
+    <string name="delete_language_confirm_message">„%1$s“ wirklich löschen? Ein bereits heruntergeladenes Modell wird dabei ebenfalls gelöscht.</string>
+    <string name="stt_categories_heading">🏷 Kategorie-Sprachen</string>
 
     <string name="notification_channel_name">Wiedergabe</string>
     <string name="notification_playing">Läuft: %1$s</string>

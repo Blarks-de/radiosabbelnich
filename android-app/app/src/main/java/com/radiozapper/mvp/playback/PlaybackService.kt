@@ -24,6 +24,9 @@ import com.radiozapper.mvp.model.Station
 import com.radiozapper.mvp.model.StationRepository
 import com.radiozapper.mvp.newsbreak.NewsBreak
 import com.radiozapper.mvp.newsbreak.NewsBreakSettings
+import com.radiozapper.mvp.stt.SttSettings
+import com.radiozapper.mvp.vosk.VoskModelCache
+import com.radiozapper.mvp.vosk.VoskModelManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -158,7 +161,6 @@ class PlaybackService : LifecycleService() {
     private val _currentStation = MutableStateFlow<Station?>(null)
     val currentStation: StateFlow<Station?> = _currentStation
 
-    private var activeModelPath: String? = null
     private var autoSwitchAttempts = 0
     private var autoSwitchPausedUntil = 0L
     private val stationCooldownUntil = mutableMapOf<String, Long>()
@@ -193,6 +195,16 @@ class PlaybackService : LifecycleService() {
     private val _lastFingerprintMatch = MutableStateFlow<FingerprintOutcome.Match?>(null)
     /** Fuer den "🛑 Zapping-Fehler"-Knopf - nur bei Match gesetzt (Learned kann nicht "falsch" sein, da kein Wechsel ausgeloest wurde). */
     val lastFingerprintMatch: StateFlow<FingerprintOutcome.Match?> = _lastFingerprintMatch
+
+    // Mehrsprachiges STT (Phase 7, siehe stt/SttSettings.kt): eine einzige,
+    // langlebige VoskModelCache-Instanz gehoert diesem Service (analog
+    // fingerprintDb) - LRU-verwaltet, mehrere Sprachen koennen sich so ueber
+    // Senderwechsel hinweg im RAM halten, ohne bei jedem Wechsel neu geladen
+    // zu werden.
+    private val voskModelCache = VoskModelCache()
+    private val _sttModelMissing = MutableStateFlow<String?>(null)
+    /** Sprachcode, falls fuer die aktuelle Senderkategorie kein Vosk-Modell heruntergeladen ist (Analyse pausiert dafuer), sonst null. */
+    val sttModelMissing: StateFlow<String?> = _sttModelMissing
 
     private val playerListener = object : Player.Listener {
         override fun onPlayerError(error: PlaybackException) {
@@ -288,7 +300,7 @@ class PlaybackService : LifecycleService() {
      * wieder da sein. Automatische Aufrufe (attemptAutoSwitch/
      * handlePlaybackFailure) rufen weiterhin direkt play() auf.
      */
-    fun manualPlay(station: Station, modelPath: String?) {
+    fun manualPlay(station: Station) {
         // Expliziter Nutzerwunsch beendet eine laufende Nachrichten-Pause sofort -
         // eigene Entscheidung schlaegt Automatik, wie ueberall sonst in dieser
         // Klasse auch (siehe Klassen-Doc, Abschnitt Nachrichten-Pause).
@@ -296,7 +308,7 @@ class PlaybackService : LifecycleService() {
         stationCooldownUntil.remove(station.id)
         deadUntil.remove(station.id)
         refreshLockedStationsSnapshot()
-        play(station, modelPath)
+        play(station)
     }
 
     /**
@@ -318,10 +330,19 @@ class PlaybackService : LifecycleService() {
      * Wechsel statt Kaltstart. Trifft `station` NICHT den vorgewaermten
      * Kandidaten (z.B. `manualPlay()` auf einen beliebigen Sender in der
      * Liste), bleibt es beim bisherigen Kaltstart.
+     *
+     * Sprache/Modell fuer die STT-Analyse werden HIER, bei JEDEM Aufruf,
+     * frisch ueber `SttSettings.resolveLanguage(station.category)` aufgeloest
+     * - bewusst kein durchgereichter Parameter mehr (frueher `modelPath`,
+     * ueber ein `activeModelPath`-Feld an vier interne Aufrufstellen verteilt).
+     * Genau dieses Durchreichen war im Docker-Projekt die Ursache eines
+     * Absturz-Bugs (vergessene Aufrufstelle bei einer Signaturaenderung,
+     * siehe dessen SESSION.md "Fortsetzung 7") - die interne Aufloesung
+     * macht diese Bugklasse strukturell unmoeglich, jeder Aufrufer bekommt
+     * automatisch den aktuellen Stand.
      */
-    fun play(station: Station, modelPath: String?) {
+    fun play(station: Station) {
         _currentStation.value = station
-        activeModelPath = modelPath
 
         val warm = preloadedPlayer
         if (warm != null && preloadedStationId == station.id) {
@@ -353,9 +374,23 @@ class PlaybackService : LifecycleService() {
 
         startForegroundNotification(station.name)
 
-        if (modelPath != null) {
-            analyzer.start(station.url, modelPath, station.name, fingerprintDb)
+        val language = SttSettings.resolveLanguage(this, station.category)
+        val cfg = SttSettings.getLanguages(this)[language]
+        val modelPath = cfg?.let { VoskModelManager.modelPathOrNull(this, language, it.modelUrl) }
+        if (cfg != null && modelPath != null) {
+            _sttModelMissing.value = null
+            analyzer.start(
+                station.url,
+                modelPath,
+                language,
+                voskModelCache,
+                cfg.ratioToConfirmSpeech,
+                cfg.ratioToConfirmMusic,
+                station.name,
+                fingerprintDb,
+            )
         } else {
+            _sttModelMissing.value = language
             analyzer.stop()
         }
 
@@ -494,7 +529,7 @@ class PlaybackService : LifecycleService() {
         _newsBreakFileName.value = null
         val station = _currentStation.value ?: return
         Log.i(TAG, "📰 $reason - zurueck zu '${station.name}'")
-        play(station, activeModelPath)
+        play(station)
     }
 
     /**
@@ -514,7 +549,6 @@ class PlaybackService : LifecycleService() {
 
     fun stopPlayback() {
         _currentStation.value = null
-        activeModelPath = null
         autoSwitchAttempts = 0
         autoSwitchPausedUntil = 0L
         stationCooldownUntil.clear()
@@ -530,6 +564,7 @@ class PlaybackService : LifecycleService() {
         newsBreakServedSlot = null
         player?.stop()
         analyzer.stop()
+        _sttModelMissing.value = null
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -645,7 +680,7 @@ class PlaybackService : LifecycleService() {
         }
 
         Log.i(TAG, "Sprache erkannt auf '${station.name}' - schalte weiter zu '${next.name}'")
-        play(next, activeModelPath)
+        play(next)
     }
 
     /**
@@ -705,7 +740,7 @@ class PlaybackService : LifecycleService() {
         val next = findNextOrEscalate(stations, currentIndex, now)
         if (next != null) {
             Log.i(TAG, "Schalte weiter zu '${next.name}'")
-            play(next, activeModelPath)
+            play(next)
         } else {
             Log.i(TAG, "Keine verfuegbaren Sender mehr - stoppe Wiedergabe")
             stopPlayback()
@@ -735,7 +770,7 @@ class PlaybackService : LifecycleService() {
         val fallback = StationRepository.activeStations().firstOrNull()
         if (fallback != null) {
             Log.i(TAG, "Senderliste geaendert, '${current.name}' nicht mehr aktiv - schalte auf '${fallback.name}'")
-            play(fallback, activeModelPath)
+            play(fallback)
         } else {
             Log.i(TAG, "Senderliste geaendert, keine aktiven Sender mehr - stoppe Wiedergabe")
             stopPlayback()
@@ -832,6 +867,7 @@ class PlaybackService : LifecycleService() {
         player = null
         clearPreload()
         fingerprintDb.close()
+        voskModelCache.clear()
         super.onDestroy()
     }
 }

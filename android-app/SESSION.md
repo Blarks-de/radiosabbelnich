@@ -640,3 +640,131 @@ Match voraus, der in dieser Sitzung nicht auftrat) und das Zusammenspiel
 mit einer laufenden Nachrichten-Pause (strukturell durch `analyzer.stop()`
 abgedeckt, siehe oben, aber nicht eigens mit einem echten Fingerprint-Treffer
 während einer Pause gegengeprüft).
+
+## 2026-08-08 (Fortsetzung 4) — Mehrsprachiges STT, Schritt 1: Grundgerüst (Phase 7 aus dem Fahrplan, Plan-Mode)
+
+Auslöser: "Weiter mit Phase 7" - laut Fahrplan der größte verbleibende
+Brocken, deshalb wie im Docker-Projekt (siehe dessen SESSION.md,
+"Mehrsprachige STT-Erkennung (Teil 1a)"/"Geführter STT-Kalibrierungs-Wizard
+(Teil 1b)") explizit in zwei Schritte gesplittet: dieser Durchgang deckt
+nur das Grundgerüst ab (Mehrsprachigkeit, Modell-Verwaltung, Kategorie-
+Zuordnung) - der Kalibrierungs-Wizard (Schritt 2) folgt erst nach
+Rückmeldung, dass Schritt 1 live läuft. Plan vorab per Plan-Mode
+festgelegt und vom Nutzer bestätigt.
+
+Zwei echte Bugs aus dem ersten Produktiveinsatz der Docker-Mehrsprachigkeit
+(dessen SESSION.md, "Fortsetzung 7") wurden hier gezielt vermieden - siehe
+Architektur-Abschnitt unten für die konkrete Gegenmaßnahme.
+
+### Architektur
+
+- **Kategorie → Sprache, nicht Sender → Sprache** (identische
+  Kernentscheidung wie im Docker-Projekt): neues `stt/SttSettings.kt` hält
+  `categoryLanguages: Map<String, String>`, `Categories.kt` bleibt
+  unangetastet. Sprachliste als Freitext (Code + Vosk-Modell-Download-URL),
+  keine feste Auswahl - dieselbe Design-Entscheidung wie dort, nur mit
+  Download-URL statt Host-Modellpfad (Android lädt selbst herunter, der
+  Docker-Container ist auf einen Host-Mount angewiesen).
+- **`VoskModelManager.kt`: Instanz-Klasse → Singleton (`object`)**, ein
+  `StateFlow<ModelState>` pro Sprachcode statt einer einzelnen Variable -
+  mehrere Activities (MainActivity, die neue SttSettingsActivity) müssen
+  sich denselben Download-Fortschritt teilen. Modell-Ordnername wird aus
+  dem Download-URL-Dateinamen abgeleitet statt sprachcode-basiert vergeben
+  - für Deutsch mit der unveränderten Default-URL ergibt sich dadurch
+  exakt derselbe Pfad wie vor dieser Änderung
+  (`vosk-model-small-de-0.15`), bestehende Installationen mit bereits
+  heruntergeladenem Modell brauchen **keinen Migrationsschritt** (live
+  bestätigt, siehe Verifikation unten).
+- **`vosk/VoskModelCache.kt` (neu)**: LRU-Cache geladener `org.vosk.Model`-
+  Objekte pro Sprachcode (`LinkedHashMap` mit `accessOrder=true` +
+  `removeEldestEntry()`), `MAX_LOADED_VOSK_LANGUAGES=2` - direktes Pendant
+  zu `SttFilter._get_vosk_engine()` im Docker-Projekt. Instanzgebunden
+  (gehört `PlaybackService`, analog `FingerprintDb`), cached sowohl Erfolg
+  als auch Fehlschlag, damit ein kaputter Modellpfad nicht bei jedem
+  Sample erneut das Dateisystem anfasst.
+- **Gegenmaßnahme gegen Docker-Bug 1 (Signatur-Änderungs-Absturz durch
+  vergessene Aufrufstelle)**: `modelPath`/`activeModelPath`-Parameter-
+  Threading durch `PlaybackService.manualPlay()`/`play()` und vier interne
+  Aufrufstellen komplett ENTFERNT statt nur sorgfältig durchgereicht.
+  `play(station)` löst Sprache/Modellpfad jetzt INTERN bei JEDEM Aufruf
+  frisch über `SttSettings.resolveLanguage(station.category)` auf -
+  strukturell unmöglich, dass eine veraltete Kopie an einer vergessenen
+  Stelle landet. Zusätzlich abgesichert durch `grep -n "\.play(\|
+  manualPlay("` über `PlaybackService.kt`/`MainActivity.kt` nach der
+  Umsetzung (alle Fundstellen einzeln gegen die neue, parameterlose
+  Signatur geprüft - vollständig, keine vergessene Stelle).
+- **`analysis/StreamAnalyzer.kt`**: `start()`/`runAnalysis()` bekommen
+  `language`/`voskModelCache`/`ratioToConfirmSpeech`/`ratioToConfirmMusic`
+  als Parameter statt der bisherigen globalen Top-Level-Konstanten
+  `RATIO_TO_CONFIRM_SPEECH`/`RATIO_TO_CONFIRM_MUSIC` (deren bisherige Werte
+  0.65/0.30 wandern als Defaults nach `LanguageConfig`). Modell kommt jetzt
+  über `voskModelCache.get(modelPath, language)` statt direkter
+  `Model(modelPath)`-Konstruktion - Ownership liegt beim Cache,
+  `StreamAnalyzer` darf das Modell deshalb NICHT mehr selbst `close()`n
+  (würde sonst ein von einem anderen Sender/einer anderen Sprache noch
+  gecachtes Modell zerstören).
+- **`stt/SttSettingsActivity.kt` (neu)**: eigener Bildschirm (analog
+  `StationManagementActivity`), zwei Abschnitte - "🌐 STT-Sprachen"
+  (Liste, Download-Status pro Sprache, Hinzufügen/Löschen, Löschsperre für
+  die letzte verbleibende Sprache) und "🏷 Kategorie-Sprachen" (ein
+  Spinner pro fester Kategorie). `MainActivity` verliert die alte
+  Einzelmodell-UI (fest "DE") komplett, bekommt stattdessen einen Button
+  zur neuen Activity plus eine nur bei Bedarf sichtbare Statuszeile
+  (`sttModelMissing`-StateFlow: Sprache, für die kein Modell vorliegt -
+  Analyse pausiert dann, kein automatischer Wechsel).
+- `LanguageConfig` hält `ratioToConfirmSpeech`/`ratioToConfirmMusic` bereits
+  PRO Sprache (Speicherstruktur für Schritt 2), auch wenn deren Bearbeitung
+  in diesem Schritt noch nicht über die UI möglich ist - Nutzerentscheidung
+  aus der Plan-Rückfrage: der künftige Kalibrierungs-Wizard soll genau
+  diese beiden, bereits vorhandenen Verhältnis-Schwellen kalibrieren
+  (Android hat kein Docker-artiges "VAD + STT-Konfidenz-Schwelle"-Duo,
+  Vosk-Texterkennung ist hier bereits der einzige Detektor).
+
+### Verifiziert (Emulator, API 34 x86_64)
+
+- **Rückwärtskompatibilität**: bestehende Installation mit bereits
+  heruntergeladenem deutschen Modell (aus früheren Phasen) - `de` wurde
+  ohne erneuten Download über den identischen, URL-abgeleiteten Pfad
+  gefunden (`VoskModelCache: Vosk-Modell fuer Sprache 'de' geladen
+  (.../vosk-model-small-de-0.15)`), Deutschlandfunk → SWR3-Auto-Switch
+  funktionierte wie vor dieser Änderung.
+- **Neue Sprache**: Englisch (`vosk-model-small-en-us-0.15`, dieselbe
+  Quelle wie im Docker-Projekt) über die neue "+ Neue Sprache"-UI
+  hinzugefügt, Download über die App abgeschlossen ("Modell bereit."),
+  Kategorie "International" auf "en" gesetzt (persistiert in
+  `stt_settings_prefs.xml`, überlebt Activity-Neustart), Testsender in
+  dieser Kategorie angelegt und abgespielt - Logcat bestätigt
+  `VoskModelCache: Vosk-Modell fuer Sprache 'en' geladen`, kein Absturz.
+- **Löschsperre**: Lösch-Button für die letzte verbleibende Sprache korrekt
+  `enabled="false"` (UI-Dump geprüft), sobald eine zweite Sprache existiert
+  wieder aktiv.
+- **Fehlender-Modell-Fall**: Kategorie auf eine Sprache ohne heruntergeladenes
+  Modell gesetzt, Sender dieser Kategorie abgespielt - kein Absturz,
+  `⚠ Kein Modell für „en" – Analyse pausiert.`-Hinweis erschien korrekt auf
+  der Startseite, kein automatischer Wechsel ausgelöst (Passthrough wie bei
+  jedem fehlenden Modell schon bisher).
+- `adb logcat -d --pid=<App-PID> | grep -iE "FATAL|Exception|Error"` über
+  die gesamte Testreihe ohne app-eigene Fatals (die beiden aufgetretenen
+  `NuCachedSource2`-Zeilen sind normale, transiente ExoPlayer-Netzwerk-
+  Warnungen, kein Absturz - Prozess blieb durchgehend am Leben).
+- `./gradlew assembleDebug` sauber, keine Compiler-Warnings mehr (der
+  einzige verbliebene, `Parameter 'code' is never used" in
+  `VoskModelManager.modelPathOrNull()`, per `@Suppress` explizit als
+  bewusste API-Symmetrie markiert statt stillschweigend ignoriert).
+
+### Bewusst NICHT gemacht (Nachholbedarf, kein übersprungener Test)
+
+- **Kein Live-Test der LRU-Verdrängung mit einer dritten Sprache** - der
+  Cache wurde nur mit zwei gleichzeitig geladenen Sprachen (de/en, exakt
+  `MAX_LOADED_VOSK_LANGUAGES`) geprüft, nicht mit einer dritten, die das
+  älteste Modell tatsächlich verdrängt. Die Verdrängungslogik selbst ist
+  Standard-`LinkedHashMap`-Verhalten (`accessOrder=true` +
+  `removeEldestEntry()`), aber noch nicht am eigenen Cache live beobachtet.
+- **Kalibrierungs-Wizard (Schritt 2) nicht Teil dieses Durchgangs** - wie
+  im Fahrplan gefordert und im Docker-Projekt vorgemacht: erst nach
+  Rückmeldung, dass dieses Grundgerüst im echten Betrieb läuft.
+- Kein Test mit tatsächlich englischsprachigem Audio (der Test-Sender
+  spielte aus Zeitgründen einen deutschsprachigen Stream ab, nur um den
+  Lade-/Cache-Pfad für eine zweite Sprache ohne Absturz zu bestätigen) -
+  ob die STT-Erkennungsqualität für Englisch in der Praxis stimmt, ist
+  damit noch nicht geprüft.

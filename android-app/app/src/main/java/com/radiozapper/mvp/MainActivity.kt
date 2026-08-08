@@ -28,17 +28,15 @@ import com.radiozapper.mvp.playback.PlaybackService
 import com.radiozapper.mvp.playback.PlaybackStatus
 import com.radiozapper.mvp.playback.StationLockReason
 import com.radiozapper.mvp.station.StationManagementActivity
+import com.radiozapper.mvp.stt.SttSettingsActivity
 import com.radiozapper.mvp.update.UpdateManager
 import com.radiozapper.mvp.update.UpdateState
-import com.radiozapper.mvp.vosk.ModelState
-import com.radiozapper.mvp.vosk.VoskModelManager
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
-    private lateinit var modelManager: VoskModelManager
     private lateinit var updateManager: UpdateManager
 
     private var playbackService: PlaybackService? = null
@@ -52,6 +50,7 @@ class MainActivity : AppCompatActivity() {
     private var newsBreakFileNameJob: Job? = null
     private var fingerprintOutcomeJob: Job? = null
     private var fingerprintMatchJob: Job? = null
+    private var sttModelMissingJob: Job? = null
     private var lockedStations: Map<String, StationLockReason> = emptyMap()
 
     // Fuer die kombinierte "Läuft: ..."-Anzeige (siehe renderCurrentDisplay()) -
@@ -145,6 +144,21 @@ class MainActivity : AppCompatActivity() {
                     binding.zappingErrorButton.visibility = if (match != null) android.view.View.VISIBLE else android.view.View.GONE
                 }
             }
+
+            // Sprache, fuer die kein Vosk-Modell heruntergeladen ist (siehe
+            // PlaybackService.play() - loest dort einen Passthrough OHNE
+            // Analyse aus, nicht sichtbar ohne diesen Hinweis).
+            sttModelMissingJob?.cancel()
+            sttModelMissingJob = lifecycleScope.launch {
+                service.sttModelMissing.collect { language ->
+                    if (language != null) {
+                        binding.sttModelMissingText.text = getString(R.string.stt_model_missing, language)
+                        binding.sttModelMissingText.visibility = android.view.View.VISIBLE
+                    } else {
+                        binding.sttModelMissingText.visibility = android.view.View.GONE
+                    }
+                }
+            }
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
@@ -158,6 +172,7 @@ class MainActivity : AppCompatActivity() {
             newsBreakFileNameJob?.cancel()
             fingerprintOutcomeJob?.cancel()
             fingerprintMatchJob?.cancel()
+            sttModelMissingJob?.cancel()
             lockedStations = emptyMap()
         }
     }
@@ -173,7 +188,6 @@ class MainActivity : AppCompatActivity() {
         // aeltere APK laeuft.
         binding.buildTimeText.text = getString(R.string.build_time, BuildConfig.BUILD_TIME)
 
-        modelManager = VoskModelManager(applicationContext)
         updateManager = UpdateManager(applicationContext)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -181,11 +195,14 @@ class MainActivity : AppCompatActivity() {
         }
 
         observeStations()
-        observeModelState()
         observeUpdateState()
 
         binding.manageStationsButton.setOnClickListener {
             startActivity(Intent(this, StationManagementActivity::class.java))
+        }
+
+        binding.manageSttLanguagesButton.setOnClickListener {
+            startActivity(Intent(this, SttSettingsActivity::class.java))
         }
 
         // Update-Server-Adresse bewusst NICHT hartcodiert (siehe UpdateManager.kt) -
@@ -197,10 +214,6 @@ class MainActivity : AppCompatActivity() {
             updateManager.setBaseUrl(binding.updateServerUrlInput.text.toString())
             binding.updateServerUrlInput.setText(updateManager.getBaseUrl())
             binding.updateStatusText.text = getString(R.string.update_server_saved)
-        }
-
-        binding.downloadModelButton.setOnClickListener {
-            lifecycleScope.launch { modelManager.downloadAndUnpack() }
         }
 
         binding.stopButton.setOnClickListener {
@@ -287,6 +300,7 @@ class MainActivity : AppCompatActivity() {
         newsBreakFileNameJob?.cancel()
         fingerprintOutcomeJob?.cancel()
         fingerprintMatchJob?.cancel()
+        sttModelMissingJob?.cancel()
     }
 
     /**
@@ -343,7 +357,7 @@ class MainActivity : AppCompatActivity() {
         // manualPlay() statt play(): explizite Nutzerwahl hebt eine eventuelle
         // Sperre (Sprache-Cooldown ODER Watchdog) fuer diesen Sender auf, siehe
         // PlaybackService-Klassen-Doc.
-        service.manualPlay(station, modelManager.modelPathOrNull())
+        service.manualPlay(station)
     }
 
     private fun renderStatus(status: PlaybackStatus) {
@@ -401,50 +415,6 @@ class MainActivity : AppCompatActivity() {
         val g = ((g1 + m) * 255).toInt().coerceIn(0, 255)
         val b = ((b1 + m) * 255).toInt().coerceIn(0, 255)
         return android.graphics.Color.rgb(r, g, b)
-    }
-
-    private fun observeModelState() {
-        lifecycleScope.launch {
-            repeatOnLifecycle(Lifecycle.State.STARTED) {
-                modelManager.state.collect { state -> renderModelState(state) }
-            }
-        }
-    }
-
-    private fun renderModelState(state: ModelState) {
-        when (state) {
-            is ModelState.NotReady -> {
-                binding.modelStatusText.text = getString(R.string.model_not_ready)
-                binding.modelProgressBar.visibility = android.view.View.GONE
-                binding.downloadModelButton.visibility = android.view.View.VISIBLE
-                binding.downloadModelButton.isEnabled = true
-            }
-
-            is ModelState.Downloading -> {
-                binding.modelStatusText.text = getString(R.string.model_downloading, state.percent)
-                binding.modelProgressBar.visibility = android.view.View.VISIBLE
-                binding.modelProgressBar.progress = state.percent
-                binding.downloadModelButton.isEnabled = false
-            }
-
-            is ModelState.Unpacking -> {
-                binding.modelStatusText.text = getString(R.string.model_unpacking)
-                binding.downloadModelButton.isEnabled = false
-            }
-
-            is ModelState.Ready -> {
-                binding.modelStatusText.text = getString(R.string.model_ready)
-                binding.modelProgressBar.visibility = android.view.View.GONE
-                binding.downloadModelButton.visibility = android.view.View.GONE
-            }
-
-            is ModelState.Error -> {
-                binding.modelStatusText.text = getString(R.string.model_error, state.message)
-                binding.modelProgressBar.visibility = android.view.View.GONE
-                binding.downloadModelButton.visibility = android.view.View.VISIBLE
-                binding.downloadModelButton.isEnabled = true
-            }
-        }
     }
 
     /**

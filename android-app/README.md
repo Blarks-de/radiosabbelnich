@@ -38,10 +38,19 @@ Grenzen").
   geschrieben statt geloescht - fuer Bestandsnutzer aendert sich beim
   Update auf diese Version sichtbar nichts.
 - Wiedergabe ueber ExoPlayer (media3 1.4.1)
-- Vosk-Modell-Download: deutsches Kleinmodell `vosk-model-small-de-0.15`
-  (~45MB, dasselbe Modell wie im Docker-Projekt) wird beim ersten Start
-  per Button-Klick heruntergeladen und in den App-internen Speicher
-  entpackt - NICHT im APK gebundlet
+- **Mehrsprachiges STT** (`stt/SttSettings.kt`, `vosk/VoskModelManager.kt`,
+  `vosk/VoskModelCache.kt`, siehe eigener Architektur-Abschnitt unten) -
+  eigener Bildschirm "🌐 STT-Sprachen verwalten": beliebig viele Sprachen
+  als Freitext (Code + Vosk-Modell-Download-URL, kein festes Dropdown),
+  jede einzeln herunterladbar/loeschbar (mindestens eine muss bleiben).
+  Zuordnung **Kategorie → Sprache** (nicht Sender → Sprache, wie im
+  Docker-Projekt) ueber eine zweite Sektion "🏷 Kategorie-Sprachen" (ein
+  Dropdown pro fester Kategorie). Vorbelegt mit "de" und derselben
+  Modell-URL wie bisher (`vosk-model-small-de-0.15`, ~45MB) - bestehende
+  Installationen mit bereits heruntergeladenem Modell brauchen keinen
+  Migrationsschritt. Fehlt fuer die aktuelle Kategorie ein heruntergeladenes
+  Modell, zeigt die Startseite einen Hinweis ("⚠ Kein Modell für „…" –
+  Analyse pausiert.") statt automatisch zu wechseln.
 - Parallele Analyse: eine zweite, unabhaengige Dekodierung desselben
   Streams (MediaExtractor/MediaCodec) wird auf 16kHz-Mono resampelt und
   laufend in Vosk (`Recognizer.acceptWaveForm`) gefuettert; erkannter
@@ -92,8 +101,8 @@ Grenzen").
   Sender live mit, auch wenn der automatische Wechsel ihn geaendert hat
 - Einfache UI: Senderliste mit Play-Buttons (nur aktivierte Sender, flach,
   kein Kategorie-Gruppieren - das ist Aufgabe der Verwaltungs-Activity),
-  Stop-Button, Statusanzeige, Modell-Download-Fortschritt, Button
-  "Sender verwalten"
+  Stop-Button, Statusanzeige, Buttons "Sender verwalten"/"STT-Sprachen
+  verwalten"
 - **Optik an das Web-Interface angeglichen** (`MainActivity.kt`): Banner-Bild
   (dieselbe Datei wie im Web-Interface) und Türkis-Akzentfarbe (`#1ABC9C`).
   Live-Balken "🤥 Bullshitometer" unter den Steuerbuttons zeigt die rohe
@@ -589,6 +598,61 @@ Jingle erkannt")`, erbt den bestehenden Cooldown automatisch). Pausiert
 implizit waehrend einer Nachrichten-Pause, weil `analyzer.stop()` dort
 bereits die komplette Analyse-Coroutine abbricht.
 
+### Mehrsprachiges STT (Schritt 1: Grundgerüst)
+
+Vorbild: `stt_filter.py`/`settings_store.py` im Docker-Projekt (dessen
+"Mehrsprachige STT-Erkennung"-Abschnitt in `../CLAUDE.md`) - wie dort
+liegt die Zuordnung an der **Kategorie**, nicht am einzelnen Sender
+(`stt/SttSettings.kt`s `categoryLanguages: Map<String, String>`,
+`model/Categories.kt` bleibt unangetastet). Sprachliste als Freitext
+(Code + Vosk-Modell-Download-URL), keine feste Auswahl - Android laedt
+das Modell selbst herunter, anders als der Docker-Container, der auf
+einen Host-Mount angewiesen ist, aber dieselbe Freitext-Philosophie.
+
+`vosk/VoskModelManager.kt` ist seit dieser Phase ein Singleton (`object`)
+statt einer Instanz-Klasse - mehrere Activities (Startseite, die neue
+`stt/SttSettingsActivity.kt`) teilen sich denselben Download-Fortschritt
+pro Sprache (`ConcurrentHashMap<String, MutableStateFlow<ModelState>>`).
+Der Modell-Ordnername wird aus dem Dateinamen der Download-URL abgeleitet
+statt sprachcode-basiert vergeben - fuer Deutsch mit der unveraenderten
+Default-URL ergibt sich dadurch exakt derselbe Pfad wie vor dieser Phase
+(`vosk-model-small-de-0.15`), bestehende Installationen mit bereits
+heruntergeladenem Modell brauchen keinen Migrationsschritt.
+
+`vosk/VoskModelCache.kt` (neu) ist ein LRU-Cache geladener
+`org.vosk.Model`-Objekte pro Sprachcode (`MAX_LOADED_VOSK_LANGUAGES=2`,
+identischer Default wie `MAX_LOADED_VOSK_LANGUAGES` im Docker-Projekt) -
+direktes Pendant zu `SttFilter._get_vosk_engine()`. Instanzgebunden
+(gehoert `PlaybackService`, analog `FingerprintDb`), cached sowohl Erfolg
+als auch Fehlschlag, damit ein kaputter Modellpfad nicht bei jedem Sample
+erneut das Dateisystem anfasst. `StreamAnalyzer.start()`/`runAnalysis()`
+bekommen `language`/`voskModelCache`/`ratioToConfirmSpeech`/
+`ratioToConfirmMusic` als Parameter statt der frueheren globalen
+Konstanten `RATIO_TO_CONFIRM_SPEECH`/`RATIO_TO_CONFIRM_MUSIC` (deren
+bisherige Werte 0.65/0.30 sind jetzt die Defaults in `LanguageConfig`,
+pro Sprache ueberschreibbar). Das Modell kommt ueber
+`voskModelCache.get(modelPath, language)` - Ownership liegt beim Cache,
+`StreamAnalyzer` darf es deshalb nicht mehr selbst schliessen.
+
+**Kein Parameter-Threading mehr fuer Sprache/Modellpfad**: bis zu dieser
+Phase wurde der Vosk-Modellpfad einmal in `MainActivity` aufgeloest und
+als Parameter durch `manualPlay()`/`play()` und vier interne
+Aufrufstellen in `PlaybackService.kt` durchgereicht (`activeModelPath`-
+Feld). Genau dieses Muster war im Docker-Projekt die Ursache eines
+Absturz-Bugs beim Hinzufuegen der dortigen Mehrsprachigkeit (eine
+Aufrufstelle bei der Signaturaenderung vergessen, siehe dessen
+`SESSION.md`, "Fortsetzung 7"). Der Parameter wurde deshalb komplett
+entfernt statt nur sorgfaeltig durchgereicht: `play(station)` loest
+Sprache und Modellpfad jetzt bei JEDEM Aufruf intern ueber
+`SttSettings.resolveLanguage(station.category)` auf - jeder Aufrufer
+bekommt dadurch automatisch den aktuellen Stand, eine vergessene Stelle
+kann strukturell nicht mehr veraltete Daten durchreichen.
+
+Kein Kalibrierungs-Wizard in diesem Schritt - `LanguageConfig` haelt
+`ratioToConfirmSpeech`/`ratioToConfirmMusic` zwar bereits pro Sprache
+(Speicherstruktur fuer einen spaeteren Schritt 2), deren Bearbeitung ist
+aber noch nicht ueber die UI moeglich (siehe "Bekannte Grenzen").
+
 ## Update-Mechanismus (Tailscale, kein Play Store)
 
 Damit eine neue APK nicht jedes Mal per USB/Datei-Transfer aufs Handy
@@ -692,9 +756,14 @@ dafuer das Textfeld - einfach die Tailscale-IP `100.92.3.18` eintragen.
   ausreichend (siehe Live-Test), aber keine hochwertige Audiobearbeitung.
 - **Glaettungs-/Hysterese-Schwellen sind nicht an echten Sendern
   kalibriert** - anders als im Docker-Projekt (dort gegen echte Sender
-  gemessen, siehe dessen `CLAUDE.md`) sind `RATIO_TO_CONFIRM_SPEECH`/
-  `RATIO_TO_CONFIRM_MUSIC` plausible Startwerte, keine Messwerte. Bei
-  Gesang koennte das haeufiger falsch-positiv auf "Sprache" kippen.
+  gemessen, siehe dessen `CLAUDE.md`) sind `ratioToConfirmSpeech`/
+  `ratioToConfirmMusic` (seit Phase 7 pro Sprache in `LanguageConfig`,
+  siehe "Mehrsprachiges STT" oben) plausible Startwerte, keine Messwerte.
+  Bei Gesang koennte das haeufiger falsch-positiv auf "Sprache" kippen.
+  Ein Kalibrierungs-Wizard, der diese Schwellen pro Sprache anhand
+  echter Sample-Aufnahmen vorschlaegt (analog zum Docker-Projekt), ist
+  als Schritt 2 des Fahrplans geplant, aber noch nicht umgesetzt - die
+  Speicherstruktur (`LanguageConfig`) ist bereits vorbereitet.
 - **Beide Sperr-Mechanismen (Sprache-Cooldown UND Watchdog) sind reines
   In-Memory-Timing** - sie verfallen einfach nach ihrer jeweiligen
   Konstante, es gibt keine Eskalation (z.B. laenger werdende Sperren bei
@@ -753,3 +822,8 @@ dafuer das Textfeld - einfach die Tailscale-IP `100.92.3.18` eintragen.
   oben fuer die Begruendung). Ergebnisse (`unreachableIds`) ueberleben
   ausserdem keinen App-Neustart - rein informativ fuer die aktuelle
   Sitzung, kein Persistenz-Feld in `stations.json`.
+- **`VoskModelCache`s LRU-Verdraengung noch nicht mit einer dritten
+  gleichzeitig genutzten Sprache live beobachtet** (nur mit zwei, siehe
+  `SESSION.md`) - die Verdraengungslogik selbst ist Standard-
+  `LinkedHashMap`-Verhalten, aber noch nicht am eigenen Cache unter
+  echter Last gegengeprueft.
