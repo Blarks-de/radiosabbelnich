@@ -20,10 +20,13 @@ import com.radiozapper.mvp.R
 import com.radiozapper.mvp.analysis.StreamAnalyzer
 import com.radiozapper.mvp.model.Station
 import com.radiozapper.mvp.model.StationRepository
+import com.radiozapper.mvp.newsbreak.NewsBreak
+import com.radiozapper.mvp.newsbreak.NewsBreakSettings
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 private const val TAG = "PlaybackService"
@@ -111,6 +114,19 @@ private const val BUFFERING_TIMEOUT_SECONDS = 15L
  * auf dem Handy erwartete Sendermenge in keinem Verhaeltnis zum
  * Zusatznutzen. `manualPlay()` (Sender in der Liste antippen) profitiert nur
  * zufaellig, wenn der angetippte Sender der vorhergesagte ist.
+ *
+ * Nachrichten-Pause (Phase 6, siehe newsbreak/NewsBreak.kt fuer die reine
+ * Zeitfenster-/Auswahl-Logik): `_currentStation` bleibt waehrend einer Pause
+ * bewusst UNVERAENDERT der pausierte Sender (analog `current` im
+ * Docker-Projekt) - Ring-Berechnung, Cooldown/Dead-Maps und die Vorwaermung
+ * oben laufen dadurch mit korrekten Daten weiter, nur `player` zeigt
+ * voruebergehend auf eine lokale MP3. Ein periodischer Tick
+ * (`startNewsBreakTicker()`, alle 15s waehrend der Wiedergabe) prueft
+ * `NewsBreak.activeSlot()` und steuert Eintritt/Fortsetzen/Ende. Der
+ * `playerListener` muss dabei zwischen "MP3 hat ein Problem" (naechste Datei
+ * laden bzw. Pause beenden) und "Sender hat ein Problem" (regulaerer
+ * Watchdog oben) unterscheiden - sonst wuerde ein MP3-Fehler faelschlich den
+ * gesunden, nur pausierten Sender als tot markieren.
  */
 class PlaybackService : LifecycleService() {
 
@@ -144,24 +160,52 @@ class PlaybackService : LifecycleService() {
     private var preloadedPlayer: ExoPlayer? = null
     private var preloadedStationId: String? = null
 
+    // Nachrichten-Pause (siehe Klassen-Doc oben + newsbreak/NewsBreak.kt).
+    private val _newsBreakActive = MutableStateFlow(false)
+    val newsBreakActive: StateFlow<Boolean> = _newsBreakActive
+    private val _newsBreakFileName = MutableStateFlow<String?>(null)
+    val newsBreakFileName: StateFlow<String?> = _newsBreakFileName
+    private val newsBreakRecentFiles = ArrayDeque<String>() // maxsize NewsBreak.RECENT_HISTORY_SIZE, aeltestes zuerst
+    private var newsBreakServedSlot: String? = null
+    private var newsBreakTickerJob: Job? = null
+
     private val playerListener = object : Player.Listener {
         override fun onPlayerError(error: PlaybackException) {
-            Log.w(TAG, "ExoPlayer-Fehler bei '${_currentStation.value?.name}'", error)
-            handlePlaybackFailure()
+            if (_newsBreakActive.value) {
+                Log.w(TAG, "Nachrichten-Pause-Datei '${_newsBreakFileName.value}' fehlgeschlagen", error)
+                advanceNewsBreak()
+            } else {
+                Log.w(TAG, "ExoPlayer-Fehler bei '${_currentStation.value?.name}'", error)
+                handlePlaybackFailure()
+            }
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
-            if (playbackState == Player.STATE_BUFFERING) {
-                armBufferingWatchdog()
-            } else {
-                bufferingTimeoutJob?.cancel()
-                bufferingTimeoutJob = null
-                if (playbackState == Player.STATE_READY) {
-                    // Laeuft wieder - kein Grund, eine eventuelle Tot-Markierung
-                    // laenger zu halten als noetig (analog "jeder erfolgreiche
-                    // Read setzt den Zaehler zurueck" im Docker-Projekt).
-                    _currentStation.value?.let { deadUntil.remove(it.id) }
-                    refreshLockedStationsSnapshot()
+            when (playbackState) {
+                Player.STATE_BUFFERING -> armBufferingWatchdog()
+                Player.STATE_ENDED -> {
+                    // Radiostreams enden nie - dieser Fall tritt nur bei einer
+                    // zu Ende gespielten Nachrichten-Pause-MP3 auf.
+                    bufferingTimeoutJob?.cancel()
+                    bufferingTimeoutJob = null
+                    if (_newsBreakActive.value) advanceNewsBreak()
+                }
+                Player.STATE_READY -> {
+                    bufferingTimeoutJob?.cancel()
+                    bufferingTimeoutJob = null
+                    if (!_newsBreakActive.value) {
+                        // Laeuft wieder - kein Grund, eine eventuelle Tot-Markierung
+                        // laenger zu halten als noetig (analog "jeder erfolgreiche
+                        // Read setzt den Zaehler zurueck" im Docker-Projekt). Waehrend
+                        // einer Pause zeigt _currentStation auf den PAUSIERTEN Sender -
+                        // dessen Sperre hat mit der MP3-Bereitschaft nichts zu tun.
+                        _currentStation.value?.let { deadUntil.remove(it.id) }
+                        refreshLockedStationsSnapshot()
+                    }
+                }
+                else -> {
+                    bufferingTimeoutJob?.cancel()
+                    bufferingTimeoutJob = null
                 }
             }
         }
@@ -215,6 +259,10 @@ class PlaybackService : LifecycleService() {
      * handlePlaybackFailure) rufen weiterhin direkt play() auf.
      */
     fun manualPlay(station: Station, modelPath: String?) {
+        // Expliziter Nutzerwunsch beendet eine laufende Nachrichten-Pause sofort -
+        // eigene Entscheidung schlaegt Automatik, wie ueberall sonst in dieser
+        // Klasse auch (siehe Klassen-Doc, Abschnitt Nachrichten-Pause).
+        interruptNewsBreak()
         stationCooldownUntil.remove(station.id)
         deadUntil.remove(station.id)
         refreshLockedStationsSnapshot()
@@ -227,7 +275,10 @@ class PlaybackService : LifecycleService() {
      * automatisch erkannter Sprache-Treffer, nur manuell ausgeloest statt ueber
      * handleStatusForAutoSwitch(). Reine Weiterleitung, kein Duplikat der Ring-Logik.
      */
-    fun manualSkip() = attemptAutoSwitch()
+    fun manualSkip() {
+        interruptNewsBreak()
+        attemptAutoSwitch()
+    }
 
     /**
      * Uebernimmt den vorgewaermten Player, falls `station` genau der laut
@@ -279,6 +330,7 @@ class PlaybackService : LifecycleService() {
         }
 
         refreshPreload()
+        startNewsBreakTicker()
     }
 
     /**
@@ -324,6 +376,112 @@ class PlaybackService : LifecycleService() {
         preloadedStationId = null
     }
 
+    /** Alle 15s waehrend der Wiedergabe - die Fenstergranularitaet ist Minuten, das reicht. Laeuft ueber play()/resumeFromNewsBreak() hinweg durch, bis stopPlayback()/onDestroy(). */
+    private fun startNewsBreakTicker() {
+        if (newsBreakTickerJob?.isActive == true) return
+        newsBreakTickerJob = lifecycleScope.launch {
+            while (isActive) {
+                checkNewsBreak()
+                delay(15_000)
+            }
+        }
+    }
+
+    /**
+     * Prueft, ob gerade ein Nachrichten-Pause-Fenster laeuft (siehe
+     * NewsBreak.activeSlot()) und steuert Eintritt/Ende. `newsBreakServedSlot`
+     * wird SOFORT beim Eintreten gesetzt, nicht erst bei Erfolg - sonst wuerde
+     * ein leerer/ungueltiger Ordner bei jedem Tick erneut versucht, bis das
+     * Fenster von selbst vorbei ist (analog zum Docker-Projekt).
+     */
+    private fun checkNewsBreak() {
+        val slot = NewsBreak.activeSlot(NewsBreakSettings.getConfig(this))
+        if (slot != null && !_newsBreakActive.value && slot != newsBreakServedSlot) {
+            newsBreakServedSlot = slot
+            enterNewsBreak()
+        } else if (_newsBreakActive.value && slot == null) {
+            resumeFromNewsBreak("Nachrichten-Pause-Fenster abgelaufen")
+        }
+    }
+
+    /**
+     * Waehlt eine zufaellige, zuletzt nicht gespielte MP3 (siehe
+     * NewsBreak.pickRandom()/RECENT_HISTORY_SIZE) und startet sie auf dem
+     * bestehenden `player` - dieselbe Instanz, die sonst Radiosender abspielt
+     * (kein eigener MP3-Player noetig). True bei Erfolg, false wenn der
+     * Ordner leer/ungueltig ist (der Aufrufer entscheidet dann, was
+     * stattdessen passiert - Eintritt: gar nichts, laufender Sender bleibt
+     * unangetastet; laufende Pause: beenden).
+     */
+    private fun playNextNewsBreakFile(): Boolean {
+        val files = NewsBreakSettings.listMp3s(this)
+        val chosen = NewsBreak.pickRandom(files, newsBreakRecentFiles.toList()) { it.name ?: "" } ?: return false
+        val name = chosen.name ?: return false
+
+        if (newsBreakRecentFiles.size >= NewsBreak.RECENT_HISTORY_SIZE) newsBreakRecentFiles.removeFirst()
+        newsBreakRecentFiles.addLast(name)
+
+        player?.apply {
+            stop()
+            setMediaItem(MediaItem.fromUri(chosen.uri))
+            prepare()
+            playWhenReady = true
+        }
+        _newsBreakFileName.value = name
+        return true
+    }
+
+    private fun enterNewsBreak() {
+        if (!playNextNewsBreakFile()) {
+            Log.w(TAG, "📰 Nachrichten-Pause-Fenster erreicht, aber keine MP3 verfuegbar - uebersprungen")
+            return
+        }
+        // Keine Klassifikation waehrend der Pause noetig - die MP3 enthaelt
+        // u.U. selbst Sprache, das soll nicht als "Moderation auf dem echten
+        // Sender" fehlgedeutet werden (siehe handleStatusForAutoSwitch()).
+        analyzer.stop()
+        _newsBreakActive.value = true
+        Log.i(
+            TAG,
+            "📰 Nachrichten-Pause: spiele '${_newsBreakFileName.value}' " +
+                "(zurueck zu '${_currentStation.value?.name}' danach)"
+        )
+    }
+
+    /** MP3 zu Ende ODER fehlgeschlagen: laeuft das Fenster noch, naechste Datei laden - sonst Pause beenden. Ohne das endete die Pause nach genau einer Datei (siehe Klassen-Doc/SESSION.md). */
+    private fun advanceNewsBreak() {
+        val stillActive = NewsBreak.activeSlot(NewsBreakSettings.getConfig(this)) != null
+        if (stillActive && playNextNewsBreakFile()) {
+            Log.i(TAG, "📰 Nachrichten-Pause: naechste Datei '${_newsBreakFileName.value}'")
+            return
+        }
+        resumeFromNewsBreak("Nachrichten-Pause-MP3 zu Ende")
+    }
+
+    /** Beendet die Pause und schaltet zurueck zum vorher laufenden Sender - dieselbe Funktion (play()) wie jeder normale Wechsel. */
+    private fun resumeFromNewsBreak(reason: String) {
+        _newsBreakActive.value = false
+        _newsBreakFileName.value = null
+        val station = _currentStation.value ?: return
+        Log.i(TAG, "📰 $reason - zurueck zu '${station.name}'")
+        play(station, activeModelPath)
+    }
+
+    /**
+     * Eine explizite Nutzer-Aktion (manueller Switch, ZAPPEN!) waehrend einer
+     * laufenden Nachrichten-Pause beendet die Pause sofort. Markiert den Slot
+     * als bedient, damit die Pause nicht im selben Zeitfenster gleich wieder
+     * anspringt und den gerade erst gewaehlten Sender sofort wieder verdraengt.
+     * Loest selbst KEINEN Wechsel aus - das macht der Aufrufer (play() folgt
+     * unmittelbar in manualPlay()/attemptAutoSwitch()).
+     */
+    private fun interruptNewsBreak() {
+        if (!_newsBreakActive.value) return
+        newsBreakServedSlot = NewsBreak.activeSlot(NewsBreakSettings.getConfig(this))
+        _newsBreakActive.value = false
+        _newsBreakFileName.value = null
+    }
+
     fun stopPlayback() {
         _currentStation.value = null
         activeModelPath = null
@@ -334,6 +492,12 @@ class PlaybackService : LifecycleService() {
         refreshLockedStationsSnapshot()
         bufferingTimeoutJob?.cancel()
         bufferingTimeoutJob = null
+        newsBreakTickerJob?.cancel()
+        newsBreakTickerJob = null
+        _newsBreakActive.value = false
+        _newsBreakFileName.value = null
+        newsBreakRecentFiles.clear()
+        newsBreakServedSlot = null
         player?.stop()
         analyzer.stop()
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
@@ -346,6 +510,7 @@ class PlaybackService : LifecycleService() {
      * geflackert werden wie vorher in der Anzeige.
      */
     private fun handleStatusForAutoSwitch(status: PlaybackStatus) {
+        if (_newsBreakActive.value) return // keine automatische Umschaltung, ausgeloest von einer MP3
         when (status) {
             PlaybackStatus.MUSIC -> {
                 autoSwitchAttempts = 0 // Treffer - Zaehler fuer die naechste Sprache-Serie zuruecksetzen
@@ -428,12 +593,17 @@ class PlaybackService : LifecycleService() {
         bufferingTimeoutJob?.cancel()
         bufferingTimeoutJob = lifecycleScope.launch {
             delay(BUFFERING_TIMEOUT_SECONDS * 1000)
-            Log.w(
-                TAG,
-                "Kein Fortschritt seit ${BUFFERING_TIMEOUT_SECONDS}s - " +
-                    "'${_currentStation.value?.name}' antwortet nicht"
-            )
-            handlePlaybackFailure()
+            if (_newsBreakActive.value) {
+                Log.w(TAG, "Kein Fortschritt seit ${BUFFERING_TIMEOUT_SECONDS}s - Nachrichten-Pause-Datei antwortet nicht")
+                advanceNewsBreak()
+            } else {
+                Log.w(
+                    TAG,
+                    "Kein Fortschritt seit ${BUFFERING_TIMEOUT_SECONDS}s - " +
+                        "'${_currentStation.value?.name}' antwortet nicht"
+                )
+                handlePlaybackFailure()
+            }
         }
     }
 
@@ -584,6 +754,7 @@ class PlaybackService : LifecycleService() {
 
     override fun onDestroy() {
         bufferingTimeoutJob?.cancel()
+        newsBreakTickerJob?.cancel()
         analyzer.stop()
         player?.release()
         player = null

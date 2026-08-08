@@ -72,4 +72,9 @@ dependencies {
     implementation("androidx.media3:media3-common:1.4.1")
 
     implementation("com.alphacephei:vosk-android:0.3.47")
+
+    // Fuer den News-Break-Ordner (SAF-Tree-Uri, siehe newsbreak/NewsBreakSettings.kt) -
+    // AndroidX-Standardweg, um Kind-Dateien einer persistierten Tree-Uri aufzulisten,
+    // ohne DocumentsContract-Cursor-Handling von Hand.
+    implementation("androidx.documentfile:documentfile:1.0.1")
 }

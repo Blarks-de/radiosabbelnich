@@ -10,9 +10,11 @@ import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -20,6 +22,7 @@ import com.radiozapper.mvp.databinding.ActivityMainBinding
 import com.radiozapper.mvp.databinding.ItemStationBinding
 import com.radiozapper.mvp.model.Station
 import com.radiozapper.mvp.model.StationRepository
+import com.radiozapper.mvp.newsbreak.NewsBreakSettings
 import com.radiozapper.mvp.playback.PlaybackService
 import com.radiozapper.mvp.playback.PlaybackStatus
 import com.radiozapper.mvp.playback.StationLockReason
@@ -44,10 +47,27 @@ class MainActivity : AppCompatActivity() {
     private var currentStationJob: Job? = null
     private var lockedStationsJob: Job? = null
     private var speechRatioJob: Job? = null
+    private var newsBreakActiveJob: Job? = null
+    private var newsBreakFileNameJob: Job? = null
     private var lockedStations: Map<String, StationLockReason> = emptyMap()
+
+    // Fuer die kombinierte "Läuft: ..."-Anzeige (siehe renderCurrentDisplay()) -
+    // currentStation und newsBreakActive/newsBreakFileName sind drei getrennte
+    // StateFlows des Service, aber am Ende ein einziges Textfeld.
+    private var latestStation: Station? = null
+    private var latestNewsBreakActive = false
+    private var latestNewsBreakFileName: String? = null
 
     private val requestNotificationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* Ablehnung: Notification bleibt einfach aus */ }
+
+    /** SAF-Ordnerauswahl fuer die Nachrichten-Pause (siehe newsbreak/NewsBreakSettings.kt). */
+    private val openNewsBreakFolder = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) {
+            NewsBreakSettings.setFolderUri(this, uri)
+            renderNewsBreakFolderStatus()
+        }
+    }
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
@@ -72,7 +92,27 @@ class MainActivity : AppCompatActivity() {
             currentStationJob?.cancel()
             currentStationJob = lifecycleScope.launch {
                 service.currentStation.collect { station ->
-                    binding.currentStationText.text = station?.name ?: getString(R.string.current_station_none)
+                    latestStation = station
+                    renderCurrentDisplay()
+                }
+            }
+
+            // "current" bleibt waehrend einer Nachrichten-Pause bewusst der
+            // pausierte Sender (siehe PlaybackService-Klassen-Doc) - die beiden
+            // eigenen Flows hier ueberschreiben die Anzeige nur oberflaechlich.
+            newsBreakActiveJob?.cancel()
+            newsBreakActiveJob = lifecycleScope.launch {
+                service.newsBreakActive.collect { active ->
+                    latestNewsBreakActive = active
+                    renderCurrentDisplay()
+                    if (active) binding.statusText.text = "" // sonst stuende irrefuehrend "Gestoppt" da (analyzer.stop())
+                }
+            }
+            newsBreakFileNameJob?.cancel()
+            newsBreakFileNameJob = lifecycleScope.launch {
+                service.newsBreakFileName.collect { fileName ->
+                    latestNewsBreakFileName = fileName
+                    renderCurrentDisplay()
                 }
             }
 
@@ -100,6 +140,8 @@ class MainActivity : AppCompatActivity() {
             currentStationJob?.cancel()
             lockedStationsJob?.cancel()
             speechRatioJob?.cancel()
+            newsBreakActiveJob?.cancel()
+            newsBreakFileNameJob?.cancel()
             lockedStations = emptyMap()
         }
     }
@@ -154,6 +196,56 @@ class MainActivity : AppCompatActivity() {
         binding.zapButton.setOnClickListener {
             playbackService?.manualSkip()
         }
+
+        setupNewsBreakSection()
+    }
+
+    /**
+     * Vorbelegt mit dem gespeicherten/Default-Zustand (siehe
+     * NewsBreakSettings), jede Aenderung speichert sofort - gleiches Muster
+     * wie die Update-Server-Sektion oben.
+     */
+    private fun setupNewsBreakSection() {
+        val cfg = NewsBreakSettings.getConfig(this)
+        binding.newsBreakEnabledCheckbox.isChecked = cfg.enabled
+        binding.newsBreakEnabledCheckbox.setOnCheckedChangeListener { _, checked ->
+            NewsBreakSettings.setEnabled(this, checked)
+        }
+        binding.newsBreakWindowMinutesInput.setText(cfg.windowMinutes.toString())
+        renderNewsBreakFolderStatus()
+
+        binding.newsBreakFolderButton.setOnClickListener {
+            openNewsBreakFolder.launch(null)
+        }
+
+        binding.saveNewsBreakWindowButton.setOnClickListener {
+            val minutes = binding.newsBreakWindowMinutesInput.text.toString().toDoubleOrNull()
+            if (minutes == null || minutes <= 0) {
+                Toast.makeText(this, R.string.news_break_window_invalid, Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            NewsBreakSettings.setWindowMinutes(this, minutes)
+            Toast.makeText(this, getString(R.string.news_break_window_saved, minutes.toString()), Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun renderNewsBreakFolderStatus() {
+        val uri = NewsBreakSettings.getFolderUri(this)
+        binding.newsBreakFolderStatusText.text = if (uri != null) {
+            val name = DocumentFile.fromTreeUri(this, uri)?.name ?: uri.lastPathSegment ?: uri.toString()
+            getString(R.string.news_break_folder_selected, name)
+        } else {
+            getString(R.string.news_break_no_folder)
+        }
+    }
+
+    /** "Läuft: ..."-Text: waehrend einer Nachrichten-Pause die MP3, sonst der normale Sendername. Kein Live-Countdown (reiner Kosmetik-Tick, siehe Bullshitometer-Begruendung). */
+    private fun renderCurrentDisplay() {
+        binding.currentStationText.text = if (latestNewsBreakActive) {
+            getString(R.string.news_break_now_playing, latestNewsBreakFileName ?: "")
+        } else {
+            latestStation?.name ?: getString(R.string.current_station_none)
+        }
     }
 
     override fun onStart() {
@@ -171,6 +263,8 @@ class MainActivity : AppCompatActivity() {
         currentStationJob?.cancel()
         lockedStationsJob?.cancel()
         speechRatioJob?.cancel()
+        newsBreakActiveJob?.cancel()
+        newsBreakFileNameJob?.cancel()
     }
 
     /**

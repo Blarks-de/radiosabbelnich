@@ -163,6 +163,64 @@
             android:layout_marginBottom="20dp"
             android:background="#DDDDDD" />
 
+        <!-- Nachrichten-Pause (siehe newsbreak/NewsBreak.kt, newsbreak/NewsBreakSettings.kt) -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/news_break_label"
+            android:textSize="12sp" />
+
+        <CheckBox
+            android:id="@+id/newsBreakEnabledCheckbox"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="4dp"
+            android:text="@string/news_break_enabled" />
+
+        <Button
+            android:id="@+id/newsBreakFolderButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/btn_news_break_folder" />
+
+        <TextView
+            android:id="@+id/newsBreakFolderStatusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:layout_marginBottom="8dp"
+            android:textSize="12sp"
+            android:textColor="#888888" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <EditText
+                android:id="@+id/newsBreakWindowMinutesInput"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:inputType="numberDecimal"
+                android:hint="@string/news_break_window_hint"
+                android:textSize="12sp" />
+
+            <Button
+                android:id="@+id/saveNewsBreakWindowButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/btn_save_update_server" />
+        </LinearLayout>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginTop="20dp"
+            android:layout_marginBottom="20dp"
+            android:background="#DDDDDD" />
+
         <!-- Update-Mechanismus (siehe UpdateManager.kt) -->
         <TextView
             android:layout_width="wrap_content"

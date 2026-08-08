@@ -12,8 +12,13 @@ oder Musik laeuft, und bei Sprache automatisch weiterschalten. **Kein
 Web-Wrapper, keine Abhaengigkeit von der Docker-Instanz** - reines
 natives Kotlin/Android.
 
-Bewusst minimal (siehe urspruengliche Anforderung): kein Watchdog/
-Ban-System, kein News-Break, keine Settings-UI.
+Ursprünglich bewusst minimal gestartet (kein Watchdog/Ban-System, kein
+News-Break, keine Settings-UI), mittlerweile aber entlang des
+Feature-Parität-Fahrplans (`RadioZapper_Android_Fahrplan.md`) gewachsen -
+Watchdog, Vorwärmung, M3U-Import und Nachrichten-Pause sind inzwischen
+umgesetzt, siehe Feature-Liste unten. Weiterhin bewusst kein Ban-System,
+das eine Sperre über einen App-Neustart hinweg merkt (siehe "Bekannte
+Grenzen").
 
 ## Was funktioniert (live im Emulator getestet, siehe unten)
 
@@ -120,6 +125,18 @@ Ban-System, kein News-Break, keine Settings-UI.
   alle Sender in "Unsortiert" nachtraegt und nicht erreichbare Sender mit
   einem Badge "⚠ nicht erreichbar" markiert - rein informativ, es wird
   nichts automatisch geloescht.
+- **Nachrichten-Pause / News-Break** (`newsbreak/NewsBreak.kt`,
+  `newsbreak/NewsBreakSettings.kt`, siehe eigener Architektur-Abschnitt
+  unten) - zur vollen/halben Stunde spielt statt des Radiosenders fuer ein
+  konfigurierbares Zeitfenster (Default 2 Minuten, wie im Docker-Projekt)
+  eine zufaellige MP3 aus einem selbst gewaehlten Ordner (Storage Access
+  Framework). Neue Sektion "📰 Nachrichten-Pause" auf der Startseite:
+  Aktiviert-Schalter, "📁 Ordner waehlen", Fensterlaenge in Minuten. Mehrere
+  Dateien pro Fenster werden nachgeladen, bis das Fenster um ist (nicht nur
+  eine, siehe Docker-Projekt-Historie), dieselbe Datei kommt nicht direkt
+  zweimal hintereinander. Danach automatische Rueckkehr zum vorher
+  laufenden Sender - ein manueller Sendertipp oder "⚡ ZAPPEN!" waehrend der
+  Pause beendet sie sofort.
 - **Build-Zeitstempel in der UI** (`Build: YYYY-MM-DD HH:MM` direkt unter
   dem App-Titel, `BuildConfig.BUILD_TIME`) - entsteht automatisch bei
   jedem Build. Zweck: von aussen erkennbar, ob eine gerade installierte
@@ -187,7 +204,6 @@ stabil "🎵 Musik", kein Fehlalarm auf einem gesunden Sender.
 - Kein Ban-System, das eine Sperre ueber einen App-Neustart hinweg merkt
   (der Watchdog unten ist reines In-Memory-Timing, siehe "Bekannte
   Grenzen")
-- Kein News-Break, keine Settings-UI
 - Kein Play-Store-taugliches Icon (einfaches Vektor-Icon)
 - Keine Fehlerbehandlung fuer jeden Edge Case (z.B. Stream ohne
   erkennbaren Audio-Track, Wechsel des Mobilfunknetzes mitten im Stream)
@@ -460,6 +476,50 @@ bewusste Entscheidung ueber den bestehenden Loeschen-Button (ein
 falsch-negativer Check, z.B. durch eine kurze Netzwerkstoerung, wuerde
 sonst einen echten Sender unwiderruflich entfernen).
 
+### Nachrichten-Pause / News-Break
+
+Vorbild: `news_break.py` + dessen Einbindung im Docker-Projekt (siehe
+dessen `CLAUDE.md`, Abschnitt "Nachrichten-Pause"). `newsbreak/NewsBreak.kt`
+ist reine Domaenenlogik (`activeSlot()`: naechstgelegene :00/:30-Grenze,
+aktiv wenn innerhalb der Fensterlaenge; `pickRandom()`: Zufallsauswahl mit
+`RECENT_HISTORY_SIZE=3`-Ausschluss) - kennt weder Android/SAF noch
+`PlaybackService`, exakt dieselbe Trennung wie im Vorbild und aus
+demselben Grund: die Audio-Umschaltung (Sender pausieren, MP3 abspielen,
+zurueckschalten) gehoert in `PlaybackService`, wo die gesamte
+Switch-Infrastruktur schon existiert.
+
+`newsbreak/NewsBreakSettings.kt` haelt den SAF-Ordnerzugriff
+(`ACTION_OPEN_DOCUMENT_TREE`, `takePersistableUriPermission()` fuer
+Persistenz ueber App-Neustarts hinweg - neue Dependency
+`androidx.documentfile`) und die Einstellungen (`enabled`/`windowMinutes`,
+Default `false`/`2.0` wie im Docker-Projekt). Bewusst OHNE die dortige
+`enabled_hours`-Ruhezeiten-Option (Nutzerentscheidung - kleinere UI, passt
+zum bisherigen "bewusst minimal"-Ansatz, spaeter ergaenzbar).
+
+`PlaybackService.kt` haelt `_currentStation` waehrend einer Pause bewusst
+unveraendert auf dem pausierten Sender (wie `current` im Docker-Projekt) -
+Ringberechnung, Cooldown/Dead-Maps und die Vorwaermung (siehe oben) laufen
+dadurch mit korrekten Daten weiter, ohne einen einzigen Sonderfall dafuer
+zu brauchen. Ein periodischer Tick (`startNewsBreakTicker()`, alle 15s
+waehrend der Wiedergabe) ersetzt die "jeder Hauptloop-Durchlauf"-Pruefung
+des Docker-Projekts - Android hat keinen vergleichbaren Dauer-Takt.
+Mehrere Dateien pro Fenster werden nachgeladen (`advanceNewsBreak()`), bis
+das Fenster um ist - der historische Docker-Bug "News-Break spielte nur
+eine MP3" ist damit von vornherein ausgeschlossen (live im Emulator
+verifiziert, siehe `SESSION.md`). `manualPlay()`/`manualSkip()`
+(ZAPPEN!) rufen `interruptNewsBreak()` zuerst auf und beenden eine
+laufende Pause damit sofort - explizite Nutzerentscheidung schlaegt
+Automatik, wie ueberall sonst in dieser Klasse.
+
+Der `playerListener` unterscheidet dabei zwischen "MP3 hat ein Problem"
+(`advanceNewsBreak()`: naechste Datei laden bzw. Pause beenden) und
+"Sender hat ein Problem" (regulaerer Watchdog oben) - sonst wuerde ein
+MP3-Fehler faelschlich den pausierten, aber gesunden Sender als tot
+markieren. Kein `-re`/realtime-Sonderfall noetig (anders als im
+Docker-Projekt, dessen ffmpeg-Pipe eine lokale Datei sonst in
+Sekundenbruchteilen durchreicht) - ExoPlayer spielt eine lokale Datei
+ohnehin in ihrem eigenen Tempo ab, unabhaengig von der Quelle.
+
 ## Update-Mechanismus (Tailscale, kein Play Store)
 
 Damit eine neue APK nicht jedes Mal per USB/Datei-Transfer aufs Handy
@@ -534,6 +594,17 @@ dafuer das Textfeld - einfach die Tailscale-IP `100.92.3.18` eintragen.
   bei `manualPlay()` auf einen nicht vorhergesagten Sender bleibt es beim
   bisherigen Kaltstart (siehe "Vorwärmung" oben, bewusste
   Aufwand/Nutzen-Entscheidung gegen einen Pool wie im Docker-Projekt).
+- **Nachrichten-Pause ohne Ruhezeiten-Option** (`enabled_hours` des
+  Docker-Vorbilds, siehe eigener Abschnitt oben) - Nutzerentscheidung,
+  spaeter ergaenzbar. Der Fenster-Check laeuft alle 15s statt bei jedem
+  Hauptloop-Durchlauf wie im Docker-Projekt - fuer die minutengranulare
+  Fensterlaenge unerheblich, aber ein Fenster-Ein-/Austritt kann dadurch
+  bis zu 15s spaeter bemerkt werden als der exakte Zeitpunkt. Kein
+  Ban-System-artiges Gedaechtnis fuer den zuletzt bedienten Slot ueber
+  einen App-Neustart hinweg (`newsBreakServedSlot` ist reines
+  In-Memory-Feld) - nach einem Neustart mitten in einem bereits bedienten
+  Fenster koennte die Pause theoretisch ein zweites Mal fuer denselben Slot
+  anspringen.
 - **Vosk-`Model` wird bei jedem Play-/Auto-Switch-Klick neu geladen**
   (kein Wiederverwenden ueber Sender-Wechsel hinweg) - kostet jedes Mal
   ca. 1-2 Sekunden zusaetzliche Verzoegerung, nicht optimiert.

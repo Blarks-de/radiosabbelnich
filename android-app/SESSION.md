@@ -426,3 +426,107 @@ dadurch im Test mehrfach kurz hintereinander erneut dran. Exakt das
 dokumentierte Verhalten von `dead_until.clear()`/der Eskalation aus Phase 2,
 keine Regression durch die Vorwärmung - bei einer realistischeren
 Sendermenge (mehr als 2-3 aktive Sender) tritt der Fall seltener auf.
+
+## 2026-08-08 (Fortsetzung 2) — Nachrichten-Pause / News-Break (Phase 6 aus dem Fahrplan, Plan-Mode)
+
+Auslöser: `RadioZapper_Android_Fahrplan.md`, Phase 6. Vorbild: `news_break.py`
++ dessen Einbindung in `radiozapper.py`s `main()` (Docker-Projekt). Plan-Mode
+mit einer Rückfrage (`enabled_hours`-Ruhezeiten des Vorbilds weglassen -
+Nutzerentscheidung: ja, kleinere UI, passt zum "bewusst minimal"-Ansatz),
+danach Umsetzung, danach Live-Test im Emulator mit selbst erzeugten
+Test-MP3s und manuell vorgestellter Systemzeit.
+
+### Architektur
+
+- **`newsbreak/NewsBreak.kt`**: reine Domänenlogik, direktes Pendant zu
+  `news_break.py` - `activeSlot()` (nächstgelegene :00/:30-Grenze,
+  Fensterprüfung über `LocalDateTime`/`ChronoUnit`) und `pickRandom()`
+  (Zufallsauswahl mit `RECENT_HISTORY_SIZE=3`-Ausschluss, generisch über
+  `keyOf: (T) -> String` statt konkret auf Dateipfade festgelegt). Kennt
+  weder Android/SAF noch `PlaybackService` - exakt dieselbe Trennung wie im
+  Docker-Projekt, aus demselben Grund (die Switch-Infrastruktur existiert
+  bereits in `PlaybackService`, nicht duplizieren).
+- **`newsbreak/NewsBreakSettings.kt`**: SAF-Ordnerzugriff
+  (`ACTION_OPEN_DOCUMENT_TREE`, gestartet von `MainActivity`,
+  `takePersistableUriPermission()` für Persistenz über App-Neustarts hinweg)
+  + SharedPreferences (`enabled`/`windowMinutes`, Default identisch zum
+  Docker-Projekt: `false`/`2.0`). Neue Dependency
+  `androidx.documentfile:documentfile` fürs Auflisten der `.mp3`-Kind-Dateien
+  einer Tree-Uri ohne rohes `DocumentsContract`-Cursor-Handling.
+- **`PlaybackService.kt`** (Hauptarbeit): `_currentStation` bleibt während
+  einer Pause bewusst der pausierte Sender (wie `current` im Docker-Projekt)
+  - Ring-Berechnung, Cooldown/Dead-Maps und die Phase-3-Vorwärmung laufen
+  dadurch unverändert weiter, ohne einen einzigen Sonderfall dafür zu
+  brauchen. Neue `newsBreakActive`/`newsBreakFileName`-StateFlows fürs UI.
+  Ein periodischer Tick (`startNewsBreakTicker()`, alle 15s während der
+  Wiedergabe, gestartet in `play()`) ersetzt die "jeder Hauptloop-
+  Durchlauf"-Prüfung des Docker-Projekts - Android hat keinen vergleichbaren
+  Dauer-Takt (`StreamAnalyzer` liefert nur, solange ein echter Sender läuft).
+  `playerListener` unterscheidet jetzt zwischen "MP3 hat ein Problem"
+  (`advanceNewsBreak()`) und "Sender hat ein Problem" (regulärer Watchdog) -
+  sonst hätte ein MP3-Fehler fälschlich den pausierten, aber gesunden
+  Sender als tot markiert. Neuer `STATE_ENDED`-Zweig im Listener (Radiostreams
+  enden nie, das war vorher kein behandelter Fall).
+- **Kein `-re`/realtime-Sonderfall nötig** (anders als im Docker-Projekt,
+  dessen ffmpeg-Pipe eine lokale Datei sonst in Sekundenbruchteilen
+  durchreicht) - ExoPlayer spielt eine lokale Datei ohnehin in ihrem eigenen
+  Tempo ab, unabhängig von der Quelle. Eine der Stellen, an denen die
+  Android-Umsetzung einfacher ist als das Vorbild.
+- `manualPlay()`/`manualSkip()` rufen `interruptNewsBreak()` zuerst auf
+  (Pendant zu `note_news_break_interrupted()`, an genau den beiden
+  Aufrufstellen wie im Docker-Projekt: manueller Switch UND ZAPPEN!).
+  Android brauchte dafür KEINEN Sonderfall wie Pythons
+  `manual_id != current["id"]`-Guard-Erweiterung - `manualPlay()` ruft
+  ohnehin immer `play()` auf, unabhängig davon ob schon dieselbe Station
+  läuft.
+
+### UI (`MainActivity.kt`)
+
+Neue Sektion "📰 Nachrichten-Pause" auf dem Hauptbildschirm (analog zur
+bestehenden Update-Server-Sektion): Aktiviert-Checkbox (speichert sofort),
+"📁 Ordner wählen"-Button (SAF-Picker, zeigt danach den gewählten
+Ordnernamen), Fensterlänge-Feld + Speichern-Button. Die "Läuft: ..."-Anzeige
+kombiniert jetzt drei Service-Flows (`currentStation`/`newsBreakActive`/
+`newsBreakFileName`) über eine gemeinsame `renderCurrentDisplay()` -
+während einer Pause "📰 Nachrichten-Pause: <Dateiname>" statt des
+Sendernamens, Statuszeile wird geleert (sonst stünde irreführend "Gestoppt"
+da, weil `analyzer.stop()` beim Eintritt in die Pause aufgerufen wird).
+
+### Verifiziert (Emulator, `test_device`)
+
+Drei selbst erzeugte 6s-Test-MP3s (`ffmpeg`, reine Sinustöne 440/660/880Hz)
+in einen Ordner gepusht, per SAF-Picker ausgewählt. Da die Fensterlogik an
+echte Uhrzeiten gebunden ist: Emulator-Systemzeit per `adb root` + `adb
+shell date` mehrfach auf 30s vor eine :00/:30-Grenze gestellt (funktioniert
+auf diesem AVD-Image ohne Weiteres).
+
+- **Kompletter Normalfall**: Fenster erreicht → "📰 Nachrichten-Pause:
+  spiele 'tone_c.mp3' (zurück zu 'Deutschlandfunk' danach)" → automatisch
+  `tone_a.mp3` → `tone_b.mp3` → `tone_c.mp3` (je nach Ablauf der 6s-Datei,
+  **der historische Kern-Bug "spielte nur eine MP3" tritt nicht auf** -
+  mehrere Dateien liefen bis das Fenster um war) → nach Fensterende exakt
+  "📰 Nachrichten-Pause-MP3 zu Ende - zurück zu 'Deutschlandfunk'", Sender
+  lief normal weiter (inkl. sofort wieder korrekt greifender Auto-Switch-
+  Logik, sobald Deutschlandfunk erneut Sprache lieferte).
+- **Recent-Ausschluss verifiziert**: bei nur 3 Dateien im Ordner (=
+  `RECENT_HISTORY_SIZE`) wich die Auswahl c→a→b→c - kein direktes
+  Wiederholen, Fallback auf Wiederholung erst nachdem alle 3 einmal dran
+  waren (genau das dokumentierte Verhalten bei kleinen Ordnern).
+- **Manueller Interrupt (ZAPPEN!)**: während einer laufenden Pause
+  angetippt → Pause endete sofort, normaler Ringwechsel lief korrekt weiter
+  (sogar per Vorwärm-Übernahme, kein Kaltstart - Phase-3-Integration
+  funktioniert nahtlos mit).
+- Kein Absturz über die gesamte Testreihe (`adb logcat -d | grep -iE
+  "FATAL|AndroidRuntime"` durchgehend leer).
+
+### Bewusst NICHT gemacht
+
+`enabled_hours`-Ruhezeiten des Docker-Vorbilds (Nutzerentscheidung, siehe
+oben). Kein manueller Interrupt-Test über einen Sender-Tap in der Liste
+(nur ZAPPEN! getestet) - beide Pfade rufen aber dieselbe
+`interruptNewsBreak()`-Funktion auf, keine getrennte Logik, die getrennt
+hätte verifiziert werden müssen. Keine Persistenz-Prüfung des SAF-Zugriffs
+über einen echten Geräte-Neustart hinweg (nur App-intern via
+`takePersistableUriPermission()` - laut Android-Doku über Neustarts
+hinweg gültig, im Emulator nicht eigens neu gebootet, um das zu
+verifizieren).

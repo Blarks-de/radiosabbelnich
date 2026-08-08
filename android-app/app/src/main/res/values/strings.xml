@@ -72,4 +72,14 @@
     <string name="check_running">Prüfe %1$d / %2$d …</string>
     <string name="check_done">%1$d geprüft, %2$d nicht erreichbar.</string>
     <string name="unreachable_badge">⚠ nicht erreichbar</string>
+
+    <string name="news_break_label">📰 Nachrichten-Pause:</string>
+    <string name="news_break_enabled">Aktiviert (zur vollen/halben Stunde)</string>
+    <string name="btn_news_break_folder">📁 Ordner wählen</string>
+    <string name="news_break_no_folder">Kein Ordner gewählt.</string>
+    <string name="news_break_folder_selected">Ordner: %1$s</string>
+    <string name="news_break_window_hint">Fensterlänge (Minuten)</string>
+    <string name="news_break_window_saved">Fensterlänge gespeichert: %1$s Min.</string>
+    <string name="news_break_window_invalid">Ungültige Fensterlänge.</string>
+    <string name="news_break_now_playing">📰 Nachrichten-Pause: %1$s</string>
 </resources>
