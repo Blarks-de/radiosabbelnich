@@ -1,25 +1,32 @@
-# RadioZapper MVP (Android)
+# RadioZapper (Android)
 
-> ⚠️ **Aktiver Prototyp im Bau, kein fertiges Produkt.** Wird laufend
-> weiterentwickelt (Verlauf: `SESSION.md` in diesem Verzeichnis, aeltere
-> Eintraege bis 2026-08-07 in `../SESSION.md`) -
-> Verhalten, Konstanten und sogar die Architektur einzelner Teile koennen
-> sich zwischen zwei Sessions noch aendern.
+> ✅ **Fertig im Sinne des Fahrplans**: alle acht Phasen aus
+> `RadioZapper_Android_Fahrplan.md` sind umgesetzt und live getestet,
+> zuletzt Phase 8 (Review + Feinschliff) am 2026-08-08. Es sind keine
+> geplanten Ausbaustufen mehr offen - die App wird im Alltag benutzt, nicht
+> mehr Stück für Stück aufgebaut. Was sie bewusst NICHT kann, steht
+> vollständig unter "Bekannte Grenzen / offene Punkte" am Ende (u.a.
+> doppelter Netzwerkverbrauch, kein HLS/DASH, keine Play-Store-Reife) -
+> daran ändert der Fertig-Status nichts.
+>
+> Verlauf/Begründungen: `SESSION.md` in diesem Verzeichnis, ältere Einträge
+> bis 2026-08-07 in `../SESSION.md`.
 
-Eigenstaendiger Android-Prototyp, der dasselbe Grundprinzip wie das
+Eigenstaendige Android-App, die dasselbe Grundprinzip wie das
 RadioZapper-Docker-Projekt (`../`) auf dem Handy abbildet: Radiostream
 abspielen und per Vosk (Speech-to-Text) grob erkennen, ob gerade Sprache
 oder Musik laeuft, und bei Sprache automatisch weiterschalten. **Kein
 Web-Wrapper, keine Abhaengigkeit von der Docker-Instanz** - reines
 natives Kotlin/Android.
 
-Ursprünglich bewusst minimal gestartet (kein Watchdog/Ban-System, kein
-News-Break, keine Settings-UI), mittlerweile aber entlang des
-Feature-Parität-Fahrplans (`RadioZapper_Android_Fahrplan.md`) gewachsen -
-Watchdog, Vorwärmung, M3U-Import und Nachrichten-Pause sind inzwischen
-umgesetzt, siehe Feature-Liste unten. Weiterhin bewusst kein Ban-System,
-das eine Sperre über einen App-Neustart hinweg merkt (siehe "Bekannte
-Grenzen").
+Ursprünglich bewusst minimal gestartet (drei hartcodierte Sender, kein
+Watchdog/Ban-System, kein News-Break, keine Settings-UI) und dann entlang
+des Feature-Parität-Fahrplans (`RadioZapper_Android_Fahrplan.md`) auf den
+heutigen Stand gewachsen: Senderverwaltung, Watchdog, Vorwärmung,
+M3U-Import, Nachrichten-Pause, Audio-Fingerprinting und mehrsprachiges STT
+inklusive Kalibrierungs-Wizard - siehe Feature-Liste unten. Weiterhin
+bewusst kein Ban-System, das eine Sperre über einen App-Neustart hinweg
+merkt (siehe "Bekannte Grenzen").
 
 ## Was funktioniert (live im Emulator getestet, siehe unten)
 

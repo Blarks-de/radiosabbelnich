@@ -486,6 +486,23 @@ ohne Netzwerkverbindung zeigt die App also weiterhin ehrlich "Verbindung
 zum Server verloren" statt einen eingefrorenen alten Zustand. Icons unter
 `icon-192.png`/`icon-512.png` sind aktuell schlichte Platzhalter-Grafiken.
 
+## Android-App (eigenständige Zweitumsetzung)
+
+Im Unterverzeichnis [`android-app/`](android-app/) liegt eine **native
+Android-App**, die dasselbe Grundprinzip komplett lokal auf dem Handy
+umsetzt — Kotlin/ExoPlayer/Vosk statt Python/ffmpeg/Silero, ohne
+Web-Wrapper und **ohne jede Abhängigkeit von dieser Docker-Instanz**. Sie
+ist seit dem 2026-08-08 im Sinne ihres Fahrplans fertig: Senderverwaltung
+mit Kategorien, Watchdog gegen tote Sender, Vorwärmung des nächsten
+Senders, M3U-/Kodi-Import, Nachrichten-Pause, Audio-Fingerprinting und
+mehrsprachiges STT samt Kalibrierungs-Wizard sind umgesetzt und im
+Emulator getestet.
+
+Eigene Doku dort: [`android-app/README.md`](android-app/README.md)
+(Funktionsumfang, Installation, bekannte Grenzen — u.a. doppelter
+Netzwerkverbrauch durch zwei Dekodierungen, kein HLS/DASH, Verteilung per
+eigenem Update-Server statt Play Store).
+
 ## Architektur
 
 | Datei | Zweck |
@@ -1119,6 +1136,23 @@ the audio stream itself) is explicitly excluded, so without a network
 connection the app still honestly shows "connection to server lost"
 instead of a frozen stale state. The icons at `icon-192.png`/
 `icon-512.png` are currently plain placeholder graphics.
+
+## Android app (separate second implementation)
+
+The [`android-app/`](android-app/) subdirectory contains a **native Android
+app** that implements the same idea entirely on the phone — Kotlin/ExoPlayer/
+Vosk instead of Python/ffmpeg/Silero, no web wrapper and **no dependency on
+this Docker instance whatsoever**. As of 2026-08-08 it is complete with
+respect to its own roadmap: station management with categories, a watchdog
+for dead stations, pre-warming of the next station, M3U/Kodi import, the
+news break, audio fingerprinting and multilingual STT including a
+calibration wizard are all implemented and tested in the emulator.
+
+It has its own documentation (in German):
+[`android-app/README.md`](android-app/README.md) — feature list,
+installation and known limitations (among them doubled network usage from
+two independent decodes, no HLS/DASH, and distribution via a self-hosted
+update server rather than the Play Store).
 
 ## Architecture
 

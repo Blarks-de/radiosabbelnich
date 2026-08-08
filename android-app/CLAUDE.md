@@ -9,7 +9,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > nach `radiozapper.apk` kopieren + `version.json` neu schreiben (siehe
 > unten), und `README.md` bei jeder inhaltlichen Änderung nachziehen.
 
-Aktiver Prototyp (kein fertiges Produkt) — natives Kotlin/Android, das
+Fertig im Sinne des Fahrplans (alle acht Phasen aus
+`RadioZapper_Android_Fahrplan.md` umgesetzt, zuletzt Phase 8 am
+2026-08-08) — keine geplanten Ausbaustufen mehr offen, aber weiterhin
+Eigenbedarfs-Software mit dokumentierten Grenzen, kein Play-Store-Produkt
+(siehe README, "Bekannte Grenzen"). Natives Kotlin/Android, das
 dasselbe Grundprinzip wie das RadioZapper-Docker-Projekt lokal auf dem
 Handy nachbildet: mehrere Internetradio-Sender abspielen, per Vosk
 (Speech-to-Text) grob Sprache/Musik unterscheiden, bei Sprache automatisch

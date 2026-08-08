@@ -1208,3 +1208,27 @@ Download - Befund 11).
   unterschiedlichen Quellen (offen seit Fortsetzung 5) - die Sample-Sammlung
   ist jetzt verifiziert, ein sauberer `overlapping=false`-Vorschlag samt
   "Übernehmen" weiterhin nicht.
+
+## 2026-08-08 (Fortsetzung 8) — Status "fertig" in der Doku nachgezogen
+
+Auslöser: mit Phase 8 (siehe die beiden vorigen Einträge) ist der komplette
+Fahrplan `RadioZapper_Android_Fahrplan.md` abgearbeitet - die Doku führte die
+App aber weiter als "Aktiver Prototyp im Bau, kein fertiges Produkt".
+
+- `README.md`: Warnbanner ersetzt durch einen Fertig-Hinweis (alle acht
+  Phasen umgesetzt und live getestet, keine geplanten Ausbaustufen offen).
+  Bewusst MIT dem Zusatz, dass das an den dokumentierten Grenzen nichts
+  ändert (doppelter Netzwerkverbrauch, kein HLS/DASH, keine Play-Store-
+  Reife) - "fertig laut Fahrplan" ist nicht "kann alles". Titel jetzt
+  "RadioZapper (Android)" statt "RadioZapper MVP (Android)", und der
+  Einleitungsabsatz zählt den heutigen Stand auf statt des Zwischenstands
+  von Phase 3.
+- `CLAUDE.md`: dieselbe Statuszeile ("Fertig im Sinne des Fahrplans …
+  weiterhin Eigenbedarfs-Software mit dokumentierten Grenzen").
+- `../README.md` (Docker-Projekt, zugleich die GitHub-Startseite): neuer
+  kurzer Abschnitt zur App in BEIDEN Sprachfassungen - Details siehe
+  `../SESSION.md`, Eintrag vom selben Tag.
+
+Reine Doku-Änderung, kein Code angefasst, deshalb kein neuer Build und
+keine neue `version.json` (die installierte APK bleibt der Stand von
+15:57).

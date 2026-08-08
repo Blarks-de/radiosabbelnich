@@ -4443,3 +4443,29 @@ existiert nach Nutzerangabe noch nicht ("wird später vermutlich...").
 Default bleibt die Tailscale-Adresse, bis der öffentliche Server
 tatsächlich steht. Keine Validierung der eingegebenen URL (z.B. Schema-
 Zwang `http(s)://`) - vertraut auf den Nutzer, der das Feld befüllt.
+
+## 2026-08-08 — README: Android-App als eigener Abschnitt (DE + EN)
+
+Auslöser: die Android-App (`android-app/`) ist mit Phase 8 ihres Fahrplans
+fertig geworden (Details dort in `android-app/SESSION.md`), war in diesem
+README aber mit keinem Wort erwähnt — auf GitHub, wo genau dieses README
+die Startseite ist, existierte sie damit faktisch nicht.
+
+Umsetzung: je ein kurzer Abschnitt "Android-App (eigenständige
+Zweitumsetzung)" bzw. "Android app (separate second implementation)"
+direkt vor dem Architektur-Kapitel beider Sprachfassungen — was die App
+ist, dass sie komplett unabhängig von dieser Docker-Instanz läuft, ihr
+Fertig-Status, und ein Verweis auf die eigene Doku unter `android-app/`.
+Bewusst kurz gehalten und ohne Feature-Details: die vollständige Liste,
+Installation und die bekannten Grenzen stehen in `android-app/README.md`
+und sollen nicht in zwei Dateien parallel gepflegt werden müssen.
+
+Am Docker-Dienst selbst ändert sich nichts (reine Doku-Änderung), deshalb
+nur der übliche PATCH-Schritt auf `v1.0.13`.
+
+### Verifiziert
+
+Beide Abschnitte an der vorgesehenen Stelle (vor `## Architektur` bzw.
+`## Architecture`), relative Links auf `android-app/` bzw.
+`android-app/README.md` — auf GitHub/Forgejo beides klickbar, weil das
+Verzeichnis im selben Repo liegt.
