@@ -24,7 +24,10 @@ import com.radiozapper.mvp.model.Station
 import com.radiozapper.mvp.model.StationRepository
 import com.radiozapper.mvp.newsbreak.NewsBreak
 import com.radiozapper.mvp.newsbreak.NewsBreakSettings
+import com.radiozapper.mvp.stt.CalibrationLevel
+import com.radiozapper.mvp.stt.CalibrationSuggestion
 import com.radiozapper.mvp.stt.SttSettings
+import com.radiozapper.mvp.stt.suggestRatios
 import com.radiozapper.mvp.vosk.VoskModelCache
 import com.radiozapper.mvp.vosk.VoskModelManager
 import kotlinx.coroutines.Dispatchers
@@ -146,6 +149,24 @@ private const val BUFFERING_TIMEOUT_SECONDS = 15L
  * denselben `attemptAutoSwitch()` aus wie ein Sprache-Treffer - kein
  * eigener Ring-Logik-Pfad. Waehrend einer Nachrichten-Pause pausiert das
  * implizit mit (siehe oben, `analyzer.stop()` bei Eintritt).
+ *
+ * STT-Kalibrierung (Phase 7, Schritt 2, siehe stt/Calibration.kt fuer die
+ * reine Vorschlagsformel): waehrend `calibrationLanguage` gesetzt ist,
+ * ERZWINGT `refreshAnalyzer()` diese Sprache fuer den GERADE laufenden
+ * Sender statt der ueber `SttSettings.resolveLanguage()` aufgeloesten
+ * Kategorie-Sprache - Wechsel zwischen Sendern (auch waehrend einer
+ * aktiven Kalibrierung) bleiben dadurch normal moeglich, jeder trifft
+ * automatisch dieselbe erzwungene Sprache. `analyzer.speechRatio` wird
+ * durchgehend beobachtet und, solange ein Level (`CalibrationLevel.SPEECH`/
+ * `.MUSIC`) markiert ist, in die passende Sample-Liste einsortiert -
+ * derselbe Rohwert, der auch dem "Bullshitometer" zugrunde liegt. Automatisches
+ * Umschalten (Sprache-Treffer, Fingerprint-Match) bleibt waehrend einer
+ * aktiven Kalibrierung bewusst AUS (siehe `handleStatusForAutoSwitch()`/
+ * `handleFingerprintOutcome()`) - ein durch die erzwungene Sprache
+ * verfaelschtes Ergebnis darf keinen automatischen Wechsel ausloesen,
+ * genau wie beim Docker-Wizard. Manuelle Wechsel (Sendertipp, ZAPPEN!)
+ * bleiben unangetastet moeglich - der Wizard schaltet selbst NIEMALS
+ * einen Sender um.
  */
 class PlaybackService : LifecycleService() {
 
@@ -205,6 +226,21 @@ class PlaybackService : LifecycleService() {
     private val _sttModelMissing = MutableStateFlow<String?>(null)
     /** Sprachcode, falls fuer die aktuelle Senderkategorie kein Vosk-Modell heruntergeladen ist (Analyse pausiert dafuer), sonst null. */
     val sttModelMissing: StateFlow<String?> = _sttModelMissing
+
+    // STT-Kalibrierung (Phase 7, Schritt 2, siehe Klassen-Doc oben). Bewusst
+    // reine In-Memory-Felder (kein Persistieren der Rohsamples noetig, nur
+    // das Ergebnis landet ueber applyCalibrationSuggestion() in
+    // SttSettings) - eine Session ueberlebt keinen Service-Neustart.
+    private var calibrationLanguage: String? = null
+    /** Read-only nach aussen - fuer CalibrationActivity, um beim erneuten Binden (z.B. nach onStop/onStart) zu erkennen, ob fuer dieselbe Sprache schon eine Session laeuft (nicht per startCalibration() zuruecksetzen). */
+    val activeCalibrationLanguage: String? get() = calibrationLanguage
+    private val calibrationSpeechSamples = mutableListOf<Double>()
+    private val calibrationMusicSamples = mutableListOf<Double>()
+    private val _calibrationLevel = MutableStateFlow<CalibrationLevel?>(null)
+    val calibrationLevel: StateFlow<CalibrationLevel?> = _calibrationLevel
+    private val _calibrationSampleCounts = MutableStateFlow(0 to 0)
+    /** (Sprache-Samples, Musik-Samples) - reiner Zaehler-Trigger fuer die UI, um den Vorschlag neu zu berechnen, siehe calibrationSuggestion(). */
+    val calibrationSampleCounts: StateFlow<Pair<Int, Int>> = _calibrationSampleCounts
 
     private val playerListener = object : Player.Listener {
         override fun onPlayerError(error: PlaybackException) {
@@ -279,6 +315,12 @@ class PlaybackService : LifecycleService() {
 
         lifecycleScope.launch {
             analyzer.fingerprintOutcomes.collect { outcome -> handleFingerprintOutcome(outcome) }
+        }
+
+        // Fuettert eine laufende STT-Kalibrierung mit dem Rohwert - No-Op,
+        // solange keine Session aktiv ist (siehe handleCalibrationSample()).
+        lifecycleScope.launch {
+            analyzer.speechRatio.collect { ratio -> handleCalibrationSample(ratio) }
         }
 
         // Reagiert auf Aenderungen der persistenten Senderliste (z.B. aus der
@@ -373,8 +415,23 @@ class PlaybackService : LifecycleService() {
         }
 
         startForegroundNotification(station.name)
+        refreshAnalyzer(station)
+        refreshPreload()
+        startNewsBreakTicker()
+    }
 
-        val language = SttSettings.resolveLanguage(this, station.category)
+    /**
+     * Loest Sprache/Modellpfad fuer `station` auf und (neu-)startet die
+     * STT-Analyse entsprechend - ausgelagert aus `play()`, damit eine
+     * laufende Kalibrierung (`calibrationLanguage`) den ERZWUNGENEN
+     * Sprachwechsel fuer den GERADE laufenden Sender ausloesen kann, ohne
+     * einen kompletten `play()`-Durchlauf (inkl. ExoPlayer-Neustart) zu
+     * brauchen (siehe Klassen-Doc, Abschnitt STT-Kalibrierung).
+     * `calibrationLanguage` schlaegt dabei die normale
+     * Kategorie-Aufloesung - genau dafuer ist die Kalibrierung da.
+     */
+    private fun refreshAnalyzer(station: Station) {
+        val language = calibrationLanguage ?: SttSettings.resolveLanguage(this, station.category)
         val cfg = SttSettings.getLanguages(this)[language]
         val modelPath = cfg?.let { VoskModelManager.modelPathOrNull(this, language, it.modelUrl) }
         if (cfg != null && modelPath != null) {
@@ -393,9 +450,73 @@ class PlaybackService : LifecycleService() {
             _sttModelMissing.value = language
             analyzer.stop()
         }
+    }
 
-        refreshPreload()
-        startNewsBreakTicker()
+    /**
+     * Startet eine Kalibrierungs-Session fuer `language` (siehe Klassen-Doc,
+     * Abschnitt STT-Kalibrierung) - erzwingt diese Sprache fuer den GERADE
+     * laufenden Sender (falls einer laeuft; ohne laufenden Sender sammelt
+     * die Session erst ab dem naechsten `play()` Samples). Alte Samples
+     * einer eventuell vorherigen Session werden verworfen.
+     */
+    fun startCalibration(language: String) {
+        calibrationLanguage = language
+        calibrationSpeechSamples.clear()
+        calibrationMusicSamples.clear()
+        _calibrationLevel.value = null
+        _calibrationSampleCounts.value = 0 to 0
+        _currentStation.value?.let { refreshAnalyzer(it) }
+    }
+
+    /** Markiert, dass die aktuell einlaufenden speechRatio-Werte gerade Sprache/Musik sind - null pausiert das Sammeln (siehe handleCalibrationSample()). */
+    fun setCalibrationLevel(level: CalibrationLevel?) {
+        _calibrationLevel.value = level
+    }
+
+    /** Beendet die Session - der gerade laufende Sender wechselt zurueck auf die normale Kategorie-Sprachaufloesung. */
+    fun stopCalibration() {
+        calibrationLanguage = null
+        _calibrationLevel.value = null
+        _currentStation.value?.let { refreshAnalyzer(it) }
+    }
+
+    /** Live-Vorschlag aus den bisher gesammelten Samples - null, solange eine der beiden Listen leer ist. Wird bei jeder Aenderung von calibrationSampleCounts neu berechnet, nicht zwischengespeichert (siehe stt/Calibration.kt). */
+    fun calibrationSuggestion(): CalibrationSuggestion? =
+        suggestRatios(calibrationSpeechSamples.toList(), calibrationMusicSamples.toList())
+
+    /**
+     * Speichert den aktuellen Vorschlag fuer die kalibrierte Sprache in
+     * SttSettings und wendet ihn sofort an (falls der gerade laufende
+     * Sender dieselbe Sprache verwendet - `refreshAnalyzer()` liest die
+     * neuen Werte direkt aus SttSettings). Kein automatisches Beenden der
+     * Session - der Nutzer kann weiter sammeln/erneut uebernehmen.
+     */
+    fun applyCalibrationSuggestion(): Boolean {
+        val language = calibrationLanguage ?: return false
+        val suggestion = calibrationSuggestion() ?: return false
+        if (suggestion.overlapping) return false
+        val existing = SttSettings.getLanguages(this)[language] ?: return false
+        SttSettings.addOrUpdateLanguage(
+            this,
+            language,
+            existing.copy(
+                ratioToConfirmSpeech = suggestion.ratioToConfirmSpeech,
+                ratioToConfirmMusic = suggestion.ratioToConfirmMusic,
+            ),
+        )
+        _currentStation.value?.let { refreshAnalyzer(it) }
+        return true
+    }
+
+    /** No-Op, solange keine Session aktiv ODER kein Level markiert ist - siehe Klassen-Doc, Abschnitt STT-Kalibrierung. */
+    private fun handleCalibrationSample(ratio: Double?) {
+        if (calibrationLanguage == null || ratio == null) return
+        when (_calibrationLevel.value) {
+            CalibrationLevel.SPEECH -> calibrationSpeechSamples.add(ratio)
+            CalibrationLevel.MUSIC -> calibrationMusicSamples.add(ratio)
+            null -> return
+        }
+        _calibrationSampleCounts.value = calibrationSpeechSamples.size to calibrationMusicSamples.size
     }
 
     /**
@@ -576,6 +697,7 @@ class PlaybackService : LifecycleService() {
      */
     private fun handleStatusForAutoSwitch(status: PlaybackStatus) {
         if (_newsBreakActive.value) return // keine automatische Umschaltung, ausgeloest von einer MP3
+        if (calibrationLanguage != null) return // Kalibrierung erzwingt die Sprache, ein verfaelschtes Ergebnis darf nicht automatisch umschalten (siehe Klassen-Doc)
         when (status) {
             PlaybackStatus.MUSIC -> {
                 autoSwitchAttempts = 0 // Treffer - Zaehler fuer die naechste Sprache-Serie zuruecksetzen
@@ -617,7 +739,7 @@ class PlaybackService : LifecycleService() {
                     "🔁 Bekannter Jingle/Werbespot wiedererkannt: '${outcome.label}' " +
                         "(Clip #${outcome.clipId}, ${outcome.timesSeen}x gesehen, Staerke ${outcome.matchStrength})"
                 )
-                attemptAutoSwitch()
+                if (calibrationLanguage == null) attemptAutoSwitch() // siehe Klassen-Doc, Abschnitt STT-Kalibrierung
             }
             is FingerprintOutcome.Learned -> Unit
         }

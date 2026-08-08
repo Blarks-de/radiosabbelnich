@@ -50,7 +50,16 @@ Grenzen").
   Installationen mit bereits heruntergeladenem Modell brauchen keinen
   Migrationsschritt. Fehlt fuer die aktuelle Kategorie ein heruntergeladenes
   Modell, zeigt die Startseite einen Hinweis ("⚠ Kein Modell für „…" –
-  Analyse pausiert.") statt automatisch zu wechseln.
+  Analyse pausiert.") statt automatisch zu wechseln. **Kalibrierungs-Wizard**
+  (`stt/CalibrationActivity.kt`, "Kalibrieren"-Button pro heruntergeladener
+  Sprache): erzwingt die gewaehlte Sprache fuer den gerade laufenden Sender,
+  sammelt beim Antippen von "🗣 Das ist Sprache"/"🎵 Das ist Musik" den
+  Live-Rohwert (`StreamAnalyzer.speechRatio`) in zwei Listen und schlaegt
+  daraus `ratioToConfirmSpeech`/`ratioToConfirmMusic` fuer diese Sprache vor
+  - live neu berechnet bei jedem neuen Sample, mit Warnung statt
+  Vorschlag, falls sich Sprache-/Musik-Samples noch ueberlappen. Automatisches
+  Umschalten bleibt waehrend einer Session aus, Sender koennen aber jederzeit
+  ueber die Startseite gewechselt werden.
 - Parallele Analyse: eine zweite, unabhaengige Dekodierung desselben
   Streams (MediaExtractor/MediaCodec) wird auf 16kHz-Mono resampelt und
   laufend in Vosk (`Recognizer.acceptWaveForm`) gefuettert; erkannter
@@ -600,6 +609,9 @@ bereits die komplette Analyse-Coroutine abbricht.
 
 ### Mehrsprachiges STT (Schritt 1: Grundgerüst)
 
+(Schritt 2, der Kalibrierungs-Wizard, ist ein eigener Abschnitt weiter
+unten.)
+
 Vorbild: `stt_filter.py`/`settings_store.py` im Docker-Projekt (dessen
 "Mehrsprachige STT-Erkennung"-Abschnitt in `../CLAUDE.md`) - wie dort
 liegt die Zuordnung an der **Kategorie**, nicht am einzelnen Sender
@@ -648,10 +660,69 @@ Sprache und Modellpfad jetzt bei JEDEM Aufruf intern ueber
 bekommt dadurch automatisch den aktuellen Stand, eine vergessene Stelle
 kann strukturell nicht mehr veraltete Daten durchreichen.
 
-Kein Kalibrierungs-Wizard in diesem Schritt - `LanguageConfig` haelt
-`ratioToConfirmSpeech`/`ratioToConfirmMusic` zwar bereits pro Sprache
-(Speicherstruktur fuer einen spaeteren Schritt 2), deren Bearbeitung ist
-aber noch nicht ueber die UI moeglich (siehe "Bekannte Grenzen").
+`LanguageConfig` haelt `ratioToConfirmSpeech`/`ratioToConfirmMusic` bereits
+pro Sprache - Speicherstruktur fuer den in Schritt 2 (naechster Abschnitt)
+umgesetzten Kalibrierungs-Wizard.
+
+### Mehrsprachiges STT, Schritt 2: Kalibrierungs-Wizard
+
+Vorbild: der STT-Kalibrierungs-Wizard im Docker-Projekt (dessen
+`CLAUDE.md`, Abschnitt STT-Sprachfilter, "Kalibrierungs-Wizard"). Dort
+kalibriert der Wizard einen `confidence_threshold` gegen ein VAD+STT-Duo -
+Android hat dieses Duo nicht, Vosk-Texterkennung ist hier bereits der
+einzige Detektor. Der Wizard kalibriert deshalb stattdessen direkt die
+vorhandene Hysterese-Bandbreite (`ratioToConfirmSpeech`/
+`ratioToConfirmMusic`) um `StreamAnalyzer.speechRatio` - dasselbe Rohsignal,
+das auch das "Bullshitometer" zeigt.
+
+`stt/Calibration.kt` ist reine Domänenlogik (kennt weder `PlaybackService`
+noch `StreamAnalyzer`, analog `NewsBreak.kt`/`Fingerprint.kt`):
+`suggestRatios(speechSamples, musicSamples)` trennt die beiden
+Verteilungen ueber `musicMax`/`speechMin` und teilt die Luecke dazwischen
+im Verhaeltnis `MARGIN_RATIO=0.7` auf (identischer Wert wie
+`_THRESHOLD_MARGIN_RATIO` im Docker-Projekt, Richtung Sprache-Seite
+gewichtet) - `ratioToConfirmMusic` liegt naeher an `musicMax`,
+`ratioToConfirmSpeech` naeher an `speechMin`. Ueberlappen sich die
+Verteilungen (`musicMax >= speechMin`), liefert die Funktion
+`overlapping=true` statt eines potenziell falschen Vorschlags.
+
+`PlaybackService` haelt die Session direkt als Felder (kein eigenes
+State-Objekt) - dieselbe Entscheidung wie bei Fingerprint/News-Break,
+die Session haengt am gerade laufenden `analyzer`. `refreshAnalyzer(station)`
+wurde dafuer aus `play()` herausgezogen (reiner Refactor) und wird jetzt
+auch von `startCalibration()`/`stopCalibration()`/
+`applyCalibrationSuggestion()` genutzt, um die STT-Analyse fuer den GERADE
+laufenden Sender neu aufzusetzen, ohne den ExoPlayer anzufassen. Ist eine
+Session aktiv, ERZWINGT `refreshAnalyzer()` deren Sprache statt der ueber
+`SttSettings.resolveLanguage()` aufgeloesten Kategorie-Sprache - Sender
+koennen waehrenddessen ganz normal ueber die Startseite gewechselt werden,
+jeder trifft automatisch dieselbe erzwungene Sprache. Automatisches
+Umschalten (Sprache-Treffer, Fingerprint-Match) bleibt waehrend einer
+aktiven Session bewusst AUS - ein durch die erzwungene Sprache
+verfaelschtes Ergebnis darf keinen automatischen Wechsel ausloesen. Der
+Wizard schaltet selbst NIEMALS einen Sender um.
+
+`stt/CalibrationActivity.kt` bindet sich wie `MainActivity` an
+`PlaybackService`, zeigt den laufenden Sender und den Live-Rohwert
+(dieselbe Balken-Darstellung wie das Bullshitometer), zwei Toggle-Buttons
+"🗣 Das ist Sprache"/"🎵 Das ist Musik" (erneutes Antippen pausiert das
+Sammeln), Sample-Zaehler und einen live neu berechneten Vorschlag - kein
+Zwischenspeichern, wird bei jeder Aenderung der Sample-Zaehler frisch aus
+`calibrationSuggestion()` gezogen (analog zum Docker-Wizard, der den
+Vorschlag bei jedem Status-Poll neu berechnet statt eine zweite
+JS-Implementierung zu pflegen). "Übernehmen" speichert die Werte in
+`SttSettings` und wendet sie sofort an, OHNE die Session zu beenden -
+weiter sammeln/erneut uebernehmen bleibt moeglich.
+
+`android:screenOrientation="portrait"` fuer `CalibrationActivity` ist
+bewusst gesetzt: eine Rotation wuerde die Activity sonst zerstoeren und
+neu erstellen, `onDestroy()` beendet aber die Session - ohne die Sperre
+wuerde eine simple Bildschirmdrehung mitten in der Kalibrierung bereits
+gesammelte Samples verwerfen. Zusaetzlich schuetzt
+`activeCalibrationLanguage != language` in `onServiceConnected()` davor,
+dass ein erneutes Binden (z.B. nach kurzem Backgrounding) `startCalibration()`
+ein zweites Mal fuer dieselbe Sprache aufruft, was die Sample-Listen sonst
+explizit leeren wuerde.
 
 ## Update-Mechanismus (Tailscale, kein Play Store)
 
@@ -754,16 +825,23 @@ dafuer das Textfeld - einfach die Tailscale-IP `100.92.3.18` eintragen.
 - **Resampler ist reine lineare Interpolation ohne Anti-Aliasing-Filter**
   (`MonoResampler.kt`) - fuer die grobe Sprache/Musik-Unterscheidung
   ausreichend (siehe Live-Test), aber keine hochwertige Audiobearbeitung.
-- **Glaettungs-/Hysterese-Schwellen sind nicht an echten Sendern
-  kalibriert** - anders als im Docker-Projekt (dort gegen echte Sender
-  gemessen, siehe dessen `CLAUDE.md`) sind `ratioToConfirmSpeech`/
-  `ratioToConfirmMusic` (seit Phase 7 pro Sprache in `LanguageConfig`,
-  siehe "Mehrsprachiges STT" oben) plausible Startwerte, keine Messwerte.
-  Bei Gesang koennte das haeufiger falsch-positiv auf "Sprache" kippen.
-  Ein Kalibrierungs-Wizard, der diese Schwellen pro Sprache anhand
-  echter Sample-Aufnahmen vorschlaegt (analog zum Docker-Projekt), ist
-  als Schritt 2 des Fahrplans geplant, aber noch nicht umgesetzt - die
-  Speicherstruktur (`LanguageConfig`) ist bereits vorbereitet.
+- **Glaettungs-/Hysterese-Schwellen sind standardmaessig nicht an echten
+  Sendern kalibriert** - `ratioToConfirmSpeech`/`ratioToConfirmMusic`
+  (pro Sprache in `LanguageConfig`) starten als plausible Startwerte,
+  keine Messwerte. Seit Schritt 2 gibt es dafuer den Kalibrierungs-Wizard
+  (siehe "Mehrsprachiges STT, Schritt 2" oben) - bis er tatsaechlich pro
+  Sprache durchlaufen wurde, bleibt der ungemessene Startwert aktiv, bei
+  Gesang koennte das haeufiger falsch-positiv auf "Sprache" kippen. Der
+  Wizard selbst wurde bisher nur mit demselben (gemischten) Test-Sender
+  fuer beide Level gegengetestet (bestaetigt den Ueberlappungs-Warnpfad,
+  siehe `SESSION.md`) - der Erfolgspfad mit zwei echt unterschiedlich
+  klassifizierten Quellen und tatsaechlich uebernommenem Vorschlag steht
+  noch aus.
+- **`CalibrationActivity`s Portrait-Sperre** (schuetzt eine laufende
+  Kalibrierungs-Session vor Datenverlust durch Rotation, siehe
+  "Mehrsprachiges STT, Schritt 2" oben) wurde nur im durchgehend im
+  Hochformat laufenden Emulator verifiziert, nicht auf einem echten Geraet
+  mit tatsaechlicher Drehung gegengeprueft.
 - **Beide Sperr-Mechanismen (Sprache-Cooldown UND Watchdog) sind reines
   In-Memory-Timing** - sie verfallen einfach nach ihrer jeweiligen
   Konstante, es gibt keine Eskalation (z.B. laenger werdende Sperren bei

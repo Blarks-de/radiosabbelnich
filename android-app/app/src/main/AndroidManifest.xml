@@ -44,6 +44,18 @@
             android:exported="false"
             android:theme="@style/Theme.RadioZapperMvp" />
 
+        <!--
+            screenOrientation=portrait bewusst gesetzt (siehe
+            CalibrationActivity-Klassen-Doc): eine Rotation wuerde die
+            Activity sonst neu erstellen und dabei die laufende
+            Kalibrierungs-Session vorzeitig beenden.
+        -->
+        <activity
+            android:name=".stt.CalibrationActivity"
+            android:exported="false"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.RadioZapperMvp" />
+
         <service
             android:name=".playback.PlaybackService"
             android:exported="false"

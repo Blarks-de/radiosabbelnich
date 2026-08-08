@@ -32,6 +32,24 @@
     <string name="delete_language_confirm_title">Sprache löschen?</string>
     <string name="delete_language_confirm_message">„%1$s“ wirklich löschen? Ein bereits heruntergeladenes Modell wird dabei ebenfalls gelöscht.</string>
     <string name="stt_categories_heading">🏷 Kategorie-Sprachen</string>
+    <string name="btn_calibrate_language">Kalibrieren</string>
+
+    <string name="calibration_title">Kalibrieren: %1$s</string>
+    <string name="calibration_hint">Spiele über die Startseite einen Sender mit dieser Sprache ab (Wechsel jederzeit möglich) und markiere unten, ob gerade Sprache oder Musik läuft. Je mehr Samples, desto besser der Vorschlag.</string>
+    <string name="calibration_ratio_label">🤥 Sprache-Wahrscheinlichkeit (roh)</string>
+    <string name="btn_calibration_level_speech">🗣 Das ist Sprache</string>
+    <string name="btn_calibration_level_music">🎵 Das ist Musik</string>
+    <string name="calibration_level_none">Markiert als: – (kein Sammeln)</string>
+    <string name="calibration_level_speech">Markiert als: Sprache</string>
+    <string name="calibration_level_music">Markiert als: Musik</string>
+    <string name="calibration_sample_counts">Sprache-Samples: %1$d · Musik-Samples: %2$d</string>
+    <string name="calibration_suggestion_none">Noch kein Vorschlag – erst Sprache UND Musik markieren und ein paar Sekunden sammeln.</string>
+    <string name="calibration_suggestion_overlapping">Verteilungen überlappen sich noch – kein sauberer Vorschlag möglich. Mehr Samples sammeln oder Sender wechseln.</string>
+    <string name="calibration_suggestion">Vorschlag: Sprache ab %1$.2f, Musik bis %2$.2f</string>
+    <string name="btn_calibration_apply">Übernehmen</string>
+    <string name="btn_calibration_done">Fertig</string>
+    <string name="calibration_applied">Schwellen gespeichert.</string>
+    <string name="calibration_apply_failed">Übernehmen fehlgeschlagen.</string>
 
     <string name="notification_channel_name">Wiedergabe</string>
     <string name="notification_playing">Läuft: %1$s</string>

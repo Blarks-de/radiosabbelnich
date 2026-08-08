@@ -1,5 +1,6 @@
 package com.radiozapper.mvp.stt
 
+import android.content.Intent
 import android.os.Bundle
 import android.widget.ArrayAdapter
 import android.widget.AdapterView
@@ -79,6 +80,9 @@ class SttSettingsActivity : AppCompatActivity() {
                 lifecycleScope.launch { VoskModelManager.downloadAndUnpack(this@SttSettingsActivity, code, cfg.modelUrl) }
             }
             row.deleteButton.setOnClickListener { confirmDeleteLanguage(code) }
+            row.calibrateButton.setOnClickListener {
+                startActivity(Intent(this, CalibrationActivity::class.java).putExtra(CalibrationActivity.EXTRA_LANGUAGE, code))
+            }
             // Mindestens eine Sprache muss konfiguriert bleiben (analog Sender-
             // Loeschsperre) - hier schon im UI gesperrt statt erst nach einem
             // fehlgeschlagenen Versuch mit Toast zu reagieren.
@@ -95,6 +99,7 @@ class SttSettingsActivity : AppCompatActivity() {
                 row.progressBar.visibility = android.view.View.GONE
                 row.downloadButton.visibility = android.view.View.VISIBLE
                 row.downloadButton.isEnabled = true
+                row.calibrateButton.visibility = android.view.View.GONE
             }
 
             is ModelState.Downloading -> {
@@ -102,17 +107,23 @@ class SttSettingsActivity : AppCompatActivity() {
                 row.progressBar.visibility = android.view.View.VISIBLE
                 row.progressBar.progress = state.percent
                 row.downloadButton.isEnabled = false
+                row.calibrateButton.visibility = android.view.View.GONE
             }
 
             is ModelState.Unpacking -> {
                 row.statusText.text = getString(R.string.model_unpacking)
                 row.downloadButton.isEnabled = false
+                row.calibrateButton.visibility = android.view.View.GONE
             }
 
             is ModelState.Ready -> {
                 row.statusText.text = getString(R.string.model_ready)
                 row.progressBar.visibility = android.view.View.GONE
                 row.downloadButton.visibility = android.view.View.GONE
+                // Kalibrieren braucht ein geladenes Modell fuer echte Samples -
+                // ohne heruntergeladenes Modell wuerde play() ohnehin nur
+                // sttModelMissing setzen und die Analyse pausiert lassen.
+                row.calibrateButton.visibility = android.view.View.VISIBLE
             }
 
             is ModelState.Error -> {
@@ -120,6 +131,7 @@ class SttSettingsActivity : AppCompatActivity() {
                 row.progressBar.visibility = android.view.View.GONE
                 row.downloadButton.visibility = android.view.View.VISIBLE
                 row.downloadButton.isEnabled = true
+                row.calibrateButton.visibility = android.view.View.GONE
             }
         }
     }

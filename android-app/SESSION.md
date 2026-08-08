@@ -768,3 +768,137 @@ Architektur-Abschnitt unten für die konkrete Gegenmaßnahme.
   Lade-/Cache-Pfad für eine zweite Sprache ohne Absturz zu bestätigen) -
   ob die STT-Erkennungsqualität für Englisch in der Praxis stimmt, ist
   damit noch nicht geprüft.
+
+## 2026-08-08 (Fortsetzung 5) — Mehrsprachiges STT, Schritt 2: Kalibrierungs-Wizard (Phase 7 aus dem Fahrplan)
+
+Auslöser: "Läuft, weiter zu Schritt 2" - Rückmeldung des Nutzers, dass das
+in Fortsetzung 4 gebaute Grundgerüst produktiv lief, damit war die im
+Fahrplan geforderte Voraussetzung für Schritt 2 erfüllt. Direkt umgesetzt
+(kein erneuter Plan-Mode-Durchlauf, da die Architektur bereits in
+Fortsetzung 4 als Nutzerentscheidung festgelegt wurde: der Wizard
+kalibriert die bestehenden `ratioToConfirmSpeech`/`ratioToConfirmMusic`-
+Schwellen anhand von `StreamAnalyzer.speechRatio`, NICHT einen neu
+erfundenen `confidence_threshold` wie im Docker-Projekt - Android hat kein
+VAD+STT-Konfidenz-Duo, Vosk-Texterkennung ist hier bereits der einzige
+Detektor).
+
+### Architektur
+
+- **`stt/Calibration.kt` (neu)**: reine Domänenlogik (kennt weder
+  `PlaybackService` noch `StreamAnalyzer`, analog `NewsBreak.kt`/
+  `Fingerprint.kt`) - `CalibrationLevel`-Enum, `CalibrationSuggestion`-
+  Datenklasse, `suggestRatios(speechSamples, musicSamples)`. Pendant zu
+  `stt_filter.suggest_confidence_threshold()` im Docker-Projekt
+  (`_THRESHOLD_MARGIN_RATIO=0.7`, hier `MARGIN_RATIO`, identischer Wert),
+  aber auf ZWEI Schwellen statt einer angewandt: `musicMax`/`speechMin`
+  trennen die Verteilungen, die Lücke dazwischen wird im Verhältnis
+  `MARGIN_RATIO` aufgeteilt - `ratioToConfirmMusic` näher an `musicMax`,
+  `ratioToConfirmSpeech` näher an `speechMin`. Überlappen sich die
+  Verteilungen (`musicMax >= speechMin`), liefert die Funktion
+  `overlapping=true` statt eines potenziell falschen Vorschlags - live
+  bestätigt (siehe Verifikation unten).
+- **`PlaybackService` haelt die Session direkt als Felder** (kein eigenes
+  State-Objekt/Singleton) - dieselbe Entscheidung wie bei Fingerprint/
+  News-Break: die Session ist service-lebensdauer-gebunden, hängt am
+  gerade laufenden `analyzer`. `refreshAnalyzer(station)` wurde aus
+  `play()` herausgezogen (reiner Refactor, identisches Verhalten) - genau
+  dieser Baustein wird jetzt auch von `startCalibration()`/
+  `stopCalibration()`/`applyCalibrationSuggestion()` wiederverwendet, um
+  die STT-Analyse fuer den GERADE laufenden Sender neu aufzusetzen, OHNE
+  den ExoPlayer anzufassen (kein Kaltstart/keine Hoerbarkeitsluecke nur
+  wegen eines Sprachwechsels bei der Analyse).
+- **`calibrationLanguage` schlägt `SttSettings.resolveLanguage()`**: ist
+  eine Session aktiv, erzwingt `refreshAnalyzer()` diese Sprache fuer
+  jeden Sender, zu dem gewechselt wird (auch waehrend der Kalibrierung
+  bleibt Sender-Wechsel ueber die Startseite normal moeglich - der Wizard
+  schaltet selbst NIEMALS um, exakt wie im Docker-Projekt). Automatisches
+  Umschalten (Sprache-Treffer in `handleStatusForAutoSwitch()`,
+  Fingerprint-Match in `handleFingerprintOutcome()`) ist waehrend einer
+  aktiven Session bewusst ausgeschaltet - ein durch die erzwungene Sprache
+  verfaelschtes Ergebnis darf keinen automatischen Wechsel ausloesen.
+- **Sampling laeuft ueber denselben `analyzer.speechRatio`-Kollektor, der
+  auch das "Bullshitometer" speist** (`handleCalibrationSample()`, neu in
+  `onCreate()` angehaengt) - kein zweiter Analyse-Pfad. No-Op, solange
+  keine Session aktiv ODER kein Level markiert ist, dieselbe
+  Absicherung wie bei `combine_label()`s "kein Befund"-Fall im Docker-
+  Projekt.
+- **`stt/CalibrationActivity.kt` (neu)**: bindet sich wie `MainActivity`
+  an `PlaybackService`, zeigt den laufenden Sender, den Live-Rohwert
+  (dieselbe Balken-Darstellung wie das Bullshitometer), zwei Toggle-
+  Buttons "🗣 Das ist Sprache"/"🎵 Das ist Musik" (erneutes Antippen pausiert
+  das Sammeln), Sample-Zaehler und einen live neu berechneten Vorschlag
+  (kein Zwischenspeichern - wird bei jeder Aenderung der Sample-Zaehler
+  frisch aus `calibrationSuggestion()` gezogen, analog zum Docker-Wizard,
+  der den Vorschlag bei jedem Status-Poll neu berechnet statt eine zweite
+  JS-Implementierung zu pflegen). "Übernehmen" speichert die aktuellen
+  Werte in `SttSettings` und wendet sie sofort an (`refreshAnalyzer()`
+  erneut), ohne die Session zu beenden - weiter sammeln/erneut uebernehmen
+  bleibt möglich. Deaktiviert, solange `overlapping=true` oder eine der
+  beiden Listen leer ist.
+- **`android:screenOrientation="portrait"` fuer `CalibrationActivity`
+  bewusst gesetzt** (siehe deren Klassen-Doc): eine Rotation wuerde die
+  Activity sonst zerstoeren und neu erstellen, `onDestroy()` beendet aber
+  die Session (`stopCalibration()`) - ohne die Sperre wuerde eine simple
+  Bildschirmdrehung mitten in der Kalibrierung bereits gesammelte Samples
+  verwerfen. Zusaetzlich schuetzt `activeCalibrationLanguage != language`
+  in `onServiceConnected()` davor, dass ein erneutes Binden (z.B. nach
+  `onStop()`/`onStart()` bei kurzem Backgrounding) `startCalibration()`
+  ein zweites Mal fuer dieselbe Sprache aufruft - das wuerde die
+  Sample-Listen sonst explizit leeren.
+- **`SttSettingsActivity`**: neuer "Kalibrieren"-Button pro Sprachzeile,
+  nur sichtbar, wenn das Modell dieser Sprache `ModelState.Ready` ist
+  (ohne geladenes Modell gaebe es ohnehin nichts zu sampeln - `play()`
+  wuerde nur `sttModelMissing` setzen).
+
+### Verifiziert (Emulator, API 34 x86_64)
+
+- Kalibrieren-Button erscheint korrekt nur bei bereits heruntergeladenem
+  Modell (fuer "de"/"en" sichtbar, fuer eine Sprache ohne Modell waere er
+  `GONE` geblieben - aus dem Code ersichtlich, mangels dritter
+  undownloaded Sprache in dieser Sitzung nicht separat nachgestellt).
+- **Session-Start**: Kalibrieren fuer "de" geoeffnet, waehrend "Test-EN"
+  lief (Kategorie "International" -> normalerweise "en") - `refreshAnalyzer()`
+  erzwang korrekt "de" fuer den laufenden Sender, kein Kaltstart/keine
+  Wiedergabeluecke.
+- **Sampling**: "🗣 Das ist Sprache" markiert, nach einigen Sekunden
+  Anlaufzeit (siehe unten) stieg der Sample-Zaehler zuverlaessig
+  (`Sprache-Samples: 29`), Live-Rohwert-Balken aktualisierte sich
+  synchron. Erneutes Antippen desselben Levels pausiert das Sammeln
+  korrekt ("Markiert als: – (kein Sammeln)"), bestaetigt per UI-Dump.
+- **Ueberlappungs-Warnung**: mit "🎵 Das ist Musik" auf demselben (real
+  gemischten) Sender zusaetzlich Samples gesammelt - `suggestRatios()`
+  erkannte die ueberlappenden Verteilungen korrekt
+  (`Verteilungen überlappen sich noch...`), "Übernehmen"-Button dabei
+  `enabled="false"` (UI-Dump bestaetigt) statt einen fragwuerdigen
+  Vorschlag anwendbar zu machen.
+- **Automatisches Umschalten blieb waehrend der gesamten Session aus** -
+  kein einziger "Sprache erkannt... schalte weiter"-Log-Eintrag zwischen
+  Session-Start und "Fertig", obwohl der Rohwert zeitweise deutlich ueber
+  0.5 lag (waere ohne den Guard ein Auto-Switch-Kandidat gewesen).
+- **Session-Ende**: "Fertig" beendete die Activity sauber, kein Absturz,
+  `stopCalibration()` lief durch (Log-Analyse bestaetigt Rueckkehr in den
+  Vordergrund-Bildschirm ohne Fehlermeldung).
+- `adb logcat -d --pid=<App-PID> | grep -iE "FATAL|Exception"` (gefiltert
+  um bekannte, harmlose ExoPlayer-Netzwerk-Fehler eines separat toten
+  Test-Senders) ueber die gesamte Testreihe leer, Prozess durchgehend am
+  Leben.
+- `./gradlew assembleDebug` sauber, keine neuen Compiler-Warnings.
+
+### Bewusst NICHT gemacht / offene Punkte
+
+- **Kein Test mit zwei ECHT unterschiedlich klassifizierten Quellen**
+  (Sprache-Sender vs. Instrumental-Sender) - aus Zeitgruenden wurde
+  derselbe (gemischte) Test-Sender fuer beide Level markiert, weshalb die
+  Ueberlappungs-Warnung erwartungsgemaess griff. Das bestaetigt den
+  Warnpfad, aber NICHT den Erfolgspfad (einen tatsaechlich sauberen,
+  anwendbaren Vorschlag mit `overlapping=false`) - dafuer waere ein Sender
+  mit reinem Wortbeitrag UND ein zweiter mit reiner Instrumentalmusik
+  noetig, beide in der zu kalibrierenden Sprache passend.
+- **"Übernehmen" wurde nicht tatsaechlich angewendet** (deaktiviert wegen
+  der Ueberlappung oben) - dass der gespeicherte Wert danach wirklich in
+  `SttSettings` landet und `refreshAnalyzer()` ihn sofort uebernimmt, ist
+  nur durch Code-Review abgesichert, nicht durch einen Live-Durchlauf.
+- **Portrait-Sperre verhindert das Rotationsproblem nur fuer diesen einen
+  Bildschirm** - nicht eigens gegengetestet (Emulator lief durchgehend im
+  Hochformat), bleibt bei einer echten Drehung auf einem physischen Geraet
+  zu bestaetigen.
