@@ -6,6 +6,12 @@
 
 *[🇬🇧 English version further below](#keinsabbelradio-english-version)*
 
+# Namensänderung: von RadioZapper zu --> KeinSabbelRadio
+Zu meinem größten Entsetzen musste ich feststellen, das der ursprüngliche
+Name schon vergeben war. Deswegen heisst das Ding jetzt so. Google findet
+da auch höchstens Duden treffer, der Name sollte also erstmal so bestehen
+bleiben.
+
 KeinSabbelRadio hört mehrere Internetradio-Sender gleichzeitig für dich mit
 und schaltet automatisch weiter, sobald irgendwo geredet wird.
 Moderation, Nachrichten, Werbung, Jingles. Übrig bleibt (möglichst) nur
