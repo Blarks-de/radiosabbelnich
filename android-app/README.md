@@ -99,6 +99,12 @@ Ban-System, kein News-Break, keine Settings-UI.
   Kein separater STT-Meter (Android hat nur einen Detektor, kein VAD+STT-
   Kombi wie das Docker-Projekt) und kein Fingerprint-Chip (Fingerprinting
   ist noch nicht umgesetzt, siehe Fahrplan Phase 4).
+- **Vorgewärmter Kandidat für lückenlosere Wechsel** (siehe eigener
+  Architektur-Abschnitt unten) - ein zweiter, paralleler ExoPlayer hält
+  immer den laut Ringlogik wahrscheinlichsten nächsten Sender bereits
+  vorbereitet. Trifft ein Wechsel (automatisch, ZAPPEN! oder Watchdog)
+  diesen Kandidaten - der Regelfall - läuft er praktisch ohne
+  Verbindungslücke statt mit dem bisherigen Kaltstart.
 - **Sender-Import aus einer M3U-Playlist** (`importer/StationImporter.kt`,
   Vorbild `station_import.py`) - Textfeld "Sender-Import" in der
   Verwaltungs-Activity, vorbelegt mit derselben Default-Playlist wie im
@@ -367,6 +373,49 @@ beide Sperrgruende einheitlich, inkl. der "alle gesperrt"-Eskalation
 Manuelle Sender-Wahl (`manualPlay()`, von `MainActivity` statt `play()`
 aufgerufen) hebt beide Sperren fuer den gewaehlten Sender auf.
 
+### Vorwärmung: ein vorgewärmter Kandidat für lückenlosere Wechsel
+
+Phase 3 aus dem Fahrplan. Bis dahin machte jeder Wechsel in `play()` einen
+kompletten Kaltstart (`player.stop()` → neue `MediaItem` → `prepare()` →
+Buffering), spürbare Lücke von 1-3s. Bewusst KEIN Pool mehrerer
+vorgewärmter Kandidaten wie `PrebufferedSource`/`prebuffer_count` im
+Docker-Projekt (siehe dessen `CLAUDE.md`) - der Ressourcenverbrauch
+mehrerer gleichzeitiger Dauerstreams stünde für die auf dem Handy erwartete
+Sendermenge in keinem Verhältnis zum Zusatznutzen gegenüber der
+einfacheren Variante unten.
+
+`refreshPreload()` bereitet über die bereits bestehende
+`nextAvailableStation()`-Funktion (siehe Watchdog-Abschnitt oben) immer
+GENAU den Sender vor, den die Ringlogik gerade als nächsten wählen würde -
+ein zweiter, paralleler `ExoPlayer` (`preloadedPlayer`) puffert im
+Hintergrund (`playWhenReady=false`). Rein reaktiv aufgerufen (kein
+Polling-Timer wie `sync_prebuffer()` im Docker-Projekt), an den drei
+Stellen, an denen sich einer der Einflussfaktoren ändert: aktueller Sender
+(Ende von `play()`), Sperren (Ende von `refreshLockedStationsSnapshot()` -
+deckt dadurch alle deren Aufrufer ab) und Senderliste (Ende von
+`handleStationListChanged()`).
+
+Da `attemptAutoSwitch()` (automatisch UND der ZAPPEN!-Button) sowie
+`handlePlaybackFailure()` (Watchdog) exakt dieselbe Auswahl-Logik
+verwenden, trifft `play()` in der überwiegenden Mehrheit der Fälle genau
+diesen vorgewärmten Kandidaten und übernimmt ihn (Player-Instanzen tauschen,
+alter Player wird released) statt eines Kaltstarts. `manualPlay()` (Sender
+in der Liste antippen) profitiert nur zufällig, wenn der angetippte Sender
+zufällig der vorhergesagte ist.
+
+**Randfall, beim Testen live aufgetreten**: ein `Player.Listener` feuert
+`onPlaybackStateChanged` nur bei KÜNFTIGEN Zustandswechseln, nicht
+rückwirkend für den Zustand zum Zeitpunkt von `addListener()`. War der
+übernommene Kandidat beim Wechsel noch nicht `STATE_READY`, würde der
+`BUFFERING_TIMEOUT_SECONDS`-Watchdog nie zu laufen anfangen - die
+Timer-Start-Logik ist deshalb in eine eigene `armBufferingWatchdog()`
+extrahiert, die `play()` nach einer Übernahme explizit erneut aufruft,
+falls der übernommene Player noch buffert. Ein eigener, minimaler
+`preloadFailureListener` verwirft einen fehlgeschlagenen Kandidaten NUR aus
+der Vorwärmung (`clearPreload()`) - löst bewusst NICHT den
+`deadUntil`/Watchdog-Mechanismus aus, solange der Sender noch nicht
+`current` ist.
+
 ### M3U-/Kodi-Sender-Import
 
 Vorbild: `station_import.py` im Docker-Projekt (siehe dessen `CLAUDE.md`,
@@ -474,10 +523,17 @@ dafuer das Textfeld - einfach die Tailscale-IP `100.92.3.18` eintragen.
 
 ## Bekannte Grenzen / offene Punkte
 
-- **Doppelter Netzwerkverbrauch** durch die zwei unabhaengigen
-  Dekodierungen (siehe oben) - fuer echten Mobilfunk-Betrieb ungeeignet,
-  nur fuer WLAN/Prototyp gedacht. Durch automatisches Umschalten jetzt
-  noch relevanter (haeufigere neue Verbindungen).
+- **Doppelter (seit der Vorwärmung eher dreifacher) Netzwerkverbrauch**
+  durch die zwei unabhaengigen Dekodierungen (siehe oben) PLUS den
+  vorgewaermten Kandidaten (siehe "Vorwärmung" oben) - fuer echten
+  Mobilfunk-Betrieb ungeeignet, nur fuer WLAN/Prototyp gedacht. Durch
+  automatisches Umschalten jetzt noch relevanter (haeufigere neue
+  Verbindungen).
+- **Vorwärmung deckt nur EINEN Kandidaten ab, kein Pool** - bei einer
+  Sperren-Kette (mehrere aufeinanderfolgende Sender gerade gesperrt) oder
+  bei `manualPlay()` auf einen nicht vorhergesagten Sender bleibt es beim
+  bisherigen Kaltstart (siehe "Vorwärmung" oben, bewusste
+  Aufwand/Nutzen-Entscheidung gegen einen Pool wie im Docker-Projekt).
 - **Vosk-`Model` wird bei jedem Play-/Auto-Switch-Klick neu geladen**
   (kein Wiederverwenden ueber Sender-Wechsel hinweg) - kostet jedes Mal
   ca. 1-2 Sekunden zusaetzliche Verzoegerung, nicht optimiert.

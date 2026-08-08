@@ -95,6 +95,22 @@ private const val BUFFERING_TIMEOUT_SECONDS = 15L
  * `dead_until.clear()` im Docker-Projekt). Manuelle Sender-Wahl
  * (`manualPlay()`) hebt beide Sperren fuer den gewaehlten Sender auf -
  * expliziter Nutzerwunsch schlaegt Automatik.
+ *
+ * Vorwaermung fuer luecken lose Wechsel (Phase 3 aus dem Fahrplan): ein
+ * zweiter, paralleler ExoPlayer (`preloadedPlayer`) haelt immer GENAU den
+ * Sender vorbereitet, den `nextAvailableStation()` gerade als naechsten
+ * waehlen wuerde (`refreshPreload()`, aufgerufen bei jeder Aenderung von
+ * aktuellem Sender/Sperren/Senderliste - alle drei Einfluesse auf das
+ * Ergebnis). Da `attemptAutoSwitch()` (automatisch UND der ZAPPEN!-Button)
+ * sowie `handlePlaybackFailure()` (Watchdog) exakt dieselbe Auswahl-Logik
+ * verwenden, trifft `play()` in der ueberwiegenden Mehrheit der Faelle genau
+ * diesen vorgewaermten Kandidaten und uebernimmt ihn statt eines Kaltstarts.
+ * Bewusst nur EIN Kandidat, kein Pool wie `PrebufferedSource`/
+ * `prebuffer_count` im Docker-Projekt (siehe dessen `CLAUDE.md`) - der
+ * Ressourcenverbrauch mehrerer gleichzeitiger Dauerstreams stuende fuer die
+ * auf dem Handy erwartete Sendermenge in keinem Verhaeltnis zum
+ * Zusatznutzen. `manualPlay()` (Sender in der Liste antippen) profitiert nur
+ * zufaellig, wenn der angetippte Sender der vorhergesagte ist.
  */
 class PlaybackService : LifecycleService() {
 
@@ -121,6 +137,13 @@ class PlaybackService : LifecycleService() {
     /** Momentaufnahme, neu berechnet bei jeder Aenderung einer der beiden Sperr-Maps - siehe refreshLockedStationsSnapshot(). */
     val lockedStations: StateFlow<Map<String, StationLockReason>> = _lockedStations
 
+    // Vorwaermung (Phase 3 aus dem Fahrplan, siehe Klassen-Doc oben): ein
+    // zweiter ExoPlayer haelt den laut Ringlogik wahrscheinlichsten naechsten
+    // Sender bereits vorbereitet, damit ein Wechsel dorthin ohne Kaltstart
+    // ablaeuft.
+    private var preloadedPlayer: ExoPlayer? = null
+    private var preloadedStationId: String? = null
+
     private val playerListener = object : Player.Listener {
         override fun onPlayerError(error: PlaybackException) {
             Log.w(TAG, "ExoPlayer-Fehler bei '${_currentStation.value?.name}'", error)
@@ -129,20 +152,7 @@ class PlaybackService : LifecycleService() {
 
         override fun onPlaybackStateChanged(playbackState: Int) {
             if (playbackState == Player.STATE_BUFFERING) {
-                // Timer neu starten statt nur einmal zu pruefen - jeder erneute
-                // Eintritt in BUFFERING (auch ein Wiederanlauf mitten im Stream)
-                // bekommt seine volle Frist, kein Zusammenzaehlen ueber mehrere
-                // kurze Aussetzer hinweg.
-                bufferingTimeoutJob?.cancel()
-                bufferingTimeoutJob = lifecycleScope.launch {
-                    delay(BUFFERING_TIMEOUT_SECONDS * 1000)
-                    Log.w(
-                        TAG,
-                        "Kein Fortschritt seit ${BUFFERING_TIMEOUT_SECONDS}s - " +
-                            "'${_currentStation.value?.name}' antwortet nicht"
-                    )
-                    handlePlaybackFailure()
-                }
+                armBufferingWatchdog()
             } else {
                 bufferingTimeoutJob?.cancel()
                 bufferingTimeoutJob = null
@@ -154,6 +164,21 @@ class PlaybackService : LifecycleService() {
                     refreshLockedStationsSnapshot()
                 }
             }
+        }
+    }
+
+    /**
+     * Verwirft einen fehlgeschlagenen Vorwaerm-Kandidaten wieder - bewusst OHNE
+     * den deadUntil/Watchdog-Mechanismus auszuloesen: der Sender ist noch nicht
+     * `current`, ein Fehler hier bedeutet nur "war kein guter Kandidat", nicht
+     * zwingend "ist tot" (siehe Klassen-Doc oben). Wird er tatsaechlich
+     * ausgewaehlt, faengt ihn der normale Watchdog ganz regulaer ueber den
+     * Kaltstart-Pfad ab.
+     */
+    private val preloadFailureListener = object : Player.Listener {
+        override fun onPlayerError(error: PlaybackException) {
+            Log.d(TAG, "Vorgewaermter Kandidat '$preloadedStationId' fehlgeschlagen - verwerfe")
+            clearPreload()
         }
     }
 
@@ -204,15 +229,45 @@ class PlaybackService : LifecycleService() {
      */
     fun manualSkip() = attemptAutoSwitch()
 
+    /**
+     * Uebernimmt den vorgewaermten Player, falls `station` genau der laut
+     * `refreshPreload()` vorbereitete Kandidat ist (der Normalfall bei
+     * automatischem Umschalten, ZAPPEN! und dem Watchdog - alle drei waehlen
+     * ueber dieselbe `nextAvailableStation()`-Logik) - praktisch luecken loser
+     * Wechsel statt Kaltstart. Trifft `station` NICHT den vorgewaermten
+     * Kandidaten (z.B. `manualPlay()` auf einen beliebigen Sender in der
+     * Liste), bleibt es beim bisherigen Kaltstart.
+     */
     fun play(station: Station, modelPath: String?) {
         _currentStation.value = station
         activeModelPath = modelPath
 
-        player?.apply {
-            stop()
-            setMediaItem(MediaItem.fromUri(station.url))
-            prepare()
-            playWhenReady = true
+        val warm = preloadedPlayer
+        if (warm != null && preloadedStationId == station.id) {
+            Log.d(TAG, "Uebernehme vorgewaermten Kandidaten '${station.name}' - kein Kaltstart")
+            player?.apply {
+                removeListener(playerListener)
+                release()
+            }
+            player = warm.apply {
+                removeListener(preloadFailureListener)
+                addListener(playerListener)
+                playWhenReady = true
+            }
+            preloadedPlayer = null
+            preloadedStationId = null
+            // Randfall siehe armBufferingWatchdog()-Doc: war der Kandidat beim
+            // Uebernehmen noch nicht STATE_READY, muss der Timer manuell
+            // angestossen werden.
+            if (warm.playbackState == Player.STATE_BUFFERING) armBufferingWatchdog()
+        } else {
+            clearPreload() // falscher Kandidat stand bereit - verworfen statt uebernommen
+            player?.apply {
+                stop()
+                setMediaItem(MediaItem.fromUri(station.url))
+                prepare()
+                playWhenReady = true
+            }
         }
 
         startForegroundNotification(station.name)
@@ -222,6 +277,51 @@ class PlaybackService : LifecycleService() {
         } else {
             analyzer.stop()
         }
+
+        refreshPreload()
+    }
+
+    /**
+     * Bereitet den laut Ringlogik naechsten Sender im Hintergrund vor (siehe
+     * Klassen-Doc oben, Abschnitt Vorwaermung) - aufgerufen an jeder Stelle, an der
+     * sich einer der drei Einflussfaktoren aendert: aktueller Sender (Ende von
+     * `play()`), Sperren (Ende von `refreshLockedStationsSnapshot()`) oder
+     * Senderliste (Ende von `handleStationListChanged()`). Idempotent: steht
+     * der richtige Kandidat schon bereit, passiert nichts.
+     */
+    private fun refreshPreload() {
+        val current = _currentStation.value ?: run { clearPreload(); return }
+        val stations = StationRepository.activeStations()
+        val currentIndex = stations.indexOfFirst { it.id == current.id }
+        val candidate = if (currentIndex >= 0) {
+            nextAvailableStation(stations, currentIndex, SystemClock.elapsedRealtime())
+        } else {
+            null
+        }
+
+        if (candidate == null || candidate.id == current.id) {
+            // Kein sinnvoller Kandidat (alles gesperrt) oder nur der aktuelle
+            // Sender selbst (z.B. genau 1 aktiver Sender) - nichts vorwaermen.
+            clearPreload()
+            return
+        }
+        if (candidate.id == preloadedStationId) return // schon der richtige
+
+        clearPreload()
+        preloadedStationId = candidate.id
+        Log.d(TAG, "Waerme '${candidate.name}' als naechsten Kandidaten vor")
+        preloadedPlayer = ExoPlayer.Builder(this).build().apply {
+            addListener(preloadFailureListener)
+            setMediaItem(MediaItem.fromUri(candidate.url))
+            prepare()
+            playWhenReady = false // puffert trotzdem im Hintergrund, spielt nur nicht hoerbar
+        }
+    }
+
+    private fun clearPreload() {
+        preloadedPlayer?.release()
+        preloadedPlayer = null
+        preloadedStationId = null
     }
 
     fun stopPlayback() {
@@ -312,6 +412,32 @@ class PlaybackService : LifecycleService() {
     }
 
     /**
+     * Startet den Buffering-Timeout-Timer (neu). Aufgerufen sowohl vom
+     * `playerListener` bei jedem Eintritt in `STATE_BUFFERING`, als auch
+     * explizit direkt nach einer Vorwaerm-Uebernahme in `play()`, falls der
+     * uebernommene Player zu dem Zeitpunkt noch buffert - ein `Player.Listener`
+     * feuert `onPlaybackStateChanged` nur bei KUENFTIGEN Zustandswechseln, ein
+     * bereits bestehender Zustand zum Zeitpunkt des `addListener()`-Aufrufs
+     * loest ihn nicht rueckwirkend aus (siehe `play()`-Kommentar).
+     */
+    private fun armBufferingWatchdog() {
+        // Timer neu starten statt nur einmal zu pruefen - jeder erneute
+        // Eintritt in BUFFERING (auch ein Wiederanlauf mitten im Stream)
+        // bekommt seine volle Frist, kein Zusammenzaehlen ueber mehrere
+        // kurze Aussetzer hinweg.
+        bufferingTimeoutJob?.cancel()
+        bufferingTimeoutJob = lifecycleScope.launch {
+            delay(BUFFERING_TIMEOUT_SECONDS * 1000)
+            Log.w(
+                TAG,
+                "Kein Fortschritt seit ${BUFFERING_TIMEOUT_SECONDS}s - " +
+                    "'${_currentStation.value?.name}' antwortet nicht"
+            )
+            handlePlaybackFailure()
+        }
+    }
+
+    /**
      * Reagiert auf einen ExoPlayer-Fehler, einen Buffering-Timeout ODER einen
      * StreamAnalyzer-Fehler (siehe handleStatusForAutoSwitch) - der Sender
      * antwortet technisch nicht, unabhaengig vom Sprache/Musik-Inhalt. Sperrt
@@ -355,7 +481,14 @@ class PlaybackService : LifecycleService() {
     private fun handleStationListChanged(stations: List<Station>) {
         val current = _currentStation.value ?: return
         val stillActive = stations.any { it.id == current.id && it.enabled }
-        if (stillActive) return
+        if (stillActive) {
+            // Der laufende Sender bleibt zwar aktiv, aber Reihenfolge/
+            // Mitgliedschaft der Liste kann sich trotzdem geaendert haben -
+            // der vorgewaermte Kandidat muss dann neu berechnet werden (play()/
+            // stopPlayback() unten decken diesen Fall sonst nicht ab).
+            refreshPreload()
+            return
+        }
 
         val fallback = StationRepository.activeStations().firstOrNull()
         if (fallback != null) {
@@ -414,6 +547,11 @@ class PlaybackService : LifecycleService() {
             if (now < until) snapshot.putIfAbsent(id, StationLockReason.SPEECH_COOLDOWN)
         }
         _lockedStations.value = snapshot
+        // Deckt ALLE Aufrufer dieser Funktion ab (manualPlay, attemptAutoSwitch,
+        // handlePlaybackFailure, die MUSIC-Freigabe, die Eskalation oben, das
+        // Aufraeumen in stopPlayback()) - der vorgewaermte Kandidat haengt von
+        // genau diesen Sperren ab, siehe refreshPreload().
+        refreshPreload()
     }
 
     private fun startForegroundNotification(stationName: String) {
@@ -449,6 +587,7 @@ class PlaybackService : LifecycleService() {
         analyzer.stop()
         player?.release()
         player = null
+        clearPreload()
         super.onDestroy()
     }
 }

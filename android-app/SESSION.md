@@ -341,3 +341,88 @@ In-Memory-`StateFlow` von `StationReachabilityChecker`). Kein Reachability-
 Check beim Import selbst (siehe oben) - bewusste Abweichung vom
 Docker-Vorbild, dort verhindert der Check das Eindringen toter Sender in
 die LAUFENDE Rotation, hier landen Importe ohnehin deaktiviert.
+
+## 2026-08-08 (Fortsetzung) — Prebuffering für flüssigeres Umschalten (Phase 3 aus dem Fahrplan, Plan-Mode)
+
+Auslöser: `RadioZapper_Android_Fahrplan.md`, Phase 3 - jeder Senderwechsel
+machte bisher einen kompletten Kaltstart in `PlaybackService.play()`
+(`player.stop()` → neue `MediaItem` → `prepare()` → Buffering), spürbare
+Lücke von 1-3s. Plan-Mode mit 3 vorgestellten Optionen
+(Aufwand/Nutzen: nur UI-Feedback / eine einzelne vorgewärmte Instanz für
+den nächsten Sender / ein kleiner Pool analog `PrebufferedSource` im
+Docker-Projekt) - Nutzer wählte die mittlere Option.
+
+### Umsetzung (alles in `playback/PlaybackService.kt`)
+
+- **`refreshPreload()`**: bereitet über die bereits bestehende
+  `nextAvailableStation()`-Funktion den laut Ringlogik nächsten Sender im
+  Hintergrund vor (`ExoPlayer.prepare()`, `playWhenReady=false`). Läuft rein
+  reaktiv (kein Polling-Timer wie `sync_prebuffer()` im Docker-Projekt) -
+  aufgerufen an den drei Stellen, an denen sich einer der Einflussfaktoren
+  (aktueller Sender/Sperren/Senderliste) tatsächlich ändert: Ende von
+  `play()`, Ende von `refreshLockedStationsSnapshot()` (deckt dadurch ALLE
+  deren Aufrufer ab), Ende von `handleStationListChanged()`.
+- **`play()`**: übernimmt den vorgewärmten Player statt eines Kaltstarts,
+  wenn das Wechselziel mit dem vorbereiteten Kandidaten übereinstimmt - der
+  Normalfall, weil `attemptAutoSwitch()` (automatisch UND der
+  ZAPPEN!-Button) sowie `handlePlaybackFailure()` (Watchdog) über dieselbe
+  `nextAvailableStation()`-Logik gehen wie `refreshPreload()`.
+- **Wichtiger, beim Testen tatsächlich getroffener Randfall**: ein
+  `Player.Listener` feuert `onPlaybackStateChanged` nur bei KÜNFTIGEN
+  Zustandswechseln, nicht rückwirkend für den Zustand zum Zeitpunkt von
+  `addListener()`. War der übernommene Vorwärm-Kandidat beim Wechsel noch
+  nicht `STATE_READY`, hätte der `BUFFERING_TIMEOUT_SECONDS`-Watchdog nie
+  angefangen zu laufen. Fix: die Timer-Start-Logik aus dem Listener in eine
+  eigene `armBufferingWatchdog()`-Funktion extrahiert, die `play()` nach
+  einer Übernahme explizit erneut aufruft, falls der übernommene Player noch
+  buffert.
+- Ein eigener, minimaler `preloadFailureListener` verwirft einen
+  fehlgeschlagenen Kandidaten NUR aus der Vorwärmung (`clearPreload()`) -
+  löst bewusst NICHT den `deadUntil`/Watchdog-Mechanismus aus, solange der
+  Sender noch nicht `current` ist (ein Kandidat, der nie promoted wird, ist
+  kein Fall für die 5-Minuten-Sperre).
+- `stopPlayback()`/`onDestroy()` geben den Vorwärm-Player zusätzlich frei.
+
+### Verifiziert (Emulator, 3 aktive Sender: Deutschlandfunk/SWR3/eine
+absichtlich tote Test-URL "TOT-Test")
+
+- Logcat zeigt den kompletten Normalfall zweimal hintereinander:
+  `Waerme 'X' als naechsten Kandidaten vor` direkt nach jedem Wechsel, dann
+  bei der nächsten Sprache-Erkennung `Uebernehme vorgewaermten Kandidaten
+  'X' - kein Kaltstart` statt der bisherigen Kaltstart-Logs - der
+  Kern-Mechanismus funktioniert wie geplant.
+- **Der oben beschriebene Randfall trat live tatsächlich auf** und wurde
+  korrekt behandelt: TOT-Test wurde als noch-buffernder Kandidat übernommen,
+  exakt `BUFFERING_TIMEOUT_SECONDS` (15s) später feuerte
+  `Kein Fortschritt seit 15s - 'TOT-Test' antwortet nicht` trotz des späten
+  `addListener()` - ohne den `armBufferingWatchdog()`-Fix wäre das nicht
+  passiert. Sender wurde korrekt für 5 Minuten gesperrt und der Service
+  schaltete sauber (wieder per Warmstart) auf den nächsten Kandidaten
+  weiter.
+- Ein zweiter, unabhängiger Pfad ebenfalls beobachtet: ein noch gar nicht
+  übernommener Vorwärm-Kandidat (TOT-Test, nur im Hintergrund am Puffern)
+  schlug für sich fehl - Logcat: `Vorgewaermter Kandidat 'tot-test'
+  fehlgeschlagen - verwerfe`, ohne die `deadUntil`-Sperre auszulösen (wie
+  geplant - der Sender wurde ja nie `current`).
+- Kein Absturz über mehrere komplette Wechsel-Zyklen (`adb logcat -d | grep
+  FATAL` durchgehend leer).
+- "Stopp" beendet die Wiedergabe weiterhin sauber.
+
+### Bewusst NICHT gemacht
+
+Kein Pool mehrerer vorgewärmter Kandidaten (Nutzerentscheidung, siehe oben)
+- `manualPlay()` (Sender in der Liste antippen) profitiert deshalb nur
+  zufällig vom Warmstart. Keine Persistenz/Debug-Anzeige des
+  Vorwärm-Zustands in der UI - rein internes Implementierungsdetail, nur in
+  Logcat sichtbar (`Log.d`).
+
+### Nebenbeobachtung (kein Bug, bestehendes Verhalten aus Phase 2)
+
+Bei nur 2-3 Sendern, die im Test alle sehr sprachlastig sind, greift die
+"alle gesperrt"-Eskalation (`findNextOrEscalate()`) sehr häufig und leert
+dabei BEIDE Sperrlisten - das hebt inzwischen auch eine erst Sekunden zuvor
+gesetzte Watchdog-Sperre (`deadUntil`) wieder auf, ein toter Testsender kam
+dadurch im Test mehrfach kurz hintereinander erneut dran. Exakt das
+dokumentierte Verhalten von `dead_until.clear()`/der Eskalation aus Phase 2,
+keine Regression durch die Vorwärmung - bei einer realistischeren
+Sendermenge (mehr als 2-3 aktive Sender) tritt der Fall seltener auf.
