@@ -20,6 +20,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.radiozapper.mvp.databinding.ActivityMainBinding
 import com.radiozapper.mvp.databinding.ItemStationBinding
+import com.radiozapper.mvp.fingerprint.FingerprintOutcome
 import com.radiozapper.mvp.model.Station
 import com.radiozapper.mvp.model.StationRepository
 import com.radiozapper.mvp.newsbreak.NewsBreakSettings
@@ -49,6 +50,8 @@ class MainActivity : AppCompatActivity() {
     private var speechRatioJob: Job? = null
     private var newsBreakActiveJob: Job? = null
     private var newsBreakFileNameJob: Job? = null
+    private var fingerprintOutcomeJob: Job? = null
+    private var fingerprintMatchJob: Job? = null
     private var lockedStations: Map<String, StationLockReason> = emptyMap()
 
     // Fuer die kombinierte "Läuft: ..."-Anzeige (siehe renderCurrentDisplay()) -
@@ -131,6 +134,17 @@ class MainActivity : AppCompatActivity() {
             speechRatioJob = lifecycleScope.launch {
                 service.speechRatio.collect { ratio -> renderBullshitometer(ratio) }
             }
+
+            fingerprintOutcomeJob?.cancel()
+            fingerprintOutcomeJob = lifecycleScope.launch {
+                service.lastFingerprintOutcome.collect { outcome -> renderFingerprintChip(outcome) }
+            }
+            fingerprintMatchJob?.cancel()
+            fingerprintMatchJob = lifecycleScope.launch {
+                service.lastFingerprintMatch.collect { match ->
+                    binding.zappingErrorButton.visibility = if (match != null) android.view.View.VISIBLE else android.view.View.GONE
+                }
+            }
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
@@ -142,6 +156,8 @@ class MainActivity : AppCompatActivity() {
             speechRatioJob?.cancel()
             newsBreakActiveJob?.cancel()
             newsBreakFileNameJob?.cancel()
+            fingerprintOutcomeJob?.cancel()
+            fingerprintMatchJob?.cancel()
             lockedStations = emptyMap()
         }
     }
@@ -195,6 +211,10 @@ class MainActivity : AppCompatActivity() {
 
         binding.zapButton.setOnClickListener {
             playbackService?.manualSkip()
+        }
+
+        binding.zappingErrorButton.setOnClickListener {
+            playbackService?.undoLastFingerprintMatch()
         }
 
         setupNewsBreakSection()
@@ -265,6 +285,8 @@ class MainActivity : AppCompatActivity() {
         speechRatioJob?.cancel()
         newsBreakActiveJob?.cancel()
         newsBreakFileNameJob?.cancel()
+        fingerprintOutcomeJob?.cancel()
+        fingerprintMatchJob?.cancel()
     }
 
     /**
@@ -351,6 +373,15 @@ class MainActivity : AppCompatActivity() {
         binding.bsMeterPercentText.text = getString(R.string.bs_meter_pct, pct)
         val hue = (120 - pct * 1.2).coerceAtLeast(0.0).toFloat()
         binding.bsMeterBar.progressTintList = android.content.res.ColorStateList.valueOf(hslToColor(hue, 0.70f, 0.45f))
+    }
+
+    /** "🔎 Fingerprint"-Chip analog zum Web-Interface: letztes Ereignis (Match/Learned) oder "–", solange noch nichts passiert ist. */
+    private fun renderFingerprintChip(outcome: FingerprintOutcome?) {
+        binding.fingerprintChipText.text = when (outcome) {
+            null -> getString(R.string.fp_chip_off)
+            is FingerprintOutcome.Match -> getString(R.string.fp_chip_match, outcome.label, outcome.timesSeen)
+            is FingerprintOutcome.Learned -> getString(R.string.fp_chip_learned)
+        }
     }
 
     /** Android kennt nur HSV, keine HSL-Konvertierung - eigene Umrechnung fuer denselben Farbverlauf wie im Web. */

@@ -530,3 +530,113 @@ hätte verifiziert werden müssen. Keine Persistenz-Prüfung des SAF-Zugriffs
 `takePersistableUriPermission()` - laut Android-Doku über Neustarts
 hinweg gültig, im Emulator nicht eigens neu gebootet, um das zu
 verifizieren).
+
+## 2026-08-08 (Fortsetzung 3) — Audio-Fingerprinting (Phase 4 aus dem Fahrplan, Plan-Mode)
+
+Auslöser: `RadioZapper_Android_Fahrplan.md`, Phase 4 - der größte
+verbleibende Brocken. Vorbild: `fingerprint.py` im Docker-Projekt, MIT der
+ausdrücklichen Vorgabe, den dortigen 2D-Peak-Fix als Pflicht-Ausgangspunkt
+zu übernehmen (der naive "lauteste Bins pro Frame"-Ansatz hatte dort 351
+von 351 verschiedenen Sprache-Clips fälschlich als identisch erkannt, siehe
+`../SESSION.md` "Fingerprint-Algorithmus überarbeitet" vom 2026-08-02).
+Plan-Mode mit einer Rückfrage (den "🛑 Zapping-Fehler"-Korrekturknopf, im
+Fahrplan als zweite Priorität markiert, gleich mitnehmen statt separat
+nachzuziehen - Nutzerentscheidung: ja), danach Umsetzung, danach Live-Test
+im Emulator gegen echte Sender.
+
+### Architektur
+
+- **Kein zweiter Decode-Pfad**: läuft auf dem bereits vorhandenen
+  16kHz-Mono-Analysestrom aus `StreamAnalyzer.kt` (demselben, der an Vosk
+  geht), nicht auf einer zusätzlichen 44.1kHz-Dekodierung wie im
+  Docker-Projekt. Alle Frame-/Nachbarschafts-Konstanten wurden proportional
+  für 16kHz neu hergeleitet (`FRAME_SIZE=512`/`HOP_SIZE=256` statt
+  `1024`/`512`, `PEAK_NEIGHBORHOOD_FREQ=21` statt `15` usw. - volle
+  Umrechnungstabelle in `android-app/README.md`), nicht 1:1 aus Python
+  kopiert.
+- **`fingerprint/Fingerprint.kt`**: reine Algorithmus-Logik (eigene
+  Radix-2-Cooley-Tukey-FFT, 2D-lokale-Maxima-Peak-Erkennung, Hash-Bildung) -
+  bewusst KEINE externe FFT-Bibliothek wie JTransforms, passt zum
+  durchgehenden Minimal-Dependency-Stil (Docker-Projekt vermeidet aus
+  demselben Grund `scipy`). Kennt weder Android-SQLite noch
+  `PlaybackService` - direktes Pendant zu den freien Funktionen in
+  `fingerprint.py`.
+- **`fingerprint/FingerprintDb.kt`**: `SQLiteOpenHelper` (Android-Bordmittel)
+  statt Room - direktes Pendant zu Pythons rohem `sqlite3`-Modul, dieselbe
+  Begründung wie die JSON-Datei-statt-Room-Entscheidung bei der
+  Senderliste, nur in die andere Richtung (hier rechtfertigt der indizierte
+  Hash-Lookup echtes SQL, aber keine Room-Boilerplate für zwei simple
+  Tabellen). `matchOrLearn()`/`deleteClip()`/`clearAll()` 1:1 nach
+  `FingerprintDB`s Vorbild, inkl. desselben Voting-Mechanismus
+  (`(clip_id, delta)`-Zählung für konsistenten Zeitversatz) und
+  Chunk-Batching (500er-Chunks) gegen SQLites Parameterlimit.
+- **Zwei parallele Trigger-Signale in `StreamAnalyzer`**: die bestehende
+  Glättung/Hysterese (4s-Anlaufzeit) steuert weiterhin `status`
+  unverändert. Für Fingerprinting zählt ein zusätzlicher ROHER,
+  ungeglätteter Speech-Streak mit (`FINGERPRINT_TRIGGER_CHUNKS=4` = 2s,
+  identisch zu Pythons `FINGERPRINT_TRIGGER_SECONDS=2`) - sonst wäre der
+  erste Check erst nach der vollen Hysterese-Anlaufzeit dran gewesen statt
+  nach den in Python gemessenen ~2s. Ergebnis kommt über ein
+  `MutableSharedFlow<FingerprintOutcome>` zurück (bewusst SharedFlow statt
+  StateFlow - ein Treffer ist ein einmaliges Ereignis, `StateFlow`s
+  "letzter-Wert-bleibt-hängen"-Semantik hätte bei erneutem Sammeln
+  denselben Treffer nochmal ausgelöst bzw. einen zweiten identischen
+  Treffer maskiert).
+- **`PlaybackService`** reagiert auf `Match` mit demselben
+  `attemptAutoSwitch()` wie ein Sprache-Treffer (identische Semantik zu
+  `do_switch("Bekannte Werbung/Jingle erkannt")`, erbt automatisch den
+  bestehenden Cooldown). `Learned` aktualisiert nur die UI. Pausiert
+  implizit während einer Nachrichten-Pause (Phase 6), weil `analyzer.stop()`
+  dort bereits die komplette `runAnalysis()`-Coroutine (inkl. des neuen
+  Fingerprint-Codes) abbricht - kein weiterer Sonderfall nötig.
+- **"🛑 Zapping-Fehler"-Knopf**: `undoLastFingerprintMatch()` löscht den
+  zuletzt gematchten Clip aus der DB (`Dispatchers.IO`), Knopf nur
+  sichtbar/aktiv, solange ein rückgängig machbarer Match ansteht (eigene
+  `lastFingerprintMatch`-StateFlow).
+
+### Verifiziert (Emulator, echte Sender: Deutschlandfunk/SWR3)
+
+- **Kern-Pipeline funktioniert**: erstes Deutschlandfunk-Segment fingerprinted
+  nach ~2s Sprache, korrekt als neuer Clip gelernt (214 Hashes, Clip #1),
+  Logcat bestätigt - deutlich VOR dem regulären, hysterese-basierten
+  Auto-Switch (der ~2.5s später griff), wie geplant unabhängig/parallel.
+- **Kein-Falsch-Treffer-Test (der historisch kritische Punkt dieser Phase)**:
+  drei echte, unterschiedliche Sprache-Clips (Deutschlandfunk, SWR3,
+  erneut Deutschlandfunk) paarweise gegeneinander geprüft - alle drei
+  Vergleiche ergaben eine Match-Stärke von genau 1 (Schwelle 25), jeweils
+  korrekt als neuer, eigener Clip gelernt statt fälschlich gematcht. Passt
+  zur Verteilung aus dem Python-Referenztest (0-14 für unterschiedlichen
+  Inhalt, 100+ für echte Wiederholungen).
+- Fingerprint-Chip in der UI zeigte korrekt "Neuer Clip gelernt" nach dem
+  Learned-Ereignis, "🛑 Zapping-Fehler"-Button blieb dabei korrekt
+  versteckt (kein Match, also nichts rückgängig zu machen).
+- `fingerprints.db` wurde korrekt unter dem App-Standardpfad
+  (`databases/fingerprints.db`) angelegt und persistiert (`adb shell run-as
+  ... ls databases/` bestätigt).
+- Kein Absturz über die gesamte Testreihe (`adb logcat -d | grep -iE
+  "FATAL|AndroidRuntime"` durchgehend leer).
+
+### Bewusst NICHT verifiziert (ehrliche Lücke, kein übersprungener Test)
+
+**Kein echter "Match"-Fall (Wiederholung erkannt + sofortiger Wechsel) live
+beobachtet.** Dafür wäre ein Clip nötig, der GARANTIERT zweimal exakt
+wiederkehrt - auf einem echten, fortlaufenden Live-Radiostream lässt sich
+das nicht erzwingen (der Inhalt bewegt sich weiter), und auf diesem Host
+stand weder ein TTS-Tool (`espeak-ng`/`flite` wären via `apt` verfügbar
+gewesen, aber nur mit Root-Passwort installierbar, das hier nicht vorliegt)
+noch ein vorhandener Sprach-Testkorpus zur Verfügung, um einen kontrolliert
+wiederholten Clip zu erzeugen. Der Matching-/Voting-Mechanismus selbst ist
+aber derselbe wie im Python-Original (dort mit echten Wiederholungen
+gegengetestet: 651-702 von 722 Treffern) und wurde hier nur auf der
+Kotlin-Seite (Hash-Generierung, DB-Lookup) neu geschrieben - das
+Vertrauen in die Korrektheit stützt sich auf den bestandenen
+Negativ-Test (keine Falsch-Treffer) plus Code-Review gegen das Vorbild,
+nicht auf einen bestätigten Positiv-Fall. Nachholbedarf, sobald ein
+geeigneter wiederkehrender Clip (echter Jingle im Live-Betrieb oder ein
+per TTS erzeugter Testclip) verfügbar ist.
+
+Ebenfalls nicht getestet: der "🛑 Zapping-Fehler"-Knopf selbst (setzt einen
+Match voraus, der in dieser Sitzung nicht auftrat) und das Zusammenspiel
+mit einer laufenden Nachrichten-Pause (strukturell durch `analyzer.stop()`
+abgedeckt, siehe oben, aber nicht eigens mit einem echten Fingerprint-Treffer
+während einer Pause gegengeprüft).

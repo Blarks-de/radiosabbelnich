@@ -102,8 +102,8 @@ Grenzen").
   ZAPPEN!" neben "■ Stopp" fuer den manuellen Sofort-Wechsel (ruft
   dieselbe Ring-Logik wie ein automatisch erkannter Sprache-Treffer auf).
   Kein separater STT-Meter (Android hat nur einen Detektor, kein VAD+STT-
-  Kombi wie das Docker-Projekt) und kein Fingerprint-Chip (Fingerprinting
-  ist noch nicht umgesetzt, siehe Fahrplan Phase 4).
+  Kombi wie das Docker-Projekt). Chip "🔎 Fingerprint" zeigt das letzte
+  Fingerprint-Ereignis (siehe unten).
 - **Vorgewärmter Kandidat für lückenlosere Wechsel** (siehe eigener
   Architektur-Abschnitt unten) - ein zweiter, paralleler ExoPlayer hält
   immer den laut Ringlogik wahrscheinlichsten nächsten Sender bereits
@@ -137,6 +137,18 @@ Grenzen").
   zweimal hintereinander. Danach automatische Rueckkehr zum vorher
   laufenden Sender - ein manueller Sendertipp oder "⚡ ZAPPEN!" waehrend der
   Pause beendet sie sofort.
+- **Audio-Fingerprinting** (`fingerprint/Fingerprint.kt`,
+  `fingerprint/FingerprintDb.kt`, Vorbild `fingerprint.py` - siehe eigener
+  Architektur-Abschnitt unten fuer die volle Herleitung) - erkennt
+  wiederkehrende Jingles/Werbespots per Constellation-Map-Verfahren
+  (echte 2D-Landmarken in Zeit UND Frequenz, NICHT "lautester Bin pro
+  Frame" - siehe Docker-Projekt-Historie fuer den Grund) auf dem
+  ohnehin laufenden 16kHz-Analysestrom, kein zweiter Decode-Pfad. Bei
+  Wiedererkennung sofortiger Wechsel (dieselbe Ring-Logik wie ein
+  Sprache-Treffer), sonst wird der Clip in einer lokalen SQLite-DB
+  gelernt. Chip "🔎 Fingerprint" zeigt das letzte Ereignis, Button "🛑
+  Zapping-Fehler" nimmt einen fälschlichen Treffer zurück (Clip aus der
+  DB werfen, kein automatisches Umschalten rückgängig machen).
 - **Build-Zeitstempel in der UI** (`Build: YYYY-MM-DD HH:MM` direkt unter
   dem App-Titel, `BuildConfig.BUILD_TIME`) - entsteht automatisch bei
   jedem Build. Zweck: von aussen erkennbar, ob eine gerade installierte
@@ -520,6 +532,63 @@ Docker-Projekt, dessen ffmpeg-Pipe eine lokale Datei sonst in
 Sekundenbruchteilen durchreicht) - ExoPlayer spielt eine lokale Datei
 ohnehin in ihrem eigenen Tempo ab, unabhaengig von der Quelle.
 
+### Audio-Fingerprinting
+
+Vorbild: `fingerprint.py` im Docker-Projekt (siehe dessen Moduldoc fuer
+die volle Herleitung). **Pflicht-Ausgangspunkt war der dortige 2D-Peak-Fix**,
+nicht der urspruengliche naive Ansatz ("lautester Bin pro Frame"), der im
+Praxistest 351 von 351 verschiedenen Sprache-Clips fälschlich als
+identisch erkannte - menschliche Sprache hat generisch aehnliche
+Formant-Energie, das macht "lautester Bin" zu einem content-UNABHAENGIGEN
+Merkmal. Erst echte lokale Maxima in einer Zeit-Frequenz-Nachbarschaft
+("Landmarken": Onsets, markante Toene) trennen zuverlaessig.
+
+**Kein zweiter Decode-Pfad**: laeuft auf dem bereits vorhandenen
+16kHz-Mono-Analysestrom aus `StreamAnalyzer.kt` (demselben, der an Vosk
+geht), nicht auf einer zusaetzlichen 44.1kHz-Dekodierung wie im
+Docker-Projekt - die diskriminative Energie liegt weit unter der
+8kHz-Nyquist-Grenze bei 16kHz. Alle Frame-/Nachbarschafts-Konstanten
+wurden proportional neu hergeleitet, nicht 1:1 aus Python kopiert:
+
+| Python (44.1kHz) | Bedeutung | Android (16kHz) |
+|---|---|---|
+| `FRAME_SIZE=1024` (23ms) | FFT-Fenster | `FRAME_SIZE=512` (32ms) |
+| `HOP_SIZE=512` (11.6ms) | Frame-Vorschub | `HOP_SIZE=256` (16ms) |
+| `MIN_FREQ_HZ=200` | Netzbrumm-Ausschluss | `200` (absoluter Hz-Wert) |
+| `PEAK_NEIGHBORHOOD_TIME=5` (58ms) | Zeit-Nachbarschaft | `5` (80ms) |
+| `PEAK_NEIGHBORHOOD_FREQ=15` (645Hz) | Frequenz-Nachbarschaft | `21` (656Hz) |
+| `PEAK_AMP_MIN_FACTOR=3.0` | Schwelle (dimensionslos) | `3.0` |
+| `FAN_VALUE=5` | Hashes/Anker (dimensionslos) | `5` |
+| `TARGET_ZONE_FRAMES=40` (465ms) | Max. Peak-Paar-Abstand | `30` (480ms) |
+| `MIN_HASH_MATCHES=25` | Treffer-Schwelle | `25` (Startwert, siehe "Bekannte Grenzen") |
+
+`fingerprint/Fingerprint.kt` ist reine Algorithmus-Logik (eigene
+Radix-2-Cooley-Tukey-FFT, 2D-lokale-Maxima-Peak-Erkennung, Hash-Bildung
+`"$f1-$f2-$dt"`) - bewusst KEINE externe FFT-Bibliothek wie JTransforms,
+passt zum durchgehenden Minimal-Dependency-Stil dieses Projekts (das
+Docker-Vorbild vermeidet aus demselben Grund `scipy`). Kennt weder
+Android-SQLite noch `PlaybackService`. `fingerprint/FingerprintDb.kt`
+nutzt `SQLiteOpenHelper` (Android-Bordmittel) statt Room - dieselbe
+Begruendung wie die JSON-Datei-statt-Room-Entscheidung bei der
+Senderliste, nur in die andere Richtung (hier rechtfertigt der indizierte
+Hash-Lookup echtes SQL, aber keine Room-Boilerplate fuer zwei simple
+Tabellen). `matchOrLearn()`/`deleteClip()`/`clearAll()` folgen 1:1
+`FingerprintDB`s Vorbild, inkl. desselben Voting-Mechanismus
+((clip_id, delta)-Zaehlung fuer konsistenten Zeitversatz).
+
+`StreamAnalyzer` zaehlt fuers Fingerprint-Timing einen zusaetzlichen
+ROHEN, ungeglaetteten Speech-Streak mit (`FINGERPRINT_TRIGGER_CHUNKS=4` =
+2s, identisch zu Pythons `FINGERPRINT_TRIGGER_SECONDS=2`) - unabhaengig
+von der bestehenden Glaettung/Hysterese (4s-Anlaufzeit), sonst waere der
+erste Check unnoetig spaet dran. Ergebnis kommt als einmaliges
+`FingerprintOutcome`-Ereignis ueber ein `SharedFlow` zurueck (bewusst
+nicht `StateFlow` - ein Treffer ist kein Dauerzustand). `PlaybackService`
+reagiert auf `Match` mit demselben `attemptAutoSwitch()` wie ein
+Sprache-Treffer (identische Semantik zu `do_switch("Bekannte Werbung/
+Jingle erkannt")`, erbt den bestehenden Cooldown automatisch). Pausiert
+implizit waehrend einer Nachrichten-Pause, weil `analyzer.stop()` dort
+bereits die komplette Analyse-Coroutine abbricht.
+
 ## Update-Mechanismus (Tailscale, kein Play Store)
 
 Damit eine neue APK nicht jedes Mal per USB/Datei-Transfer aufs Handy
@@ -605,6 +674,16 @@ dafuer das Textfeld - einfach die Tailscale-IP `100.92.3.18` eintragen.
   In-Memory-Feld) - nach einem Neustart mitten in einem bereits bedienten
   Fenster koennte die Pause theoretisch ein zweites Mal fuer denselben Slot
   anspringen.
+- **`MIN_HASH_MATCHES=25` fuers Fingerprinting ist ein Startwert, keine
+  Messung** (siehe "Audio-Fingerprinting" oben) - identisch zum
+  Python-Wert uebernommen, aber NICHT automatisch gueltig fuer die andere
+  Samplerate/Frame-Groesse hier. Live gegen echte Sender getestet wurde
+  bisher nur die Kein-Falsch-Treffer-Seite (drei unterschiedliche
+  Sprache-Clips, alle mit Match-Staerke 1 klar unter der Schwelle - siehe
+  `SESSION.md`) - ein echter Wiederholungs-Fall (Match-Staerke deutlich
+  UEBER der Schwelle) wurde mangels eines garantiert wiederkehrenden
+  Test-Clips noch nicht live beobachtet, nur der gleiche, im Docker-Projekt
+  bereits bewaehrte Algorithmus neu in Kotlin geschrieben.
 - **Vosk-`Model` wird bei jedem Play-/Auto-Switch-Klick neu geladen**
   (kein Wiederverwenden ueber Sender-Wechsel hinweg) - kostet jedes Mal
   ca. 1-2 Sekunden zusaetzliche Verzoegerung, nicht optimiert.

@@ -82,4 +82,10 @@
     <string name="news_break_window_saved">Fensterlänge gespeichert: %1$s Min.</string>
     <string name="news_break_window_invalid">Ungültige Fensterlänge.</string>
     <string name="news_break_now_playing">📰 Nachrichten-Pause: %1$s</string>
+
+    <string name="fp_chip_label">🔎 Fingerprint</string>
+    <string name="fp_chip_off">–</string>
+    <string name="fp_chip_match">%1$s (%2$dx gesehen)</string>
+    <string name="fp_chip_learned">Neuer Clip gelernt</string>
+    <string name="btn_zapping_error">🛑 Zapping-Fehler</string>
 </resources>

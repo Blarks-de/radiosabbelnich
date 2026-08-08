@@ -4,11 +4,16 @@ import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.util.Log
+import com.radiozapper.mvp.fingerprint.Fingerprint
+import com.radiozapper.mvp.fingerprint.FingerprintDb
+import com.radiozapper.mvp.fingerprint.FingerprintOutcome
 import com.radiozapper.mvp.playback.PlaybackStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -24,6 +29,13 @@ private const val TAG = "StreamAnalyzer"
 private const val TARGET_SAMPLE_RATE = 16_000
 private const val CHUNK_SAMPLES = TARGET_SAMPLE_RATE / 2 // 0.5s je Analyse-Haeppchen
 private const val CODEC_TIMEOUT_US = 20_000L
+
+// Fingerprinting (siehe fingerprint/Fingerprint.kt): ROHER, ungeglaetteter
+// Sprache-Streak (nicht die Hysterese unten) - 4 Haeppchen a 0.5s = 2s,
+// identisch zu Pythons FINGERPRINT_TRIGGER_SECONDS=2 in radiozapper.py. Mit
+// der Hysterese (die erst nach SMOOTHING_WINDOW_SECONDS=4s ueberhaupt einmal
+// umkippt) waere der erste Fingerprint-Check unnoetig spaet dran.
+private const val FINGERPRINT_TRIGGER_CHUNKS = 4
 
 // Glaettung des Roh-Signals (siehe Klassen-Doc weiter unten fuer die Begruendung):
 // gleitendes Fenster ueber die letzten SMOOTHING_WINDOW_CHUNKS Haeppchen (je
@@ -72,13 +84,22 @@ class StreamAnalyzer(private val scope: CoroutineScope) {
     private val _speechRatio = MutableStateFlow<Double?>(null)
     val speechRatio: StateFlow<Double?> = _speechRatio
 
+    // Fingerprint-Ergebnisse (siehe fingerprint/FingerprintDb.kt) sind
+    // einmalige Ereignisse, kein Dauerzustand - bewusst SharedFlow statt
+    // StateFlow: dessen "letzter-Wert-bleibt-haengen"-Semantik wuerde bei
+    // einem neuen Collector-Start denselben Treffer nochmal ausloesen bzw.
+    // einen zweiten IDENTISCHEN Treffer (gleiches Label, gleicher Zaehler-
+    // stand kommt real vor) faelschlich unterdruecken.
+    private val _fingerprintOutcomes = MutableSharedFlow<FingerprintOutcome>(extraBufferCapacity = 1)
+    val fingerprintOutcomes: SharedFlow<FingerprintOutcome> = _fingerprintOutcomes
+
     private var job: Job? = null
 
-    fun start(url: String, modelPath: String) {
+    fun start(url: String, modelPath: String, stationLabel: String, fingerprintDb: FingerprintDb?) {
         stop()
         _status.value = PlaybackStatus.CONNECTING
         job = scope.launch(Dispatchers.IO) {
-            runAnalysis(url, modelPath)
+            runAnalysis(url, modelPath, stationLabel, fingerprintDb)
         }
     }
 
@@ -89,7 +110,7 @@ class StreamAnalyzer(private val scope: CoroutineScope) {
         _speechRatio.value = null
     }
 
-    private suspend fun runAnalysis(url: String, modelPath: String) {
+    private suspend fun runAnalysis(url: String, modelPath: String, stationLabel: String, fingerprintDb: FingerprintDb?) {
         var extractor: MediaExtractor? = null
         var codec: MediaCodec? = null
         var model: Model? = null
@@ -125,6 +146,13 @@ class StreamAnalyzer(private val scope: CoroutineScope) {
             val recentChunks = ArrayDeque<Boolean>()
             var confirmedSpeech = false
             var hasConfirmedOnce = false
+
+            // Fingerprinting-Trigger (siehe Konstante FINGERPRINT_TRIGGER_CHUNKS
+            // oben) - lokale Variablen wie recentChunks etc., dadurch bei jedem
+            // start() automatisch frisch, kein manuelles Zuruecksetzen noetig.
+            var rawSpeechStreak = 0
+            val fingerprintBuffer = mutableListOf<Short>()
+            var fingerprintCheckedThisRun = false
 
             val bufferInfo = MediaCodec.BufferInfo()
             var sawInputEos = false
@@ -169,8 +197,30 @@ class StreamAnalyzer(private val scope: CoroutineScope) {
                                 val text = extractText(
                                     if (endOfUtterance) recognizer.getResult() else recognizer.getPartialResult()
                                 )
+                                val chunkIsSpeech = text.isNotBlank()
 
-                                recentChunks.addLast(text.isNotBlank())
+                                // Fingerprinting: roher Streak (nicht die Hysterese
+                                // unten), 1:1 Pythons speech_streak/speech_buffer in
+                                // radiozapper.py main().
+                                if (chunkIsSpeech) {
+                                    rawSpeechStreak++
+                                    fingerprintBuffer.addAll(chunk.toList())
+                                    if (fingerprintDb != null && !fingerprintCheckedThisRun &&
+                                        rawSpeechStreak >= FINGERPRINT_TRIGGER_CHUNKS
+                                    ) {
+                                        fingerprintCheckedThisRun = true
+                                        val outcome = fingerprintDb.matchOrLearn(
+                                            fingerprintBuffer.toShortArray(), TARGET_SAMPLE_RATE, stationLabel
+                                        )
+                                        if (outcome != null) _fingerprintOutcomes.tryEmit(outcome)
+                                    }
+                                } else {
+                                    rawSpeechStreak = 0
+                                    fingerprintBuffer.clear()
+                                    fingerprintCheckedThisRun = false
+                                }
+
+                                recentChunks.addLast(chunkIsSpeech)
                                 if (recentChunks.size > SMOOTHING_WINDOW_CHUNKS) {
                                     recentChunks.removeFirst()
                                 }

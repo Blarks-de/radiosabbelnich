@@ -103,11 +103,21 @@
             android:textSize="20sp"
             android:textStyle="bold" />
 
+        <!-- Fingerprint-Korrektur (siehe fingerprint/FingerprintDb.kt) - nur
+             sichtbar, solange ein rueckgaengig machbarer Treffer vorliegt. -->
+        <Button
+            android:id="@+id/zappingErrorButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="@string/btn_zapping_error"
+            android:visibility="gone" />
+
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:layout_marginTop="16dp">
+            android:layout_marginTop="8dp">
 
             <Button
                 android:id="@+id/zapButton"
@@ -155,6 +165,29 @@
             android:max="100"
             android:progress="0"
             android:progressBackgroundTint="@color/bs_meter_track" />
+
+        <!-- Fingerprint (siehe fingerprint/Fingerprint.kt, fingerprint/FingerprintDb.kt),
+             analog zum Web-Interface-Chip. -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="12dp">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/fp_chip_label"
+                android:textSize="14sp" />
+
+            <TextView
+                android:id="@+id/fingerprintChipText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/fp_chip_off"
+                android:textSize="14sp" />
+        </LinearLayout>
 
         <View
             android:layout_width="match_parent"

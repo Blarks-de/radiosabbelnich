@@ -18,10 +18,13 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import com.radiozapper.mvp.R
 import com.radiozapper.mvp.analysis.StreamAnalyzer
+import com.radiozapper.mvp.fingerprint.FingerprintDb
+import com.radiozapper.mvp.fingerprint.FingerprintOutcome
 import com.radiozapper.mvp.model.Station
 import com.radiozapper.mvp.model.StationRepository
 import com.radiozapper.mvp.newsbreak.NewsBreak
 import com.radiozapper.mvp.newsbreak.NewsBreakSettings
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -127,6 +130,19 @@ private const val BUFFERING_TIMEOUT_SECONDS = 15L
  * laden bzw. Pause beenden) und "Sender hat ein Problem" (regulaerer
  * Watchdog oben) unterscheiden - sonst wuerde ein MP3-Fehler faelschlich den
  * gesunden, nur pausierten Sender als tot markieren.
+ *
+ * Audio-Fingerprinting (Phase 4, siehe fingerprint/Fingerprint.kt fuer die
+ * reine Erkennungs-Logik und fingerprint/FingerprintDb.kt fuer die
+ * SQLite-Persistenz): eine einzige, langlebige `FingerprintDb`-Instanz
+ * gehoert diesem Service (analog "die FingerprintDB-Connection gehoert dem
+ * Hauptloop" im Docker-Projekt), wird aber an `StreamAnalyzer` durchgereicht -
+ * dort liegt bereits die Pro-Chunk-Klassifikation, aus der ein roher
+ * Sprache-Streak fuers Fingerprint-Timing mitgezaehlt wird (unabhaengig von
+ * der Hysterese oben, siehe StreamAnalyzer-Klassen-Doc). Ein Treffer kommt
+ * als einmaliges `FingerprintOutcome`-Ereignis zurueck und loest hier
+ * denselben `attemptAutoSwitch()` aus wie ein Sprache-Treffer - kein
+ * eigener Ring-Logik-Pfad. Waehrend einer Nachrichten-Pause pausiert das
+ * implizit mit (siehe oben, `analyzer.stop()` bei Eintritt).
  */
 class PlaybackService : LifecycleService() {
 
@@ -168,6 +184,15 @@ class PlaybackService : LifecycleService() {
     private val newsBreakRecentFiles = ArrayDeque<String>() // maxsize NewsBreak.RECENT_HISTORY_SIZE, aeltestes zuerst
     private var newsBreakServedSlot: String? = null
     private var newsBreakTickerJob: Job? = null
+
+    // Fingerprinting (siehe Klassen-Doc oben).
+    private lateinit var fingerprintDb: FingerprintDb
+    private val _lastFingerprintOutcome = MutableStateFlow<FingerprintOutcome?>(null)
+    /** Fuers UI ("🔎 Fingerprint"-Chip) - letztes Ereignis (Match ODER Learned), null solange nichts passiert ist. */
+    val lastFingerprintOutcome: StateFlow<FingerprintOutcome?> = _lastFingerprintOutcome
+    private val _lastFingerprintMatch = MutableStateFlow<FingerprintOutcome.Match?>(null)
+    /** Fuer den "🛑 Zapping-Fehler"-Knopf - nur bei Match gesetzt (Learned kann nicht "falsch" sein, da kein Wechsel ausgeloest wurde). */
+    val lastFingerprintMatch: StateFlow<FingerprintOutcome.Match?> = _lastFingerprintMatch
 
     private val playerListener = object : Player.Listener {
         override fun onPlayerError(error: PlaybackException) {
@@ -232,11 +257,16 @@ class PlaybackService : LifecycleService() {
     override fun onCreate() {
         super.onCreate()
         analyzer = StreamAnalyzer(lifecycleScope)
+        fingerprintDb = FingerprintDb(this)
         player = ExoPlayer.Builder(this).build().apply { addListener(playerListener) }
         createNotificationChannel()
 
         lifecycleScope.launch {
             analyzer.status.collect { status -> handleStatusForAutoSwitch(status) }
+        }
+
+        lifecycleScope.launch {
+            analyzer.fingerprintOutcomes.collect { outcome -> handleFingerprintOutcome(outcome) }
         }
 
         // Reagiert auf Aenderungen der persistenten Senderliste (z.B. aus der
@@ -324,7 +354,7 @@ class PlaybackService : LifecycleService() {
         startForegroundNotification(station.name)
 
         if (modelPath != null) {
-            analyzer.start(station.url, modelPath)
+            analyzer.start(station.url, modelPath, station.name, fingerprintDb)
         } else {
             analyzer.stop()
         }
@@ -531,6 +561,48 @@ class PlaybackService : LifecycleService() {
             PlaybackStatus.ERROR -> handlePlaybackFailure()
             else -> Unit
         }
+    }
+
+    /**
+     * Reagiert auf ein Fingerprint-Ereignis aus StreamAnalyzer (siehe dessen
+     * Klassen-Doc). `Match` loest sofort denselben `attemptAutoSwitch()` wie
+     * ein Sprache-Treffer aus - inhaltlich identisch zu
+     * `do_switch("Bekannte Werbung/Jingle erkannt")` im Docker-Projekt,
+     * inklusive des dort geerbten Cooldowns (`autoSwitchPausedUntil`-Check
+     * ganz oben in `attemptAutoSwitch()`). `Learned` aktualisiert nur die
+     * UI-Anzeige, loest keinen Wechsel aus.
+     */
+    private fun handleFingerprintOutcome(outcome: FingerprintOutcome) {
+        _lastFingerprintOutcome.value = outcome
+        when (outcome) {
+            is FingerprintOutcome.Match -> {
+                _lastFingerprintMatch.value = outcome
+                Log.i(
+                    TAG,
+                    "🔁 Bekannter Jingle/Werbespot wiedererkannt: '${outcome.label}' " +
+                        "(Clip #${outcome.clipId}, ${outcome.timesSeen}x gesehen, Staerke ${outcome.matchStrength})"
+                )
+                attemptAutoSwitch()
+            }
+            is FingerprintOutcome.Learned -> Unit
+        }
+    }
+
+    /**
+     * Fuer den "🛑 Zapping-Fehler"-Knopf: falls ein Fingerprint-Treffer
+     * faelschlich einen Wechsel ausgeloest hat, wirft das den zugrunde
+     * liegenden Clip wieder aus der DB - ohne das wuerde er dauerhaft weiter
+     * fehlklassifiziert. Kein Rueckgaengigmachen des Wechsels selbst (der
+     * Nutzer kann bei Bedarf manuell zurueckschalten) - reine
+     * Datenbank-Korrektur, analog zum Docker-Projekt.
+     */
+    fun undoLastFingerprintMatch() {
+        val match = _lastFingerprintMatch.value ?: return
+        lifecycleScope.launch(Dispatchers.IO) {
+            fingerprintDb.deleteClip(match.clipId)
+        }
+        _lastFingerprintMatch.value = null
+        if (_lastFingerprintOutcome.value == match) _lastFingerprintOutcome.value = null
     }
 
     private fun attemptAutoSwitch() {
@@ -759,6 +831,7 @@ class PlaybackService : LifecycleService() {
         player?.release()
         player = null
         clearPreload()
+        fingerprintDb.close()
         super.onDestroy()
     }
 }
