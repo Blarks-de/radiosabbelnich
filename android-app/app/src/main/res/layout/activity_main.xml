@@ -10,7 +10,7 @@
         android:orientation="vertical"
         android:padding="24dp">
 
-        <!-- Banner wie im Web-Interface (webui.py, img.banner) - dasselbe Bild (pics/radiozapper.webp). -->
+        <!-- Banner wie im Web-Interface (webui.py, img.banner) - dasselbe Bild (pics/keinsabbelradio.webp). -->
         <com.google.android.material.imageview.ShapeableImageView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

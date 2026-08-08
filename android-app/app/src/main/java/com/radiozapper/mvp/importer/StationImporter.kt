@@ -18,7 +18,7 @@ private const val DEFAULT_IMPORT_URL = "http://bit.ly/kn-kodi-radio"
 private const val PREFS_NAME = "import_prefs"
 private const val PREF_IMPORT_URL = "import_url"
 private const val FETCH_TIMEOUT_MS = 15_000
-private const val USER_AGENT = "RadioZapper-Android"
+private const val USER_AGENT = "KeinSabbelRadio-Android"
 
 private val EXTINF_RE = Regex("""^#EXTINF:[^,]*,(.*)$""")
 

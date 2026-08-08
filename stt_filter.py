@@ -9,7 +9,7 @@ Sender gerade zusammenhängender Text in der jeweils erwarteten Sprache
 raus? Genau das unterscheidet echte Moderation von in dieser Sprache
 gesungener Musik, die VAD regelmäßig als Sprache fehlklassifiziert
 (ähnliche Vokal-/Formant-Struktur). Die einzige Stelle, an der dieses
-Modul mit der bestehenden Switch-Logik in radiozapper.py in Berührung
+Modul mit der bestehenden Switch-Logik in keinsabbelradio.py in Berührung
 kommt, ist combine_label() weiter unten — Streak-Zählung und
 Fingerprint-Trigger dort bleiben unverändert, dieses Modul kennt weder
 StreamSource noch SwitcherState (exakt dieselbe Trennung wie
@@ -30,7 +30,7 @@ schwacher Hardware, z.B. Raspberry Pi):
     im Speicher hält.
 
 Beide erwarten 16kHz Mono -- unser Analysepfad läuft mit SAMPLE_RATE
-(44100Hz, siehe radiozapper.py), daher dieselbe simple lineare
+(44100Hz, siehe keinsabbelradio.py), daher dieselbe simple lineare
 Interpolation wie in speech_detector.py (für STT-Zwecke ausreichend
 genau, keine Hifi-Anwendung; hier separat gehalten statt importiert,
 damit dieses Modul keine Abhängigkeit auf speech_detector.py bekommt).
@@ -48,7 +48,7 @@ log = logging.getLogger("stt")
 
 TARGET_SR = 16000
 
-# Länge eines Analyse-Clips (Sekunden) -- radiozapper.py sammelt genau so
+# Länge eines Analyse-Clips (Sekunden) -- keinsabbelradio.py sammelt genau so
 # viel Mono-PCM in einem Ringpuffer, bevor sample_async() aufgerufen wird.
 CLIP_SECONDS = 3.0
 
@@ -249,7 +249,7 @@ class SttFilter:
                 whisper_engine = _WhisperEngine(cfg.get("whisper_model_size", "tiny"))
             except Exception as e:
                 # Modell nicht ladbar, Paket fehlt o.ä. -- Feature
-                # deaktiviert sich selbst, RadioZapper läuft normal ohne
+                # deaktiviert sich selbst, KeinSabbelRadio läuft normal ohne
                 # STT-Filter weiter (siehe combine_label(): kein Befund
                 # -> No-Op).
                 with self._lock:
@@ -389,7 +389,7 @@ def _fresh_verdict(verdict, cfg: dict, expected_language: str):
     passt -- sonst None. Der Sprachabgleich ist nötig, weil last_verdict()
     das Ergebnis des letzten Samples liefert, unabhängig davon, ob der
     Sender/die Kategorie seitdem gewechselt hat (siehe resolve_stt_language()
-    in radiozapper.py) -- ohne diese Prüfung könnte kurz nach einem Wechsel
+    in keinsabbelradio.py) -- ohne diese Prüfung könnte kurz nach einem Wechsel
     von einer De-Kategorie auf eine En-Kategorie noch der alte deutsche
     Befund (mit seiner FALSCHEN Konfidenz-Schwelle) nachwirken, bis er von
     selbst zu alt wird. Gemeinsame Basis für combine_label() (Switch-Logik),
@@ -412,16 +412,16 @@ def combine_label(label: str, verdict, cfg: dict, expected_language: str) -> str
     mit dem letzten STT-Befund (siehe SttFilter.last_verdict()). Reine
     Funktion ohne Zugriff auf StreamSource/SwitcherState -- einzige
     Kopplungsstelle zwischen stt_filter.py und der bestehenden Switch-
-    Logik in radiozapper.py.
+    Logik in keinsabbelradio.py.
 
     `expected_language` kommt aus resolve_stt_language() für die Kategorie
-    des AKTUELL laufenden Senders (siehe radiozapper.py/classify()) -- nur
+    des AKTUELL laufenden Senders (siehe keinsabbelradio.py/classify()) -- nur
     ein Befund für exakt diese Sprache zählt, siehe _fresh_verdict().
 
     Kein (frischer, passender) STT-Befund -> `label` unverändert
     durchgereicht. Das ist der Mechanismus, über den sich das Feature bei
     deaktiviertem Filter, Ladefehler, noch fehlendem ersten Sample oder
-    frischem Sprachwechsel von selbst neutral verhält, statt RadioZapper
+    frischem Sprachwechsel von selbst neutral verhält, statt KeinSabbelRadio
     mit einem nicht (mehr) passenden Befund zu beeinflussen.
 
     combine_mode:

@@ -47,7 +47,7 @@ private val DEFAULT_STATIONS = listOf(
  * StationManagementActivity und PlaybackService muessen sich exakt dieselbe
  * Instanz + denselben StateFlow teilen, sonst saehe der laufende Service
  * Aenderungen aus der Verwaltungs-UI nie. Initialisierung ueber
- * RadioZapperApplication.onCreate() (garantiert vor jeder Komponente in
+ * KeinSabbelRadioApplication.onCreate() (garantiert vor jeder Komponente in
  * diesem Prozess), nicht per "wer zuerst dran ist, ruft init() auf"-Muster
  * in den einzelnen Komponenten - genau das waere die Art Bug, die erst
  * auffaellt, wenn ein neuer Einstiegspunkt ihn vergisst.

@@ -86,12 +86,12 @@ class UpdateManager(private val context: Context) {
         withContext(Dispatchers.IO) {
             try {
                 val updatesDir = File(context.cacheDir, "updates").apply { mkdirs() }
-                val apkFile = File(updatesDir, "radiozapper.apk")
-                val connection = URL("${getBaseUrl()}/radiozapper.apk").openConnection() as HttpURLConnection
+                val apkFile = File(updatesDir, "keinsabbelradio.apk")
+                val connection = URL("${getBaseUrl()}/keinsabbelradio.apk").openConnection() as HttpURLConnection
                 connection.connectTimeout = 15_000
                 connection.readTimeout = 15_000
                 // Ohne diese Pruefung landete z.B. eine 404-Fehlerseite als
-                // "radiozapper.apk" im Cache und scheiterte erst kommentarlos
+                // "keinsabbelradio.apk" im Cache und scheiterte erst kommentarlos
                 // im System-Installer (Review-Befund 14, siehe SESSION.md).
                 if (connection.responseCode !in 200..299) {
                     throw IllegalStateException("Server antwortete mit HTTP ${connection.responseCode}")

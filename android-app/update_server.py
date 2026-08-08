@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Minimaler Update-Server fuer die RadioZapper-Android-APK.
+"""Minimaler Update-Server fuer die KeinSabbelRadio-Android-APK.
 
 Liefert ausschliesslich die zwei Dateien in diesem Verzeichnis
-(radiozapper.apk + version.json) aus - kein Verzeichnis-Listing, kein
+(keinsabbelradio.apk + version.json) aus - kein Verzeichnis-Listing, kein
 Zugriff auf Quellcode/Keystore im selben Baum, obwohl der zugrunde
 liegende Handler technisch das gesamte Verzeichnis ausliefern koennte.
 
@@ -19,7 +19,7 @@ import socketserver
 
 PORT = 8098
 DIRECTORY = os.path.dirname(os.path.abspath(__file__))
-ALLOWED_PATHS = ("/radiozapper.apk", "/version.json")
+ALLOWED_PATHS = ("/keinsabbelradio.apk", "/version.json")
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -50,5 +50,5 @@ class ReusableTCPServer(socketserver.TCPServer):
 
 if __name__ == "__main__":
     with ReusableTCPServer(("0.0.0.0", PORT), Handler) as httpd:
-        print(f"Update-Server laeuft auf Port {PORT} (nur radiozapper.apk/version.json)")
+        print(f"Update-Server laeuft auf Port {PORT} (nur keinsabbelradio.apk/version.json)")
         httpd.serve_forever()

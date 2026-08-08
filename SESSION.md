@@ -1,4 +1,4 @@
-# RadioZapper — Session-Log
+# KeinSabbelRadio — Session-Log
 
 Laufendes Protokoll der Arbeit an diesem Projekt (chronologisch, neueste
 Einträge unten) — hier steht das *Wie und Warum* der einzelnen Schritte.
@@ -4469,3 +4469,77 @@ Beide Abschnitte an der vorgesehenen Stelle (vor `## Architektur` bzw.
 `## Architecture`), relative Links auf `android-app/` bzw.
 `android-app/README.md` — auf GitHub/Forgejo beides klickbar, weil das
 Verzeichnis im selben Repo liegt.
+
+## 2026-08-08 (Fortsetzung) — Projekt-Umbenennung RadioZapper → KeinSabbelRadio
+
+Auslöser: Nutzerwunsch, das Projekt umzubenennen. Vorher vollständige
+Bestandsaufnahme aller Fundstellen (Docker/Python-Seite UND Android-App)
+inkl. Plan zur Freigabe, siehe Konversation — hier nur die Umsetzung.
+
+Umfang (Docker/Python-Seite): `radiozapper.py` → `keinsabbelradio.py`,
+`run_radiozapper.sh`/`check-radiozapper.sh` →
+`run_keinsabbelradio.sh`/`check-keinsabbelradio.sh`,
+`pics/radiozapper.webp` → `pics/keinsabbelradio.webp` (Motiv/Schriftzug
+im Bild selbst bewusst UNVERÄNDERT gelassen — kein Bildgenerierungs-Tool
+zur Hand, neues Logo ist ein offener Folgepunkt, siehe unten). Icecast-
+Mount `/radiozapper.mp3` → `/keinsabbelradio.mp3`, docker-compose
+Service-Key/`container_name`/interner Icecast-Hostname `icecast-
+radiozapper` → `icecast-keinsabbelradio`, Logdatei-Default und Logger-
+Name, PWA-`manifest.json`/Service-Worker-Cache-Name, `User-Agent`-Header,
+sämtliche Kommentare/Docstrings sowie `README.md`/`CLAUDE.md` per
+durchgängigem Ersetzen (`RadioZapper`→`KeinSabbelRadio`,
+`radiozapper`→`keinsabbelradio`) auf den neuen Namen gebracht.
+
+Umfang (Android-App, siehe auch `android-app/SESSION.md` für die
+App-eigene Sicht): App-Label (`strings.xml`/`app_name`), `Application`-
+Klasse (`RadioZapperApplication.kt` → `KeinSabbelRadioApplication.kt`),
+Theme (`Theme.RadioZapperMvp` → `Theme.KeinSabbelRadioMvp`),
+`rootProject.name` in `settings.gradle.kts`, Update-Server-Dateiname
+(`radiozapper.apk` → `keinsabbelradio.apk`, inkl. `update_server.py`s
+`ALLOWED_PATHS` und `.gitignore`), Fahrplan-Datei umbenannt
+(`RadioZapper_Android_Fahrplan.md` → `KeinSabbelRadio_Android_Fahrplan.md`).
+**Bewusst NICHT angefasst**: `applicationId`/`namespace`
+(`com.radiozapper.mvp`) und damit der komplette Java-Package-Pfad
+(`com/radiozapper/mvp/…`, 24 `package`-Deklarationen + 10 `import`-
+Dateien) — eine Änderung des `applicationId` macht die App aus Sicht von
+Android zu einer NEUEN App, bestehende Installationen würden sich nicht
+mehr in-place über `UpdateManager` aktualisieren, sondern als zweites,
+separates Icon liegen bleiben. Nutzerentscheidung nach Abwägung im Plan:
+Package bleibt technisch `com.radiozapper.mvp`, für Endnutzer unsichtbar.
+
+Zusätzlich (Host-Infrastruktur, außerhalb des Git-Repos): der
+systemd-User-Service für den Android-Update-Server zeigte bereits VOR
+dieser Umbenennung auf einen nicht mehr existierenden Pfad
+(`/opt/docker/radiozapper/...` — das Repo-Verzeichnis war offenbar schon
+manuell nach `/opt/docker/keinsabbelradio` umbenannt worden, der Service
+lief nur noch weiter, weil der laufende Prozess das offene Datei-Handle
+über den Rename hinweg behält). Unit-Datei umbenannt
+(`radiozapper-android-update.service` → `keinsabbelradio-android-
+update.service`), `ExecStart`-Pfad und `Description=` korrigiert,
+`daemon-reload` + Neustart durchgeführt.
+
+**Bewusst NICHT gemacht**: `SESSION.md` (dieses Dokument UND
+`android-app/SESSION.md`) bewusst NICHT rückwirkend durchsucht/ersetzt —
+Konvention laut `CLAUDE.md` ist append-only, ältere Einträge werden nicht
+nachträglich korrigiert (auch nicht für einen Produktnamen). Nur die
+Titelzeile beider Dateien wurde angepasst. Der eigentliche
+`docker compose down` + `docker compose up -d --build keinsabbelradio`
+(neuer Service-Name, alter Container `radiozapper` muss vorher weg) wurde
+NICHT von mir ausgeführt, weil das den laufenden, live gehörten Stream
+unterbricht — das bleibt dem Nutzer überlassen, sobald er bereit ist.
+Der GitHub-Repo-Name (`Blarks-de/radiozapper`) bleibt unangetastet
+(explizite Nutzervorgabe). Das Banner-Bild trägt weiterhin sichtbar den
+alten Schriftzug „RADIOZAPPER“ eingebrannt — neues Logo ist offener
+Folgepunkt, kein Bildgenerierungs-Tool verfügbar.
+
+### Verifiziert
+
+Repo-weite Grep-Suche (git-tracked, ohne `.gradle`/`build`-Verzeichnisse)
+nach jeder Groß-/Kleinschreibungsvariante von "radiozapper" ergab danach
+außerhalb von `SESSION.md` (beide Projekte) und dem bewusst unveränderten
+Android-Package-Pfad (`com/radiozapper/mvp`) **keine** Treffer mehr.
+`docker-compose.yml`/`Dockerfile`/`webui.py`/`i18n.py` stichprobenartig
+gegengelesen (Icecast-URLs, `<title>`-Tags, Hinweistexte in beiden
+Sprachen). Android-Seite: `AndroidManifest.xml`, `build.gradle.kts`,
+`themes.xml`, alle `package`-Deklarationen einzeln geprüft — `applicationId`
+und alle 24 Package-Zeilen bestätigt unverändert `com.radiozapper.mvp`.

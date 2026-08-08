@@ -1,6 +1,6 @@
 {
-  "name": "RadioZapper",
-  "short_name": "RadioZapper",
+  "name": "KeinSabbelRadio",
+  "short_name": "KeinSabbelRadio",
   "description": "Hört mehrere Internetradio-Sender mit und schaltet bei Sprache automatisch weiter.",
   "start_url": "/",
   "scope": "/",

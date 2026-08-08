@@ -1,4 +1,4 @@
-# RadioZapper Android MVP — Session-Log
+# KeinSabbelRadio Android MVP — Session-Log
 
 Laufendes Protokoll der Arbeit an `android-app/` (chronologisch, neueste
 Einträge unten) — hier steht das *Wie und Warum* der einzelnen Schritte,
@@ -1232,3 +1232,68 @@ App aber weiter als "Aktiver Prototyp im Bau, kein fertiges Produkt".
 Reine Doku-Änderung, kein Code angefasst, deshalb kein neuer Build und
 keine neue `version.json` (die installierte APK bleibt der Stand von
 15:57).
+
+## 2026-08-08 (Fortsetzung 9) — Umbenennung RadioZapper → KeinSabbelRadio
+
+Auslöser: Nutzerwunsch, das Gesamtprojekt umzubenennen (siehe `../SESSION.md`,
+Eintrag vom selben Tag, für die Docker-Seite und die Gesamt-Abwägung).
+
+- `strings.xml`/`app_name`: „RadioZapper MVP“ → „KeinSabbelRadio MVP“.
+- `RadioZapperApplication.kt` → `KeinSabbelRadioApplication.kt` (Klasse +
+  Datei), `AndroidManifest.xml`-Referenz mitgezogen.
+- `themes.xml`: `Theme.RadioZapperMvp` → `Theme.KeinSabbelRadioMvp`
+  (5 Referenzstellen im Manifest).
+- `settings.gradle.kts`: `rootProject.name` → `"KeinSabbelRadioMvp"`.
+- `RadioZapper_Android_Fahrplan.md` → `KeinSabbelRadio_Android_Fahrplan.md`
+  (git mv), alle Verweise darauf in `CLAUDE.md`/Kommentaren nachgezogen.
+- `UpdateManager.kt` + `update_server.py` (`ALLOWED_PATHS`) + `.gitignore`:
+  Dateiname `radiozapper.apk` → `keinsabbelradio.apk`.
+- `CLAUDE.md`/`README.md`: durchgängiges Ersetzen des Produktnamens in
+  Prosa und Code-Beispielen.
+- **Bewusst NICHT angefasst**: `applicationId`/`namespace`
+  (`com.radiozapper.mvp`) im ganzen Java-Package-Baum — Abwägung und
+  Begründung (In-Place-Update via `UpdateManager` würde sonst brechen,
+  bestehende Installation bliebe als zweites Icon liegen) steht in
+  `../SESSION.md`. `SESSION.md` (dieses Dokument) bewusst NICHT
+  rückwirkend durchsucht — nur die Titelzeile angepasst, ältere Einträge
+  bleiben wie sie waren (append-only-Konvention).
+
+Da Klassen-/Theme-/Ressourcennamen sich geändert haben (nicht nur Doku),
+war ein echter Rebuild PFLICHT, nicht optional:
+
+```bash
+./gradlew assembleDebug   # BUILD SUCCESSFUL, 9s
+cp app/build/outputs/apk/debug/app-debug.apk keinsabbelradio.apk
+echo "{\"buildTime\": \"2026-08-08 17:19\"}" > version.json
+```
+
+Zusätzlich (außerhalb dieses Gradle-Projekts, Host-Infrastruktur): der
+systemd-User-Service zeigte schon VOR diesem Rename auf einen toten Pfad
+(`/opt/docker/radiozapper/...` — das Repo-Verzeichnis war bereits manuell
+umbenannt, der laufende Prozess hielt nur noch ein offenes Datei-Handle).
+Unit-Datei umbenannt auf `keinsabbelradio-android-update.service`,
+`ExecStart`-Pfad und `Description=` korrigiert, `daemon-reload` +
+Neustart durchgeführt.
+
+### Verifiziert
+
+- `./gradlew assembleDebug` erfolgreich, keine Kompilierfehler durch die
+  Umbenennung (Package-Pfad ja unverändert, nur Klassen-/Ressourcennamen).
+- `applicationId`/`namespace` sowie alle `package`/`import`-Zeilen im
+  Java-Baum stichprobenartig gegengeprüft: weiterhin durchgängig
+  `com.radiozapper.mvp`.
+- Update-Server nach dem systemd-Fix live getestet:
+  `curl http://localhost:8098/version.json` → `200`, Inhalt
+  `{"buildTime": "2026-08-08 17:19"}`; `curl .../keinsabbelradio.apk` →
+  `200`, Größe passend zur frisch gebauten APK (~46 MB); `curl
+  .../radiozapper.apk` (alter Name) → `404` wie erwartet, da nicht mehr
+  in `ALLOWED_PATHS`.
+
+### Bewusst NICHT gemacht
+
+Kein `adb install`/Emulator-Test dieser spezifischen APK — reine
+Umbenennung ohne Verhaltensänderung, das Laufzeitverhalten wurde in
+früheren Einträgen bereits ausführlich verifiziert. Kein neues
+App-Icon/Logo (Banner-Bild `pics/keinsabbelradio.webp` zeigt weiterhin
+den alten „RADIOZAPPER“-Schriftzug) — kein Bildgenerierungs-Tool zur
+Hand, offener Folgepunkt.

@@ -33,7 +33,7 @@ private const val CODEC_TIMEOUT_US = 20_000L
 
 // Fingerprinting (siehe fingerprint/Fingerprint.kt): ROHER, ungeglaetteter
 // Sprache-Streak (nicht die Hysterese unten) - 4 Haeppchen a 0.5s = 2s,
-// identisch zu Pythons FINGERPRINT_TRIGGER_SECONDS=2 in radiozapper.py. Mit
+// identisch zu Pythons FINGERPRINT_TRIGGER_SECONDS=2 in keinsabbelradio.py. Mit
 // der Hysterese (die erst nach SMOOTHING_WINDOW_SECONDS=4s ueberhaupt einmal
 // umkippt) waere der erste Fingerprint-Check unnoetig spaet dran.
 private const val FINGERPRINT_TRIGGER_CHUNKS = 4
@@ -58,7 +58,7 @@ private val SMOOTHING_WINDOW_CHUNKS = (SMOOTHING_WINDOW_SECONDS * TARGET_SAMPLE_
  * nicht nachgebaut wird. Preis: der Stream wird effektiv zweimal ueber das
  * Netz geladen (Play zusaetzlich zu Analyse).
  *
- * Glaettung: das Docker-Projekt zaehlt in radiozapper.py eine einfache Serie
+ * Glaettung: das Docker-Projekt zaehlt in keinsabbelradio.py eine einfache Serie
  * ("N Sekunden Sprache IN FOLGE", CONSECUTIVE_SPEECH_TO_SWITCH=3, siehe dessen
  * CLAUDE.md/stt_filter.py) - dort reicht das, weil ein Analysefenster dort 1s
  * lang ist und die Serie nur den einmaligen SWITCH-Trigger ausloest, nicht
@@ -293,7 +293,7 @@ class StreamAnalyzer(private val scope: CoroutineScope) {
 
                                 // Fingerprinting: roher Streak (nicht die Hysterese
                                 // unten), 1:1 Pythons speech_streak/speech_buffer in
-                                // radiozapper.py main().
+                                // keinsabbelradio.py main().
                                 if (chunkIsSpeech) {
                                     rawSpeechStreak++
                                     if (fingerprintDb != null && !fingerprintCheckedThisRun) {

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Startet den RadioZapper-Stack (Icecast + RadioZapper) via docker compose.
+# Startet den KeinSabbelRadio-Stack (Icecast + KeinSabbelRadio) via docker compose.
 #!/usr/bin/env bash
 set -e
 
@@ -54,7 +54,7 @@ else
 fi
 
 echo
-echo "🚀 Starte RadioZapper..."
+echo "🚀 Starte KeinSabbelRadio..."
 echo
 
 cd "$(dirname "$0")"

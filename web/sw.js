@@ -4,8 +4,8 @@
 // Bullshitometer) und würden aus dem Cache beantwortet einen eingefrorenen
 // Stand vorgaukeln. Ohne funktionierendes Backend zeigt die App dann
 // bestenfalls "Verbindung zum Server verloren" statt eines leeren Tabs.
-const CACHE_NAME = "radiozapper-shell-v1";
-const SHELL_URLS = ["/", "/manifest.json", "/icon-192.png", "/icon-512.png", "/qrcode.js", "/radiozapper.webp"];
+const CACHE_NAME = "keinsabbelradio-shell-v1";
+const SHELL_URLS = ["/", "/manifest.json", "/icon-192.png", "/icon-512.png", "/qrcode.js", "/keinsabbelradio.webp"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL_URLS)));

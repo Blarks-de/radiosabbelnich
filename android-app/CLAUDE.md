@@ -3,18 +3,18 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 > Dieses Verzeichnis ist ein **eigenständiges** Projekt innerhalb des
-> RadioZapper-Repos — siehe `../CLAUDE.md`, Abschnitt "Android-Prototyp
+> KeinSabbelRadio-Repos — siehe `../CLAUDE.md`, Abschnitt "Android-Prototyp
 > (separates Projekt)", für die Abgrenzung zum Docker-Dienst. Zwei feste
 > Regeln von dort gelten weiterhin unbedingt: nach jedem Build die APK
-> nach `radiozapper.apk` kopieren + `version.json` neu schreiben (siehe
+> nach `keinsabbelradio.apk` kopieren + `version.json` neu schreiben (siehe
 > unten), und `README.md` bei jeder inhaltlichen Änderung nachziehen.
 
 Fertig im Sinne des Fahrplans (alle acht Phasen aus
-`RadioZapper_Android_Fahrplan.md` umgesetzt, zuletzt Phase 8 am
+`KeinSabbelRadio_Android_Fahrplan.md` umgesetzt, zuletzt Phase 8 am
 2026-08-08) — keine geplanten Ausbaustufen mehr offen, aber weiterhin
 Eigenbedarfs-Software mit dokumentierten Grenzen, kein Play-Store-Produkt
 (siehe README, "Bekannte Grenzen"). Natives Kotlin/Android, das
-dasselbe Grundprinzip wie das RadioZapper-Docker-Projekt lokal auf dem
+dasselbe Grundprinzip wie das KeinSabbelRadio-Docker-Projekt lokal auf dem
 Handy nachbildet: mehrere Internetradio-Sender abspielen, per Vosk
 (Speech-to-Text) grob Sprache/Musik unterscheiden, bei Sprache automatisch
 zum nächsten Sender weiterschalten. Kein Web-Wrapper, keine Abhängigkeit
@@ -42,7 +42,7 @@ cd android-app
 ./gradlew assembleDebug
 
 # PFLICHT nach jedem Build (siehe ../CLAUDE.md):
-cp app/build/outputs/apk/debug/app-debug.apk radiozapper.apk
+cp app/build/outputs/apk/debug/app-debug.apk keinsabbelradio.apk
 echo "{\"buildTime\": \"$(date '+%Y-%m-%d %H:%M')\"}" > version.json
 ```
 
@@ -63,7 +63,7 @@ google_apis x86_64):
 ```bash
 emulator -avd test_device -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect &
 adb wait-for-device
-adb install -r radiozapper.apk
+adb install -r keinsabbelradio.apk
 adb logcat -s PlaybackService:*   # jeder Sprache/Musik-Wechsel, Watchdog-Events
 ```
 
@@ -73,7 +73,7 @@ Installation auf einem echten Gerät und Update-Server-Details (Tailscale,
 
 ## Architektur
 
-`RadioZapperApplication.onCreate()` ruft `StationRepository.init()` VOR
+`KeinSabbelRadioApplication.onCreate()` ruft `StationRepository.init()` VOR
 jeder anderen Komponente auf (Application läuft garantiert zuerst) — kein
 "wer zuerst dran ist, ruft init() auf"-Muster in einzelnen Komponenten.
 
@@ -237,7 +237,7 @@ Unterschied: APK-Download in den Cache, dann System-Installer über
 Auto-Installation. Server-seitige Gegenstelle ist `update_server.py` +
 der systemd-User-Service, beide außerhalb dieses Gradle-Projekts (siehe
 `../CLAUDE.md`, Abschnitt "Android-Prototyp") — liefert nur
-`radiozapper.apk`/`version.json` aus diesem Verzeichnis aus, kein Auth,
+`keinsabbelradio.apk`/`version.json` aus diesem Verzeichnis aus, kein Auth,
 nur übers Tailscale-Netz erreichbar.
 
 Update-Installationen brauchen über die Zeit denselben Debug-Signierschlüssel

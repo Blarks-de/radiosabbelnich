@@ -12,7 +12,7 @@ zu hören", auch über Hintergrundgeräuschen/Musik.
 
 Silero erwartet 16kHz Mono, feste 512-Sample-Frames (32ms). Unser
 Analysepfad läuft intern mit SAMPLE_RATE (aktuell 44100 Hz, siehe
-radiozapper.py) — wird hier per einfacher linearer Interpolation
+keinsabbelradio.py) — wird hier per einfacher linearer Interpolation
 runtergerechnet (reicht für VAD-Zwecke völlig, ist keine Hifi-Anwendung).
 """
 

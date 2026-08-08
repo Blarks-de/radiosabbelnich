@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-webui.py — Eingebettetes Webinterface für RadioZapper.
+webui.py — Eingebettetes Webinterface für KeinSabbelRadio.
 
 Läuft als ThreadingHTTPServer in einem Hintergrund-Thread des
-Hauptprozesses (radiozapper.py). Zeigt den aktuell laufenden Sender und
+Hauptprozesses (keinsabbelradio.py). Zeigt den aktuell laufenden Sender und
 verbundene Hörer (IP/User-Agent/Verbindungsdauer, abgefragt über Icecasts
 Admin-API) und erlaubt manuelles Umschalten über eine Sender-Liste aus
 stations.json.
@@ -52,7 +52,7 @@ MAX_CALIBRATION_SAMPLES = 100
 
 # Einmalig beim Modul-Import gelesen (statt bei jedem Request von der
 # Platte) — kleines statisches Asset, ändert sich nicht zur Laufzeit.
-_BANNER_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "radiozapper.webp")
+_BANNER_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "keinsabbelradio.webp")
 try:
     with open(_BANNER_PATH, "rb") as _f:
         _BANNER_BYTES = _f.read()
@@ -103,7 +103,7 @@ _SERVICE_WORKER_JS_BYTES = _load_static("sw.js")
 _ICON_192_BYTES = _load_static("icon-192.png")
 _ICON_512_BYTES = _load_static("icon-512.png")
 # Browser-Tab-Icon -- eine per Center-Crop quadratisch zugeschnittene
-# Miniatur von radiozapper.webp (768x768, dann intern von den Browsern auf
+# Miniatur von keinsabbelradio.webp (768x768, dann intern von den Browsern auf
 # 16/32/48px skaliert), NICHT dieselbe Grafik wie icon-192/512.png (das
 # schlichte "Broadcast"-Symbol-Platzhalter fürs Installieren als App).
 _FAVICON_ICO_BYTES = _load_static("favicon.ico")
@@ -194,7 +194,7 @@ class SwitcherState:
 
     @property
     def tls_enabled(self) -> bool:
-        """Nur zum Auslesen BEIM START (siehe radiozapper.py/main()) --
+        """Nur zum Auslesen BEIM START (siehe keinsabbelradio.py/main()) --
         anders als die anderen Settings hier wirkt eine Änderung nicht
         sofort, weil der ThreadingHTTPServer sein Socket nicht im
         laufenden Betrieb neu in TLS einwickeln kann. Ein späteres
@@ -390,7 +390,7 @@ class SwitcherState:
         `language`, Stufe "speech". Der Hauptloop erzwingt ab dem
         nächsten Tick `language` als STT-Zielsprache (statt der
         kategoriebasierten Auflösung) und pausiert währenddessen die
-        automatische Switch-Logik komplett (siehe radiozapper.py) --
+        automatische Switch-Logik komplett (siehe keinsabbelradio.py) --
         sonst könnte ein durch die erzwungene Sprache verfälschtes
         combine_label()-Ergebnis mitten in der Kalibrierung einen
         Wechsel auslösen."""
@@ -722,7 +722,7 @@ def _fetch_icy_title(url: str, timeout: float = 3) -> str | None:
     Nicht jeder Sender füllt das mit echten Song/Interpret-Daten (manche
     zeigen nur den Sendernamen oder gar nichts) — das ist serverseitig
     entschieden, nicht etwas, das wir beeinflussen können."""
-    req = urllib.request.Request(url, headers={"Icy-MetaData": "1", "User-Agent": "RadioZapper/1.0"})
+    req = urllib.request.Request(url, headers={"Icy-MetaData": "1", "User-Agent": "KeinSabbelRadio/1.0"})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             metaint = resp.headers.get("icy-metaint")
@@ -762,7 +762,7 @@ _LOVERAD_STREAM_SERVICE_SLUGS = {
 
 def _fetch_loverad_now_playing(slug: str, timeout: float = 3) -> str | None:
     url = f"https://stream-service.loverad.io/v4/{slug}"
-    req = urllib.request.Request(url, headers={"User-Agent": "RadioZapper/1.0"})
+    req = urllib.request.Request(url, headers={"User-Agent": "KeinSabbelRadio/1.0"})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read())
@@ -880,7 +880,7 @@ _PAGE_HTML = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>RadioZapper</title>
+<title>KeinSabbelRadio</title>
 <link rel="icon" href="/favicon.ico">
 <link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#1abc9c">
@@ -889,7 +889,7 @@ _PAGE_HTML = """<!doctype html>
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="RadioZapper">
+<meta name="apple-mobile-web-app-title" content="KeinSabbelRadio">
 <style>
   :root { color-scheme: light dark; }
   body {
@@ -1017,9 +1017,9 @@ _PAGE_HTML = """<!doctype html>
 </style>
 </head>
 <body>
-<img class="banner" src="/radiozapper.webp" alt="RadioZapper">
+<img class="banner" src="/keinsabbelradio.webp" alt="KeinSabbelRadio">
 <div class="version-tag">%%VERSION%%</div>
-<h1 class="sr-only">RadioZapper</h1>
+<h1 class="sr-only">KeinSabbelRadio</h1>
 <div id="current" data-i18n="common_loading">Lade …</div>
 <div id="now-playing"></div>
 <div class="zap-nav">
@@ -1204,7 +1204,7 @@ function applyStatus(data) {
   }
 
   // Bullshitometer: Rohwert der VAD/Heuristik-Klassifikation (VOR der
-  // STT-Verknüpfung, siehe radiozapper.py/classify()) als Balken grün
+  // STT-Verknüpfung, siehe keinsabbelradio.py/classify()) als Balken grün
   // (Musik) -> rot (Sprache/"Bullshit"). Während Nachrichten-Pause oder
   // deaktiviertem Sabbelfilter klassifiziert der Hauptloop gar nicht erst
   // -- Balken bleibt dann grau/eingefroren statt einen veralteten Wert
@@ -1538,7 +1538,7 @@ _CONFIG_PAGE_HTML = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>RadioZapper — Sender verwalten</title>
+<title>KeinSabbelRadio — Sender verwalten</title>
 <link rel="icon" href="/favicon.ico">
 <style>
   :root { color-scheme: light dark; }
@@ -1720,7 +1720,7 @@ _CONFIG_PAGE_HTML = """<!doctype html>
 </style>
 </head>
 <body>
-<img class="banner" src="/radiozapper.webp" alt="RadioZapper">
+<img class="banner" src="/keinsabbelradio.webp" alt="KeinSabbelRadio">
 <div class="version-tag">%%VERSION%%</div>
 <a class="back" href="/" data-i18n="cfg_back_link">← zurück zum Player</a>
 <h1 data-i18n="cfg_heading">⚙ Sender verwalten</h1>
@@ -1791,7 +1791,7 @@ _CONFIG_PAGE_HTML = """<!doctype html>
     gerade im Browser aufgerufen wird.</p>
   <label><span data-i18n="cfg_stream_url_label">Stream-URL</span>
     <input type="url" id="stream-url-input"
-           placeholder="http://dockfish.icefish-ghost.ts.net:8000/radiozapper.mp3">
+           placeholder="http://dockfish.icefish-ghost.ts.net:8000/keinsabbelradio.mp3">
   </label>
   <button type="submit" data-i18n="common_save">Speichern</button>
 </form>
@@ -1805,7 +1805,7 @@ _CONFIG_PAGE_HTML = """<!doctype html>
     erzeugt) — ohne die bleibt der Haken hier wirkungslos, das
     Web-Interface läuft dann weiter über HTTP. <strong>Wirkt erst nach
     einem Neustart des Containers</strong> (<code>docker compose up -d
-    --build radiozapper</code>), nicht sofort wie die meisten anderen
+    --build keinsabbelradio</code>), nicht sofort wie die meisten anderen
     Einstellungen hier. Der Icecast-Stream selbst bekommt unabhängig davon
     automatisch einen zusätzlichen HTTPS-Port, sobald dieselben
     Zertifikate in <code>.env</code> eingetragen sind — dafür gibt es
@@ -1968,7 +1968,7 @@ _CONFIG_PAGE_HTML = """<!doctype html>
 
 <section id="resource-section">
   <h2 style="margin-top:0" data-i18n="cfg_resources_heading">💾 Ressourcen-Verbrauch</h2>
-  <p class="hint" data-i18n="cfg_resources_hint">Aktueller Verbrauch von RadioZapper selbst (nicht des Hosts),
+  <p class="hint" data-i18n="cfg_resources_hint">Aktueller Verbrauch von KeinSabbelRadio selbst (nicht des Hosts),
     alle 5 Sekunden aktualisiert.</p>
   <table id="resource-table">
     <tr><td class="label" data-i18n="cfg_resources_ram_total">RAM gesamt</td><td class="value" id="res-ram-total">–</td></tr>
@@ -2847,7 +2847,7 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                 self._send(_PAGE_HTML_BYTES[state.language], "text/html; charset=utf-8")
             elif self.path == "/config":
                 self._send(_CONFIG_PAGE_HTML_BYTES[state.language], "text/html; charset=utf-8")
-            elif self.path == "/radiozapper.webp":
+            elif self.path == "/keinsabbelradio.webp":
                 if _BANNER_BYTES is None:
                     self.send_error(404)
                 else:

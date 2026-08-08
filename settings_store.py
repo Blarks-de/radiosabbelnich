@@ -3,7 +3,7 @@
 settings_store.py — Laufzeit-Einstellungen, persistiert in settings.json.
 
 Prebuffer-Parameter (wie viele Sekunden/Sender im Voraus gepuffert
-werden, siehe PrebufferedSource in radiozapper.py), die Import-URL für
+werden, siehe PrebufferedSource in keinsabbelradio.py), die Import-URL für
 den Sender-Import (station_import.py) und die Nachrichten-Pause-
 Einstellungen (news_break.py) — alles flach validiert bis auf
 "news_break", das als eigener verschachtelter Block gespeichert wird.
@@ -412,6 +412,6 @@ def resolve_stt_language(category: str, cfg: dict) -> str:
     """Löst die für eine Sender-Kategorie zuständige STT-Sprache auf --
     fehlt die Kategorie in cfg["category_languages"], gilt
     DEFAULT_STT_LANGUAGE. cfg ist typischerweise state.stt_filter_cfg im
-    Hauptloop (siehe radiozapper.py), damit nicht bei jedem Aufruf frisch
+    Hauptloop (siehe keinsabbelradio.py), damit nicht bei jedem Aufruf frisch
     von der Platte gelesen wird."""
     return cfg.get("category_languages", {}).get(category, DEFAULT_STT_LANGUAGE)

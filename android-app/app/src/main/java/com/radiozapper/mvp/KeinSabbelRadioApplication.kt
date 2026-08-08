@@ -11,7 +11,7 @@ import com.radiozapper.mvp.model.StationRepository
  * selbst um eine defensive Initialisierung kuemmern - genau die Art Bug, die
  * erst auffaellt, wenn ein neuer Einstiegspunkt sie vergisst.
  */
-class RadioZapperApplication : Application() {
+class KeinSabbelRadioApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         StationRepository.init(this)

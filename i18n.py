@@ -171,7 +171,7 @@ STRINGS = {
                'erzeugt) — ohne die bleibt der Haken hier wirkungslos, das '
                'Web-Interface läuft dann weiter über HTTP. <strong>Wirkt erst nach '
                'einem Neustart des Containers</strong> (<code>docker compose up -d '
-               '--build radiozapper</code>), nicht sofort wie die meisten anderen '
+               '--build keinsabbelradio</code>), nicht sofort wie die meisten anderen '
                'Einstellungen hier. Der Icecast-Stream selbst bekommt unabhängig davon '
                'automatisch einen zusätzlichen HTTPS-Port, sobald dieselben '
                'Zertifikate in <code>.env</code> eingetragen sind — dafür gibt es '
@@ -183,7 +183,7 @@ STRINGS = {
                '— without those, this checkbox has no effect and the '
                'web interface keeps running over HTTP. <strong>Only takes effect after '
                'restarting the container</strong> (<code>docker compose up -d '
-               '--build radiozapper</code>), not immediately like most other '
+               '--build keinsabbelradio</code>), not immediately like most other '
                'settings here. The Icecast stream itself independently gets '
                'an additional HTTPS port automatically as soon as the same '
                'certificates are set in <code>.env</code> — there is no separate '
@@ -336,8 +336,8 @@ STRINGS = {
 
     "cfg_resources_heading": {"de": "💾 Ressourcen-Verbrauch", "en": "💾 Resource usage"},
     "cfg_resources_hint": {
-        "de": "Aktueller Verbrauch von RadioZapper selbst (nicht des Hosts), alle 5 Sekunden aktualisiert.",
-        "en": "Current usage of RadioZapper itself (not the host), refreshed every 5 seconds.",
+        "de": "Aktueller Verbrauch von KeinSabbelRadio selbst (nicht des Hosts), alle 5 Sekunden aktualisiert.",
+        "en": "Current usage of KeinSabbelRadio itself (not the host), refreshed every 5 seconds.",
     },
     "cfg_resources_ram_total": {"de": "RAM gesamt", "en": "Total RAM"},
     "cfg_resources_ram_breakdown": {"de": "davon Python / ffmpeg", "en": "of which Python / ffmpeg"},
@@ -417,9 +417,9 @@ STRINGS = {
     },
     "cfg_host_path_unknown": {
         "de": ('Host-Pfad unbekannt (Container lief noch nicht mit dieser Anzeige -- '
-               'docker compose up -d --build radiozapper zeigt ihn danach an).'),
+               'docker compose up -d --build keinsabbelradio zeigt ihn danach an).'),
         "en": ("Host path unknown (container hasn't run with this display yet -- "
-               "docker compose up -d --build radiozapper will show it afterwards)."),
+               "docker compose up -d --build keinsabbelradio will show it afterwards)."),
     },
     "cfg_language_saved": {"de": "Sprache gespeichert — Seite wird neu geladen …",
                             "en": "Language saved — reloading page …"},

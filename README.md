@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="pics/radiozapper.webp" alt="RadioZapper" width="700">
+  <img src="pics/keinsabbelradio.webp" alt="KeinSabbelRadio" width="700">
 </p>
 
-# RadioZapper
+# KeinSabbelRadio
 
-*[🇬🇧 English version further below](#radiozapper-english-version)*
+*[🇬🇧 English version further below](#keinsabbelradio-english-version)*
 
-RadioZapper hört mehrere Internetradio-Sender gleichzeitig für dich mit
+KeinSabbelRadio hört mehrere Internetradio-Sender gleichzeitig für dich mit
 und schaltet automatisch weiter, sobald irgendwo geredet wird.
 Moderation, Nachrichten, Werbung, Jingles. Übrig bleibt (möglichst) nur
 Musik. Der ausgewählte Sender wird per Icecast neu ausgestrahlt, sodass
@@ -15,10 +15,10 @@ Streaming-Client hören kann.
 
 ## ⚠️ Nur privat, nur hinter VPN — kein öffentlicher Betrieb
 
-**RadioZapper ist ausdrücklich nicht für den öffentlichen Betrieb
+**KeinSabbelRadio ist ausdrücklich nicht für den öffentlichen Betrieb
 gedacht.** Icecast-Port (8000) und Web-Interface-Port (5000) gehören
 niemals direkt ins offene Internet (kein Port-Forwarding, kein
-öffentlicher Reverse-Proxy) — RadioZapper läuft immer hinter einem VPN
+öffentlicher Reverse-Proxy) — KeinSabbelRadio läuft immer hinter einem VPN
 (Tailscale o.ä.), erreichbar nur für Geräte im eigenen vertrauten Netz.
 Zwei konkrete Gründe:
 
@@ -26,7 +26,7 @@ Zwei konkrete Gründe:
   oder später gefunden (Scanner, Streaming-Aggregatoren, Hotlinking) —
   und dann zieht potenziell das halbe Internet unkontrolliert Bandbreite
   und Rechenzeit, ohne dass man das je wieder eingefangen bekommt.
-- **Urheberrecht**: RadioZapper streamt fremde, lizenzierte
+- **Urheberrecht**: KeinSabbelRadio streamt fremde, lizenzierte
   Radioprogramme neu aus. Für den privaten Eigenbedarf im eigenen
   (Tail-)Netz ist das eine Sache — öffentlich zugänglich gemacht, ist es
   eine unlizenzierte öffentliche Wiedergabe urheberrechtlich geschützter
@@ -45,7 +45,7 @@ erreichbar machen" keine gute Idee ist.
    springt automatisch eine einfachere Signal-Heuristik ein
    (Zero-Crossing-Rate/Spektrale Flachheit/Energie-Modulation).
 2. Hält die Sprache-Erkennung einige Sekunden am Stück durch, schaltet
-   RadioZapper reihum zum nächsten aktivierten Sender, bis wieder Musik
+   KeinSabbelRadio reihum zum nächsten aktivierten Sender, bis wieder Musik
    läuft.
 3. Parallel dazu läuft ein **Audio-Fingerprinting** (Shazam-artiges
    Constellation-Map-Verfahren): erkannte Sprache-Clips werden
@@ -64,9 +64,9 @@ enthalten Karteileichen, und auch ein funktionierender Sender kann mal
 minutenlang nichts liefern. Damit das nicht die ganze Wiedergabe anhält:
 
 - Liefert der **aktuelle** Sender drei Analysefenster in Folge gar nichts,
-  fliegt er für 5 Minuten aus der Rotation und RadioZapper schaltet
+  fliegt er für 5 Minuten aus der Rotation und KeinSabbelRadio schaltet
   automatisch weiter (`STREAM_FAILURE_LIMIT`/`STATION_DEAD_COOLDOWN` in
-  `radiozapper.py`).
+  `keinsabbelradio.py`).
 - Stirbt ein **Hintergrund-Puffer**, wandert der Sender sofort auf dieselbe
   Sperrliste, statt im Sekundentakt neu verbunden zu werden.
 - Gesperrte Sender werden beim automatischen Weiterschalten übersprungen
@@ -82,7 +82,7 @@ Stunden, Icecast-Mount die ganze Zeit weg.
 
 ## Vorausschauendes Puffern & Playout-Delay
 
-RadioZapper hält die nächsten Sender in Rotationsreihenfolge im
+KeinSabbelRadio hält die nächsten Sender in Rotationsreihenfolge im
 Hintergrund bereits am Laufen und puffert von jedem die letzten
 `prebuffer_seconds` Sekunden vor (Default 10s, unter `/config`
 einstellbar, wirkt sofort ohne Neustart). Das dient zwei Zwecken
@@ -125,7 +125,7 @@ die Fensterlänge selbst (`window_minutes`) bleibt davon unberührt.
 ## Nachrichten-Pause
 
 Zur vollen und halben Stunde verlesen praktisch alle Radiosender
-Nachrichten. Statt dessen kann RadioZapper für ein kurzes Zeitfenster
+Nachrichten. Statt dessen kann KeinSabbelRadio für ein kurzes Zeitfenster
 eine zufällige MP3 aus einem lokalen Ordner abspielen (z.B. eigene
 Jingles/Musikstücke von einem SMB-Mount) — danach geht's automatisch
 mit dem pausierten Sender weiter, ganz normal.
@@ -173,7 +173,7 @@ nachgeladen (kein Repeat direkt hintereinander, sofern der Ordner mehr als
 eine Datei enthält), bis `window_minutes` abgelaufen ist. Erst dann geht's
 automatisch zurück zum pausierten Sender. Ein manueller Sender-Wechsel
 während der Pause bricht sie sofort ab (eigene Entscheidung schlägt
-Automatik, wie überall sonst in RadioZapper auch). Während der Pause
+Automatik, wie überall sonst in KeinSabbelRadio auch). Während der Pause
 pausiert auch die automatische Sprache-Erkennung (VAD/Heuristik/
 Fingerprint) — die MP3 selbst enthält u.U. Sprache, das soll nicht als
 "Moderation" auf dem eigentlichen Sender fehlgedeutet werden.
@@ -237,7 +237,7 @@ selbst eine zusätzliche Zeile in `docker-compose.yml` ergänzen, z.B.:
 
 und den resultierenden Container-Pfad (`/app/vosk-model-en`) als
 Modellpfad bei "🌐 STT-Sprachen" eintragen — danach `docker compose up -d
---build radiozapper`, damit der neue Mount aktiv wird.
+--build keinsabbelradio`, damit der neue Mount aktiv wird.
 
 ### Kalibrierungs-Wizard
 
@@ -333,7 +333,7 @@ verwaltet, nicht direkt im Block editieren):
   unter dem Sprache-Minimum. Für jede weitere Sprache gilt dieselbe
   Methode: ein paar Minuten gegen einen bekannten Sprache- UND einen
   bekannten Musik-Sender dieser Sprache mithören, erkannte
-  Texte/Konfidenzwerte landen dafür in `logs/radiozapper.log`.
+  Texte/Konfidenzwerte landen dafür in `logs/keinsabbelradio.log`.
 - **`category_languages`** — Kategorie → Sprachcode (siehe oben), über
   die Tabelle "🏷 Kategorie-Sprachen" gepflegt.
 - **`combine_mode`** — wie das STT-Ergebnis mit VAD/Heuristik verknüpft
@@ -350,7 +350,7 @@ verwaltet, nicht direkt im Block editieren):
 
 Modell nicht gefunden oder Ladefehler → nur die betroffene Sprache bleibt
 wirkungslos (Log-Meldung, Ladezustand auch auf der Config-Seite pro
-Sprache sichtbar), RadioZapper läuft mit den übrigen Sprachen/Sendern
+Sprache sichtbar), KeinSabbelRadio läuft mit den übrigen Sprachen/Sendern
 normal weiter. Ein Absturz der Engine bei einem einzelnen Sample
 überspringt nur diesen einen Sample, nicht den Hauptprozess.
 
@@ -402,7 +402,7 @@ Erreichbar unter `http://<host>:5000/`:
   Sender, der vor dem Fehl-Switch lief.
 - **Sabbelfilter deaktivieren/aktivieren** — schaltet die komplette
   automatische Erkennung für eine Weile aus (z.B. für ein Hörspiel/
-  Feature auf einem sonst Musik-Sender), ohne dass RadioZapper
+  Feature auf einem sonst Musik-Sender), ohne dass KeinSabbelRadio
   dazwischenfunkt. Aktueller Zustand direkt am Button erkennbar.
 - **🤥 Bullshitometer** — grüner-zu-roter Balken, zeigt den aktuell
   gemessenen Sprache-Wert (VAD-Wahrscheinlichkeit bzw. Heuristik-Votum)
@@ -453,14 +453,14 @@ Poll-Tick.
   + alle ffmpeg-Kindprozesse zusammen sowie einzeln aufgeschlüsselt), CPU,
   Anzahl laufender ffmpeg-Prozesse sowie Festplattenverbrauch von
   Fingerprint-DB, Logdatei (inkl. rotierter Backups) und Whisper-Modell-
-  Cache — jeweils nur RadioZapper selbst, nicht der ganze Host. Alle 5s
+  Cache — jeweils nur KeinSabbelRadio selbst, nicht der ganze Host. Alle 5s
   aktualisiert.
 - **📰 Nachrichten-Pause** (auf der Config-Seite, oberhalb der Senderliste)
   — siehe eigener Abschnitt oben.
 - **🗣 STT-Sprachfilter** (auf der Config-Seite) — siehe eigener Abschnitt
   oben.
 
-Der rohe Icecast-Stream bleibt parallel unter `http://<host>:8000/radiozapper.mp3`
+Der rohe Icecast-Stream bleibt parallel unter `http://<host>:8000/keinsabbelradio.mp3`
 erreichbar (z.B. für VLC).
 
 ### Als App installieren (PWA)
@@ -507,7 +507,7 @@ eigenem Update-Server statt Play Store).
 
 | Datei | Zweck |
 |---|---|
-| `radiozapper.py` | Hauptprozess: Stream holen, klassifizieren, umschalten, Icecast-Output |
+| `keinsabbelradio.py` | Hauptprozess: Stream holen, klassifizieren, umschalten, Icecast-Output |
 | `speech_detector.py` | Silero-VAD-Wrapper mit Signal-Heuristik-Fallback |
 | `fingerprint.py` | Audio-Fingerprinting (Constellation-Map-Hashing) in SQLite |
 | `stations_store.py` | Laden/Speichern/CRUD der Senderliste (`stations.json`) |
@@ -522,18 +522,18 @@ eigenem Update-Server statt Play Store).
 | `web/manifest.json` | PWA-Manifest (Name, Icons, `display: standalone`) fürs "Zum Startbildschirm hinzufügen" |
 | `web/sw.js` | Service Worker: cached die statische Oberflächen-Hülle fürs Offline-Öffnen, kein Audio/API-Caching |
 | `pics/icon-192.png`, `pics/icon-512.png` | PWA-Icons fürs Installieren als App (aktuell Platzhalter) |
-| `pics/favicon.ico` | Browser-Tab-Icon, quadratische Miniatur von `radiozapper.webp` |
-| `pics/radiozapper.webp` | Banner-Grafik auf Player-/Config-Seite und in diesem README |
+| `pics/favicon.ico` | Browser-Tab-Icon, quadratische Miniatur von `keinsabbelradio.webp` |
+| `pics/keinsabbelradio.webp` | Banner-Grafik auf Player-/Config-Seite und in diesem README |
 | `data/stations.json` | Senderliste (Name, URL, Kategorie, aktiv/inaktiv) |
 | `data/settings.json` | Laufzeit-Einstellungen, siehe `settings_store.py` |
 | `data/fingerprints.db`, `data/fingerprint_clips/` | Fingerprint-Datenbank + gelernte Clip-Mitschnitte |
 | `data/logs/` | Rotierende Logdatei (siehe "Logging" unten) |
 | `data/news_mp3/`, `data/vosk-model-de/`, `data/whisper_cache/` | Standard-Mountziele für `NEWS_MP3_FOLDER`/`VOSK_MODEL_FOLDER`/faster-whisper-Cache (überschreibbar in `.env`) |
-| `docker-compose.yml` | Icecast + RadioZapper als zwei Services |
-| `check-radiozapper.sh` | Preflight-Check vor dem (ersten) Start: Docker, RAM/HD/Internet, `.env`, MP3-Ordner, Ports |
-| `run_radiozapper.sh` | Start-Skript: RAM/HD/Internet-Check + `docker compose up -d --build` |
+| `docker-compose.yml` | Icecast + KeinSabbelRadio als zwei Services |
+| `check-keinsabbelradio.sh` | Preflight-Check vor dem (ersten) Start: Docker, RAM/HD/Internet, `.env`, MP3-Ordner, Ports |
+| `run_keinsabbelradio.sh` | Start-Skript: RAM/HD/Internet-Check + `docker compose up -d --build` |
 
-RadioZapper und das Web-Interface laufen im selben Prozess (Web-Server
+KeinSabbelRadio und das Web-Interface laufen im selben Prozess (Web-Server
 als Hintergrund-Thread) — kein separater Service, keine IPC nötig, nur
 geteilter In-Memory-Zustand.
 
@@ -544,23 +544,23 @@ einem Mono-Downmix, um Rechenzeit zu sparen.
 ## Setup
 
 ```bash
-git clone <repo-url> RadioZapper
-cd RadioZapper
+git clone <repo-url> KeinSabbelRadio
+cd KeinSabbelRadio
 cp env.example .env      # Passwörter/Hostname eintragen
 touch data/fingerprints.db    # muss als Datei existieren, siehe unten
-./check-radiozapper.sh   # optional: prüft Docker/.env/MP3-Ordner/Ports vorab
+./check-keinsabbelradio.sh   # optional: prüft Docker/.env/MP3-Ordner/Ports vorab
 docker compose up -d --build
 ```
 
-`./check-radiozapper.sh` installiert bei Bedarf Docker, zeigt RAM/HD/
+`./check-keinsabbelradio.sh` installiert bei Bedarf Docker, zeigt RAM/HD/
 Internet-Status, prüft ob `.env` vollständig ausgefüllt ist (inkl.
 Warnung vor unveränderten `env.example`-Platzhaltern), ob der in
 `NEWS_MP3_FOLDER` eingetragene Ordner existiert/lesbar ist/MP3s enthält,
 und ob `WEBUI_PORT`/`ICECAST_PORT`/`ICECAST_SSL_PORT` frei sind — läuft
-bereits RadioZapper selbst auf diesen Ports, gilt das als ok; blockiert
+bereits KeinSabbelRadio selbst auf diesen Ports, gilt das als ok; blockiert
 stattdessen ein anderer Docker-Container den Port, schlägt das Skript
 eine freie Alternative zum Eintragen in `.env` vor. Reine Diagnose (Exit-
-Code 1 bei Problemen), startet selbst nichts. Danach `./run_radiozapper.sh`
+Code 1 bei Problemen), startet selbst nichts. Danach `./run_keinsabbelradio.sh`
 zum eigentlichen Start (macht denselben RAM/HD/Internet-Check nochmal,
 dann `docker compose up -d --build`).
 
@@ -578,7 +578,7 @@ Datei oder bequemer über `http://<host>:5000/config`.
 | Variable | Bedeutung |
 |---|---|
 | `ICECAST_ADMIN_USER`/`_PASSWORD` | Icecast-Admin-Login (auch für die Hörer-Abfrage im Web-Interface) |
-| `ICECAST_SOURCE_PASSWORD` | Passwort, mit dem RadioZapper selbst auf Icecast pusht |
+| `ICECAST_SOURCE_PASSWORD` | Passwort, mit dem KeinSabbelRadio selbst auf Icecast pusht |
 | `ICECAST_HOSTNAME` | Öffentlicher Hostname für den Icecast-Stream |
 | `ICECAST_PORT` | Host-Port für den rohen Icecast-Stream (Default 8000) |
 | `ICECAST_LOCATION`/`ICECAST_ADMIN_EMAIL` | Server-Info-Felder in Icecasts `icecast.xml` |
@@ -616,13 +616,13 @@ ab — Details dazu in `CLAUDE.md`.
 
 ```bash
 # Neu bauen + starten
-docker compose up -d --build radiozapper
+docker compose up -d --build keinsabbelradio
 
 # Konsole mitlesen (nur die wichtigen Ereignisse)
-docker compose logs -f radiozapper
+docker compose logs -f keinsabbelradio
 
 # Vollständiges Debug-Log (VAD-Werte, Fingerprint-Details, HTTP-Requests)
-tail -f data/logs/radiozapper.log
+tail -f data/logs/keinsabbelradio.log
 
 # Fingerprint-Mitschnitte anhören (nach einem "Zapping-Fehler"-Verdacht)
 ls data/fingerprint_clips/
@@ -634,7 +634,7 @@ Zwei Ziele mit unterschiedlichem Detailgrad:
 
 - **Konsole** (`docker compose logs`): nur Ereignisse, die man im Alltag
   sehen will — Senderwechsel, Fingerprint-Treffer, Warnungen, Fehler.
-- **`data/logs/radiozapper.log`**: *immer* auf DEBUG, unabhängig von der
+- **`data/logs/keinsabbelradio.log`**: *immer* auf DEBUG, unabhängig von der
   Konsole. Pro Analysefenster die VAD-Wahrscheinlichkeit bzw. die
   Heuristik-Features, jeder Fingerprint-Vergleich mit Match-Stärke und
   Abstand zur Schwelle, jeder HTTP-Request des Web-Interfaces, jeder
@@ -666,13 +666,13 @@ auf die Konsole, `--log-file ""` schaltet die Datei ab.
 
 ---
 
-<a id="radiozapper-english-version"></a>
+<a id="keinsabbelradio-english-version"></a>
 
-*[🇩🇪 Deutsche Version weiter oben](#radiozapper)*
+*[🇩🇪 Deutsche Version weiter oben](#keinsabbelradio)*
 
-# RadioZapper (English version)
+# KeinSabbelRadio (English version)
 
-RadioZapper listens to several internet radio stations at once and
+KeinSabbelRadio listens to several internet radio stations at once and
 automatically switches away the moment someone starts talking —
 presenting, news, ads, jingles. What's left (ideally) is just music.
 The currently selected station is re-streamed via Icecast, so you can
@@ -681,10 +681,10 @@ any other streaming client.
 
 ## ⚠️ Private use only, behind a VPN — no public deployment
 
-**RadioZapper is explicitly not meant for public deployment.** The
+**KeinSabbelRadio is explicitly not meant for public deployment.** The
 Icecast port (8000) and the web interface port (5000) must never be
 exposed directly to the open internet (no port forwarding, no public
-reverse proxy) — RadioZapper always runs behind a VPN (Tailscale or
+reverse proxy) — KeinSabbelRadio always runs behind a VPN (Tailscale or
 similar), reachable only from devices on your own trusted network. Two
 concrete reasons:
 
@@ -692,7 +692,7 @@ concrete reasons:
   or later be found (scanners, streaming aggregators, hotlinking) —
   and then potentially half the internet starts pulling bandwidth and
   CPU time uncontrolled, in a way you can never fully rein back in.
-- **Copyright**: RadioZapper re-streams other people's licensed radio
+- **Copyright**: KeinSabbelRadio re-streams other people's licensed radio
   programs. For private personal use inside your own (Tail)net that's
   one thing — made publicly accessible, it's an unlicensed public
   performance of copyrighted content. There is no shortage of law
@@ -710,13 +710,13 @@ reachable" is a bad idea.
    reasons), a simpler signal heuristic automatically takes over
    (zero-crossing rate/spectral flatness/energy modulation).
 2. Once speech detection holds up for a few seconds in a row,
-   RadioZapper cycles to the next enabled station until music is
+   KeinSabbelRadio cycles to the next enabled station until music is
    playing again.
 3. In parallel, **audio fingerprinting** runs (a Shazam-style
    constellation-map approach): detected speech clips are hashed and
    compared against a SQLite database of clips already heard. If a
    clip is already known (e.g. a recurring ad spot or station jingle),
-   RadioZapper switches immediately instead of waiting out the full
+   KeinSabbelRadio switches immediately instead of waiting out the full
    speech-detection time.
 
 Neither mechanism is perfect — that's what the correction buttons in
@@ -730,8 +730,8 @@ a time. So this doesn't stall playback entirely:
 
 - If the **current** station delivers nothing for three analysis
   windows in a row, it's pulled from rotation for 5 minutes and
-  RadioZapper automatically switches on (`STREAM_FAILURE_LIMIT`/
-  `STATION_DEAD_COOLDOWN` in `radiozapper.py`).
+  KeinSabbelRadio automatically switches on (`STREAM_FAILURE_LIMIT`/
+  `STATION_DEAD_COOLDOWN` in `keinsabbelradio.py`).
 - If a **background buffer** dies, its station is immediately put on
   the same block list instead of being reconnected every second.
 - Blocked stations are skipped during automatic switching and aren't
@@ -747,7 +747,7 @@ mount silent the whole time.
 
 ## Look-ahead buffering & playout delay
 
-RadioZapper keeps the next stations in rotation order running in the
+KeinSabbelRadio keeps the next stations in rotation order running in the
 background and buffers the last `prebuffer_seconds` seconds of each
 (default 10s, configurable under `/config`, takes effect immediately, no
 restart needed). That buffer serves two purposes at once:
@@ -787,7 +787,7 @@ window length itself (`window_minutes`) is unaffected.
 ## News break
 
 Practically every radio station reads the news on the hour and half
-hour. Instead, RadioZapper can play a random MP3 from a local folder
+hour. Instead, KeinSabbelRadio can play a random MP3 from a local folder
 for a short time window (e.g. your own jingles/music from an SMB
 mount) — afterwards it automatically resumes the paused station, as
 normal.
@@ -836,7 +836,7 @@ remaining window is over, another random MP3 is automatically loaded
 until `window_minutes` has elapsed. Only then does it automatically
 return to the paused station. A manual station switch during the break
 cancels it immediately (a manual decision beats automation, as
-everywhere else in RadioZapper). During the break, automatic speech
+everywhere else in KeinSabbelRadio). During the break, automatic speech
 detection (VAD/heuristic/fingerprint) is also paused — the MP3 itself
 may well contain speech, and that shouldn't be misread as "presenting"
 on the actual station.
@@ -895,7 +895,7 @@ line to `docker-compose.yml`, e.g.:
 
 and enter the resulting container path (`/app/vosk-model-en`) as the
 model path under "🌐 STT-Sprachen" — then `docker compose up -d --build
-radiozapper` so the new mount takes effect.
+keinsabbelradio` so the new mount takes effect.
 
 ### Calibration wizard
 
@@ -987,7 +987,7 @@ don't edit the block directly):
   minimum. The same method applies to any further language: listen in
   for a few minutes against a known speech AND a known music station in
   that language; detected text/confidence values are logged to
-  `logs/radiozapper.log` for this.
+  `logs/keinsabbelradio.log` for this.
 - **`category_languages`** — category → language code (see above),
   managed via the "🏷 Kategorie-Sprachen" table.
 - **`combine_mode`** — how the STT result is combined with VAD/
@@ -1004,7 +1004,7 @@ don't edit the block directly):
 
 Model not found or load error → only that language stays ineffective
 (log entry, load state also visible per language on the config page),
-RadioZapper keeps running normally with the remaining languages/
+KeinSabbelRadio keeps running normally with the remaining languages/
 stations. A crash of the engine on a single sample only skips that one
 sample, not the main process.
 
@@ -1054,7 +1054,7 @@ Reachable at `http://<host>:5000/`:
   false switch.
 - **Disable/enable chatter filter** — turns off all automatic
   detection for a while (e.g. for a radio drama/feature on an
-  otherwise music station) without RadioZapper interfering. Current
+  otherwise music station) without KeinSabbelRadio interfering. Current
   state is visible directly on the button.
 - **🤥 Bullshit-o-meter** — a green-to-red bar showing the currently
   measured speech value (VAD probability or heuristic vote) live in
@@ -1105,14 +1105,14 @@ appears within milliseconds instead of waiting for the next poll tick.
   all ffmpeg child processes combined, plus a breakdown), CPU, number
   of running ffmpeg processes, and disk usage of the fingerprint DB,
   log file (including rotated backups), and Whisper model cache — all
-  for RadioZapper itself, not the whole host. Refreshed every 5s.
+  for KeinSabbelRadio itself, not the whole host. Refreshed every 5s.
 - **📰 News break** (on the config page, above the station list) — see
   its own section above.
 - **🗣 STT speech filter** (on the config page) — see its own section
   above.
 
 The raw Icecast stream also remains reachable in parallel at
-`http://<host>:8000/radiozapper.mp3` (e.g. for VLC).
+`http://<host>:8000/keinsabbelradio.mp3` (e.g. for VLC).
 
 ### Installing as an app (PWA)
 
@@ -1158,7 +1158,7 @@ update server rather than the Play Store).
 
 | File | Purpose |
 |---|---|
-| `radiozapper.py` | Main process: fetch stream, classify, switch, Icecast output |
+| `keinsabbelradio.py` | Main process: fetch stream, classify, switch, Icecast output |
 | `speech_detector.py` | Silero VAD wrapper with signal-heuristic fallback |
 | `fingerprint.py` | Audio fingerprinting (constellation-map hashing) in SQLite |
 | `stations_store.py` | Load/save/CRUD for the station list (`stations.json`) |
@@ -1173,18 +1173,18 @@ update server rather than the Play Store).
 | `web/manifest.json` | PWA manifest (name, icons, `display: standalone`) for "Add to home screen" |
 | `web/sw.js` | Service worker: caches the static UI shell for offline opening, no audio/API caching |
 | `pics/icon-192.png`, `pics/icon-512.png` | PWA icons for installing as an app (currently placeholders) |
-| `pics/favicon.ico` | Browser tab icon, a square thumbnail of `radiozapper.webp` |
-| `pics/radiozapper.webp` | Banner graphic on the player/config page and in this README |
+| `pics/favicon.ico` | Browser tab icon, a square thumbnail of `keinsabbelradio.webp` |
+| `pics/keinsabbelradio.webp` | Banner graphic on the player/config page and in this README |
 | `data/stations.json` | Station list (name, URL, category, active/inactive) |
 | `data/settings.json` | Runtime settings, see `settings_store.py` |
 | `data/fingerprints.db`, `data/fingerprint_clips/` | Fingerprint database + learned clip recordings |
 | `data/logs/` | Rotating log file (see "Logging" below) |
 | `data/news_mp3/`, `data/vosk-model-de/`, `data/whisper_cache/` | Default mount targets for `NEWS_MP3_FOLDER`/`VOSK_MODEL_FOLDER`/the faster-whisper cache (overridable in `.env`) |
-| `docker-compose.yml` | Icecast + RadioZapper as two services |
-| `check-radiozapper.sh` | Preflight check before the (first) start: Docker, RAM/disk/internet, `.env`, MP3 folder, ports |
-| `run_radiozapper.sh` | Start script: RAM/disk/internet check + `docker compose up -d --build` |
+| `docker-compose.yml` | Icecast + KeinSabbelRadio as two services |
+| `check-keinsabbelradio.sh` | Preflight check before the (first) start: Docker, RAM/disk/internet, `.env`, MP3 folder, ports |
+| `run_keinsabbelradio.sh` | Start script: RAM/disk/internet check + `docker compose up -d --build` |
 
-RadioZapper and the web interface run in the same process (web server
+KeinSabbelRadio and the web interface run in the same process (web server
 as a background thread) — no separate service, no IPC needed, just
 shared in-memory state.
 
@@ -1195,24 +1195,24 @@ mono downmix to save CPU time.
 ## Setup
 
 ```bash
-git clone <repo-url> RadioZapper
-cd RadioZapper
+git clone <repo-url> KeinSabbelRadio
+cd KeinSabbelRadio
 cp env.example .env      # enter passwords/hostname
 touch data/fingerprints.db    # must exist as a file, see below
-./check-radiozapper.sh   # optional: pre-checks Docker/.env/MP3 folder/ports
+./check-keinsabbelradio.sh   # optional: pre-checks Docker/.env/MP3 folder/ports
 docker compose up -d --build
 ```
 
-`./check-radiozapper.sh` installs Docker if needed, shows RAM/disk/
+`./check-keinsabbelradio.sh` installs Docker if needed, shows RAM/disk/
 internet status, checks whether `.env` is fully filled in (including a
 warning about unchanged `env.example` placeholders), whether the
 folder set in `NEWS_MP3_FOLDER` exists/is readable/contains MP3s, and
 whether `WEBUI_PORT`/`ICECAST_PORT`/`ICECAST_SSL_PORT` are free — if
-RadioZapper itself is already running on those ports, that counts as
+KeinSabbelRadio itself is already running on those ports, that counts as
 fine; if a different Docker container is blocking the port instead,
 the script suggests a free alternative to enter in `.env`. Pure
 diagnostics (exit code 1 on problems), starts nothing itself.
-Afterwards, `./run_radiozapper.sh` does the actual start (runs the
+Afterwards, `./run_keinsabbelradio.sh` does the actual start (runs the
 same RAM/disk/internet check again, then `docker compose up -d
 --build`).
 
@@ -1230,7 +1230,7 @@ the file or more conveniently via `http://<host>:5000/config`.
 | Variable | Meaning |
 |---|---|
 | `ICECAST_ADMIN_USER`/`_PASSWORD` | Icecast admin login (also used for the listener query in the web interface) |
-| `ICECAST_SOURCE_PASSWORD` | Password RadioZapper itself uses to push to Icecast |
+| `ICECAST_SOURCE_PASSWORD` | Password KeinSabbelRadio itself uses to push to Icecast |
 | `ICECAST_HOSTNAME` | Public hostname for the Icecast stream |
 | `ICECAST_PORT` | Host port for the raw Icecast stream (default 8000) |
 | `ICECAST_LOCATION`/`ICECAST_ADMIN_EMAIL` | Server info fields in Icecast's `icecast.xml` |
@@ -1269,13 +1269,13 @@ internally afterwards — details on that are in `CLAUDE.md`.
 
 ```bash
 # Rebuild + restart
-docker compose up -d --build radiozapper
+docker compose up -d --build keinsabbelradio
 
 # Follow the console (only the important events)
-docker compose logs -f radiozapper
+docker compose logs -f keinsabbelradio
 
 # Full debug log (VAD values, fingerprint details, HTTP requests)
-tail -f data/logs/radiozapper.log
+tail -f data/logs/keinsabbelradio.log
 
 # Listen to fingerprint recordings (after a suspected "zap error")
 ls data/fingerprint_clips/
@@ -1288,7 +1288,7 @@ Two destinations with different levels of detail:
 - **Console** (`docker compose logs`): only the events you want to see
   day-to-day — station switches, fingerprint matches, warnings,
   errors.
-- **`data/logs/radiozapper.log`**: *always* at DEBUG, independent of the
+- **`data/logs/keinsabbelradio.log`**: *always* at DEBUG, independent of the
   console. Per analysis window, the VAD probability or heuristic
   features, every fingerprint comparison with match strength and
   distance to the threshold, every HTTP request to the web interface,

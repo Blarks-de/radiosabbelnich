@@ -2,10 +2,10 @@
 """
 stations_store.py — Laden/Speichern/Verwalten der Senderliste (stations.json).
 
-Gemeinsam genutzt von radiozapper.py (Playback-Rotation) und webui.py
+Gemeinsam genutzt von keinsabbelradio.py (Playback-Rotation) und webui.py
 (Config-Seite) — beide arbeiten auf derselben Datei/demselben Schema, damit
 Änderungen über die Config-Seite ohne Sonderweg im laufenden Player
-ankommen (radiozapper.py pollt state.pop_reload_request() und liest bei
+ankommen (keinsabbelradio.py pollt state.pop_reload_request() und liest bei
 Bedarf per load_all()/load_active() neu ein).
 
 Schema pro Sender: {"id": str, "name": str, "url": str, "category": str,
@@ -170,7 +170,7 @@ def bulk_add(entries: list, category: str = DEFAULT_CATEGORY, enabled: bool = Tr
     Rotation zu kippen ist keine Entscheidung, die ein Import-Knopf für
     den Nutzer treffen sollte — und ein einziger davon, der sich später
     als unspielbar herausstellt, hat den Player schon mal für 8,5 Stunden
-    lahmgelegt (siehe Watchdog in radiozapper.py)."""
+    lahmgelegt (siehe Watchdog in keinsabbelradio.py)."""
     if category not in CATEGORIES:
         category = DEFAULT_CATEGORY
     with _lock:

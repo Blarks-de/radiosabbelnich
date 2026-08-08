@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Türkis wie das Web-Interface (webui.py, #1abc9c) - Optik-Angleichung, siehe RadioZapper_Android_Fahrplan.md Phase 5. -->
+    <!-- Türkis wie das Web-Interface (webui.py, #1abc9c) - Optik-Angleichung, siehe KeinSabbelRadio_Android_Fahrplan.md Phase 5. -->
     <color name="primary">#1ABC9C</color>
     <color name="primary_dark">#149174</color>
     <color name="accent">#1ABC9C</color>

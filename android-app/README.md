@@ -1,7 +1,7 @@
-# RadioZapper (Android)
+# KeinSabbelRadio (Android)
 
 > ✅ **Fertig im Sinne des Fahrplans**: alle acht Phasen aus
-> `RadioZapper_Android_Fahrplan.md` sind umgesetzt und live getestet,
+> `KeinSabbelRadio_Android_Fahrplan.md` sind umgesetzt und live getestet,
 > zuletzt Phase 8 (Review + Feinschliff) am 2026-08-08. Es sind keine
 > geplanten Ausbaustufen mehr offen - die App wird im Alltag benutzt, nicht
 > mehr Stück für Stück aufgebaut. Was sie bewusst NICHT kann, steht
@@ -13,7 +13,7 @@
 > bis 2026-08-07 in `../SESSION.md`.
 
 Eigenstaendige Android-App, die dasselbe Grundprinzip wie das
-RadioZapper-Docker-Projekt (`../`) auf dem Handy abbildet: Radiostream
+KeinSabbelRadio-Docker-Projekt (`../`) auf dem Handy abbildet: Radiostream
 abspielen und per Vosk (Speech-to-Text) grob erkennen, ob gerade Sprache
 oder Musik laeuft, und bei Sprache automatisch weiterschalten. **Kein
 Web-Wrapper, keine Abhaengigkeit von der Docker-Instanz** - reines
@@ -21,7 +21,7 @@ natives Kotlin/Android.
 
 Ursprünglich bewusst minimal gestartet (drei hartcodierte Sender, kein
 Watchdog/Ban-System, kein News-Break, keine Settings-UI) und dann entlang
-des Feature-Parität-Fahrplans (`RadioZapper_Android_Fahrplan.md`) auf den
+des Feature-Parität-Fahrplans (`KeinSabbelRadio_Android_Fahrplan.md`) auf den
 heutigen Stand gewachsen: Senderverwaltung, Watchdog, Vorwärmung,
 M3U-Import, Nachrichten-Pause, Audio-Fingerprinting und mehrsprachiges STT
 inklusive Kalibrierungs-Wizard - siehe Feature-Liste unten. Weiterhin
@@ -200,7 +200,7 @@ Deutschlandfunk (Sprache) gestartet → nach ~15s bestaetigt "Sprache"
 erkannt → automatisch zu 1LIVE gewechselt → dort ueber 1 Minute stabil
 "🎵 Musik", kein Nachflackern, kein weiteres Springen. Keine Abstuerze/
 Exceptions im Logcat. Details und weitere Durchlaeufe siehe
-`../SESSION.md`, Eintrag "2026-08-07 — Android RadioZapper MVP".
+`../SESSION.md`, Eintrag "2026-08-07 — Android KeinSabbelRadio MVP".
 
 Zweiter Durchlauf (nach Ergaenzung des Build-Zeitstempels, gleicher
 Emulator): Deutschlandfunk → 1LIVE → SWR3 → Deutschlandfunk → 1LIVE →
@@ -259,7 +259,7 @@ leicht auffindbaren Pfad (siehe `../CLAUDE.md`, Abschnitt
 "Android-Prototyp"):
 
 ```
-android-app/radiozapper.apk
+android-app/keinsabbelradio.apk
 ```
 
 (daneben weiterhin auch unter dem von Gradle erzeugten
@@ -269,7 +269,7 @@ tief verschachtelt und gitignored).
 Per USB (ADB, falls Entwickleroptionen aktiv sind):
 
 ```bash
-adb install -r android-app/radiozapper.apk
+adb install -r android-app/keinsabbelradio.apk
 ```
 
 Alternativ die APK-Datei per Kabel/Cloud aufs Handy kopieren und dort
@@ -288,7 +288,7 @@ etwas (ohne Modell laeuft nur die Wiedergabe, Status bleibt "Gestoppt").
 ```bash
 cd android-app
 ./gradlew assembleDebug
-cp app/build/outputs/apk/debug/app-debug.apk radiozapper.apk
+cp app/build/outputs/apk/debug/app-debug.apk keinsabbelradio.apk
 echo "{\"buildTime\": \"$(date '+%Y-%m-%d %H:%M')\"}" > version.json
 ```
 
@@ -309,13 +309,13 @@ konfiguriert). Kurzform:
 ```bash
 emulator -avd test_device -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect &
 adb wait-for-device
-adb install -r radiozapper.apk
+adb install -r keinsabbelradio.apk
 adb logcat -s PlaybackService:*   # zeigt jeden Sprache/Musik-Wechsel
 ```
 
 ## Architektur in Kuerze
 
-- `RadioZapperApplication.kt` - einziger Zweck: `StationRepository.init()`
+- `KeinSabbelRadioApplication.kt` - einziger Zweck: `StationRepository.init()`
   garantiert VOR jeder Komponente aufrufen (`Application.onCreate()` laeuft
   immer zuerst) - kein "wer zuerst dran ist, ruft init() auf"-Muster in
   den einzelnen Komponenten, das ein neuer Einstiegspunkt leicht vergessen
@@ -785,18 +785,18 @@ explizit leeren wuerde.
 Damit eine neue APK nicht jedes Mal per USB/Datei-Transfer aufs Handy
 muss: `update_server.py` ist ein eigenstaendiger, minimaler HTTP-Server
 (Python-Stdlib, keine Abhaengigkeiten), der ausschliesslich zwei Dateien
-aus diesem Verzeichnis ausliefert - `radiozapper.apk` und `version.json`
+aus diesem Verzeichnis ausliefert - `keinsabbelradio.apk` und `version.json`
 (`{"buildTime": "..."}`, siehe Bauen-Abschnitt oben). Kein Auth, genau
 wie der Rest des Projekts (siehe `../CLAUDE.md`, "Kein Auth, nur hinter
 VPN") - nur ueber Tailscale erreichbar, keine oeffentliche Portfreigabe.
 
 Laeuft als systemd-User-Service (`~/.config/systemd/user/
-radiozapper-android-update.service`, Linger aktiv, ueberlebt also auch
+keinsabbelradio-android-update.service`, Linger aktiv, ueberlebt also auch
 ohne aktive Login-Session):
 
 ```bash
-systemctl --user status radiozapper-android-update.service
-journalctl --user -u radiozapper-android-update.service -f
+systemctl --user status keinsabbelradio-android-update.service
+journalctl --user -u keinsabbelradio-android-update.service -f
 ```
 
 Port `8098`. **Die Server-Adresse ist bewusst NICHT hartcodiert** - sobald

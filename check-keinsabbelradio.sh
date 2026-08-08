@@ -1,10 +1,10 @@
 #!/bin/bash
 # Preflight-Check vor dem ersten (oder erneuten) Start: Docker-Installation,
-# System-Ressourcen (wie run_radiozapper.sh), .env vollständig ausgefüllt,
+# System-Ressourcen (wie run_keinsabbelradio.sh), .env vollständig ausgefüllt,
 # MP3-Ordner für die Nachrichten-Pause nutzbar, und ob die benötigten Ports
 # frei sind -- inkl. Alternativvorschlag, falls ein Port durch einen
 # ANDEREN Docker-Container belegt ist. Reine Diagnose, startet selbst
-# nichts -- das macht weiterhin ./run_radiozapper.sh.
+# nichts -- das macht weiterhin ./run_keinsabbelradio.sh.
 set -e
 
 cd "$(dirname "$0")"
@@ -38,7 +38,7 @@ draw_bar() {
 
 # ---------------------------------------------------------------------
 # 1. Docker installieren, falls nötig (bisheriger Inhalt von
-#    install_radiozapper.sh, unverändert -- nur um ok()/fail() ergänzt)
+#    install_keinsabbelradio.sh, unverändert -- nur um ok()/fail() ergänzt)
 # ---------------------------------------------------------------------
 echo "🐳 Docker"
 
@@ -77,7 +77,7 @@ fi
 echo
 
 # ---------------------------------------------------------------------
-# 2. System-Ressourcen (identisch zu run_radiozapper.sh -- absichtlich
+# 2. System-Ressourcen (identisch zu run_keinsabbelradio.sh -- absichtlich
 #    dupliziert statt in eine gemeinsame Datei ausgelagert, siehe SESSION.md)
 # ---------------------------------------------------------------------
 echo "🔍 System-Check"
@@ -175,7 +175,7 @@ fi
 echo
 
 # ---------------------------------------------------------------------
-# 5. Ports: frei, durch RadioZapper selbst belegt (ok), oder durch einen
+# 5. Ports: frei, durch KeinSabbelRadio selbst belegt (ok), oder durch einen
 #    ANDEREN Docker-Container/Prozess blockiert (dann Alternative suchen)?
 # ---------------------------------------------------------------------
 
@@ -224,14 +224,14 @@ check_port() {
         return
     fi
     local owner; owner=$(port_owner_container "$port")
-    if [ "$owner" = "radiozapper" ] || [ "$owner" = "icecast-radiozapper" ]; then
+    if [ "$owner" = "keinsabbelradio" ] || [ "$owner" = "icecast-keinsabbelradio" ]; then
         ok "$label (Port $port) läuft bereits -- eigener Container ('$owner')."
         return
     fi
     if [ -n "$owner" ]; then
         fail "$label (Port $port) ist durch einen anderen Docker-Container belegt: '$owner'."
     else
-        fail "$label (Port $port) ist belegt (kein RadioZapper-Container -- evtl. ein anderer Prozess direkt auf dem Host)."
+        fail "$label (Port $port) ist belegt (kein KeinSabbelRadio-Container -- evtl. ein anderer Prozess direkt auf dem Host)."
     fi
     local alt; alt=$(find_free_port "$port")
     if [ -n "$alt" ]; then
@@ -255,5 +255,5 @@ if [ "$FAILED" -gt 0 ]; then
     echo -e "${RED}❌ $FAILED Problem(e) gefunden -- siehe oben.${NC}"
     exit 1
 else
-    echo -e "${GREEN}✅ Alle Prüfungen bestanden. Start mit: ./run_radiozapper.sh${NC}"
+    echo -e "${GREEN}✅ Alle Prüfungen bestanden. Start mit: ./run_keinsabbelradio.sh${NC}"
 fi

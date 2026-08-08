@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-RadioZapper hört mehrere Internetradio-Sender mit, schaltet bei Sprache
+KeinSabbelRadio hört mehrere Internetradio-Sender mit, schaltet bei Sprache
 (Moderation/Werbung/Jingles) automatisch weiter und strahlt das Ergebnis per
 Icecast neu aus. Überblick und Feature-Beschreibung: `README.md`.
 
@@ -17,7 +17,7 @@ VERSION-Pflege) gelten für den Docker-Dienst, nicht 1:1 für den Android-Code.
 Seit 2026-08-07 wird es aber mitgepflegt, dafür zwei feste Regeln:
 
 - **Nach jedem Android-Build** die entstandene Debug-APK nach
-  `android-app/radiozapper.apk` kopieren (fester, einfach auffindbarer Pfad
+  `android-app/keinsabbelradio.apk` kopieren (fester, einfach auffindbarer Pfad
   statt des tief verschachtelten `app/build/outputs/apk/debug/app-debug.apk`
   — letzterer ist ohnehin gitignored) UND `android-app/version.json` mit
   einem aktuellen `buildTime`-Stempel neu schreiben (siehe
@@ -29,10 +29,10 @@ Seit 2026-08-07 wird es aber mitgepflegt, dafür zwei feste Regeln:
 
 Seit 2026-08-07 läuft dafür zusätzlich ein **eigenständiger
 Update-Server** (`android-app/update_server.py`, Port 8098, systemd-User-
-Service `radiozapper-android-update.service`, Linger aktiv) auf diesem
-Host — liefert `android-app/radiozapper.apk`/`version.json` übers
+Service `keinsabbelradio-android-update.service`, Linger aktiv) auf diesem
+Host — liefert `android-app/keinsabbelradio.apk`/`version.json` übers
 Tailscale-Netz an die installierte App aus (kein Play Store, kein Auth,
-siehe README dort). Läuft unabhängig vom eigentlichen RadioZapper-Dienst;
+siehe README dort). Läuft unabhängig vom eigentlichen KeinSabbelRadio-Dienst;
 beim Aufräumen von Prozessen/Diensten auf diesem Host nicht mit dem
 Docker-Container verwechseln.
 
@@ -75,9 +75,9 @@ läuft über die unten beschriebenen manuellen Muster und wird in SESSION.md
 protokolliert.
 
 ```bash
-docker compose up -d --build radiozapper   # bauen + neustarten (Standard-Zyklus)
-docker compose logs -f radiozapper         # Konsole: nur Ereignisse (INFO)
-tail -f data/logs/radiozapper.log          # Volles DEBUG-Log, überlebt Neustarts
+docker compose up -d --build keinsabbelradio   # bauen + neustarten (Standard-Zyklus)
+docker compose logs -f keinsabbelradio         # Konsole: nur Ereignisse (INFO)
+tail -f data/logs/keinsabbelradio.log          # Volles DEBUG-Log, überlebt Neustarts
 ```
 
 Ein frischer Clone braucht `cp env.example .env` **und `touch data/fingerprints.db`**:
@@ -96,7 +96,7 @@ anlegen und gegen einen **separaten** Icecast-Mount streamen — der Hauptloop
 schreibt sonst in die echte Senderliste und den echten Mount.
 
 ```bash
-python3 radiozapper.py --icecast-url "icecast://source:PASS@localhost:8000/test.mp3" \
+python3 keinsabbelradio.py --icecast-url "icecast://source:PASS@localhost:8000/test.mp3" \
     --no-fingerprint --webui-port 0 --log-file logs/test.log
 ```
 
@@ -113,7 +113,7 @@ Senderliste ist Produktivzustand des Nutzers.
 
 ### Ein Prozess, zwei Akteure, geteilter Zustand
 
-`radiozapper.main()` fährt den Hauptloop (~1 Analysefenster pro Sekunde);
+`keinsabbelradio.main()` fährt den Hauptloop (~1 Analysefenster pro Sekunde);
 `webui.start_server()` hängt einen `ThreadingHTTPServer` als Daemon-Thread
 daneben. Kommunikation läuft **ausschließlich** über `webui.SwitcherState`:
 lock-geschützter In-Memory-Zustand, kein IPC, kein Datei-Polling.
@@ -148,7 +148,7 @@ zeigt ihn nur an, ändert nie etwas daran). `host_paths` (Web-Interface-
 Konstruktor-Parameter, NICHT SwitcherState) ist ein dritter, noch
 einfacherer Fall: rein statische Werte aus `.env` (`NEWS_MP3_FOLDER_HOST`/
 `VOSK_MODEL_FOLDER_HOST`), einmalig beim Start durchgereicht (Env-Var →
-CLI-Arg in `radiozapper.py` → `webui.start_server()`), damit die Config-
+CLI-Arg in `keinsabbelradio.py` → `webui.start_server()`), damit die Config-
 Seite den echten Host-Pfad neben dem Container-Pfad anzeigen kann — der
 Container kennt ihn sonst grundsätzlich nicht, Docker übersetzt Host→
 Container-Pfad nur einmalig beim Anlegen des Containers, das ist für den
@@ -325,7 +325,7 @@ zusammenhängender Text in der jeweils erwarteten Sprache? Genau wie
 `news_break.py` kennt dieses Modul weder `StreamSource` noch
 `SwitcherState`. Die **einzige** Kopplungsstelle mit der bestehenden
 Switch-Logik ist `stt_filter.combine_label()`, eingehängt in die
-`classify()`-Closure in `radiozapper.py`s `main()` — Streak-Zählung,
+`classify()`-Closure in `keinsabbelradio.py`s `main()` — Streak-Zählung,
 Fingerprint-Trigger und `do_switch()` dahinter bleiben dadurch komplett
 unverändert, Fingerprint merkt von alldem nichts.
 
