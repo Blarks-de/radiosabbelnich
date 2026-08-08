@@ -43,6 +43,7 @@ class MainActivity : AppCompatActivity() {
     private var statusJob: Job? = null
     private var currentStationJob: Job? = null
     private var lockedStationsJob: Job? = null
+    private var speechRatioJob: Job? = null
     private var lockedStations: Map<String, StationLockReason> = emptyMap()
 
     private val requestNotificationPermission =
@@ -85,6 +86,11 @@ class MainActivity : AppCompatActivity() {
                     renderStationRows(StationRepository.stations.value)
                 }
             }
+
+            speechRatioJob?.cancel()
+            speechRatioJob = lifecycleScope.launch {
+                service.speechRatio.collect { ratio -> renderBullshitometer(ratio) }
+            }
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
@@ -93,6 +99,7 @@ class MainActivity : AppCompatActivity() {
             statusJob?.cancel()
             currentStationJob?.cancel()
             lockedStationsJob?.cancel()
+            speechRatioJob?.cancel()
             lockedStations = emptyMap()
         }
     }
@@ -143,6 +150,10 @@ class MainActivity : AppCompatActivity() {
             // currentStation-/status-Flows des Service (siehe onServiceConnected).
             playbackService?.stopPlayback()
         }
+
+        binding.zapButton.setOnClickListener {
+            playbackService?.manualSkip()
+        }
     }
 
     override fun onStart() {
@@ -159,6 +170,7 @@ class MainActivity : AppCompatActivity() {
         statusJob?.cancel()
         currentStationJob?.cancel()
         lockedStationsJob?.cancel()
+        speechRatioJob?.cancel()
     }
 
     /**
@@ -226,6 +238,44 @@ class MainActivity : AppCompatActivity() {
             PlaybackStatus.MUSIC -> getString(R.string.status_music)
             PlaybackStatus.ERROR -> getString(R.string.status_error)
         }
+    }
+
+    /**
+     * "🤥 Bullshitometer" analog zum Web-Interface (webui.py): Rohwert VOR der
+     * Hysterese (StreamAnalyzer.speechRatio) als Balken gruen (Musik) -> rot
+     * (Sprache), exakt derselbe Farbverlauf (hue 120 -> 0) wie dort. null
+     * (idle/noch kein volles Fenster) zeigt einen leeren, eingefrorenen Balken.
+     */
+    private fun renderBullshitometer(ratio: Double?) {
+        if (ratio == null) {
+            binding.bsMeterBar.progress = 0
+            binding.bsMeterPercentText.text = getString(R.string.bs_meter_off)
+            return
+        }
+        val pct = (ratio * 100).toInt().coerceIn(0, 100)
+        binding.bsMeterBar.progress = pct
+        binding.bsMeterPercentText.text = getString(R.string.bs_meter_pct, pct)
+        val hue = (120 - pct * 1.2).coerceAtLeast(0.0).toFloat()
+        binding.bsMeterBar.progressTintList = android.content.res.ColorStateList.valueOf(hslToColor(hue, 0.70f, 0.45f))
+    }
+
+    /** Android kennt nur HSV, keine HSL-Konvertierung - eigene Umrechnung fuer denselben Farbverlauf wie im Web. */
+    private fun hslToColor(hue: Float, saturation: Float, lightness: Float): Int {
+        val c = (1 - kotlin.math.abs(2 * lightness - 1)) * saturation
+        val x = c * (1 - kotlin.math.abs((hue / 60f) % 2 - 1))
+        val m = lightness - c / 2
+        val (r1, g1, b1) = when {
+            hue < 60 -> Triple(c, x, 0f)
+            hue < 120 -> Triple(x, c, 0f)
+            hue < 180 -> Triple(0f, c, x)
+            hue < 240 -> Triple(0f, x, c)
+            hue < 300 -> Triple(x, 0f, c)
+            else -> Triple(c, 0f, x)
+        }
+        val r = ((r1 + m) * 255).toInt().coerceIn(0, 255)
+        val g = ((g1 + m) * 255).toInt().coerceIn(0, 255)
+        val b = ((b1 + m) * 255).toInt().coerceIn(0, 255)
+        return android.graphics.Color.rgb(r, g, b)
     }
 
     private fun observeModelState() {

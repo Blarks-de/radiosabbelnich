@@ -94,6 +94,33 @@ object StationRepository {
         }
     }
 
+    /**
+     * Fuer den M3U-Import (siehe import/StationImporter.kt, Vorbild
+     * stations_store.bulk_add): fuegt mehrere Sender in EINEM Schreibvorgang
+     * hinzu statt pro Sender einmal addStation() aufzurufen - bei potenziell
+     * hunderten Importeintraegen sonst unnoetig viele Disk-Writes. Der Aufrufer
+     * hat bereits gegen die bestehende Liste UND innerhalb der eigenen Batch
+     * dedupliziert (siehe StationImporter.runImport()), hier also keine
+     * Namens-/URL-Kollisionspruefung mehr noetig - nur die id muss weiterhin
+     * eindeutig sein.
+     */
+    suspend fun bulkAdd(entries: List<Pair<String, String>>, category: String, enabled: Boolean): List<Station> {
+        if (entries.isEmpty()) return emptyList()
+        val resolvedCategory = if (category in Categories.ALL) category else Categories.DEFAULT
+
+        return withContext(Dispatchers.IO) {
+            val current = _stations.value
+            val usedIds = current.map { it.id }.toMutableSet()
+            val added = entries.map { (name, url) ->
+                val id = uniqueId(slugify(name.trim()), usedIds)
+                usedIds += id
+                Station(id, name.trim(), url.trim(), resolvedCategory, enabled)
+            }
+            persist(current + added)
+            added
+        }
+    }
+
     /** Aendert Name/URL/Kategorie/Enabled - die id bleibt IMMER gleich (siehe Station.kt-Doc). */
     suspend fun updateStation(id: String, name: String, url: String, category: String, enabled: Boolean): Station {
         val cleanName = name.trim()

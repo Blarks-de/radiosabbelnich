@@ -11,4 +11,7 @@ package com.radiozapper.mvp.model
 object Categories {
     val ALL = listOf("Lokal", "National", "International", "Unsortiert")
     const val DEFAULT = "National"
+
+    /** Ziel-Kategorie fuer importierte Sender (siehe importer/StationImporter.kt), analog stations_store.IMPORT_CATEGORY. */
+    const val IMPORTED = "Unsortiert"
 }

@@ -215,3 +215,129 @@ die theoretische Race (spaet eintreffender `onPlayerError`-Callback der
 ALTEN Quelle nach bereits erfolgtem `play()`-Wechsel auf eine neue) -
 schmales Zeitfenster, dokumentiert als bekannte Grenze statt Generation-
 Counter o.ae. einzubauen.
+
+## 2026-08-08 — Optik-Angleichung (Phase 5 aus dem Fahrplan) + Kodi-/M3U-Sender-Import (Plan-Mode)
+
+Auslöser: `RadioZapper_Android_Fahrplan.md`, Phase 5 ("Android und Web
+fühlen sich wie ein Projekt an") plus expliziter Nutzerwunsch nach einem
+Android-Pendant zu `station_import.py` ("Radioliste von Kodi importieren").
+Plan-Mode mit zwei Rückfragen an den Nutzer zur Tiefe des
+Erreichbarkeits-Checks (siehe unten), dann Umsetzung, dann Live-Test im
+Emulator.
+
+### Phase 5: Branding, Bullshitometer, ZAPPEN!
+
+- **Banner + Türkis** (`#1ABC9C`, Web-Vorbild `webui.py`): `pics/radiozapper.webp`
+  nach `drawable-nodpi/banner.webp` kopiert (dieselbe Datei wie im Web-
+  Interface), `ShapeableImageView` (Material-Dependency war schon vorhanden)
+  oben in `activity_main.xml`. `colors.xml` `primary`/`accent` auf Türkis -
+  färbt über das bestehende `Theme.MaterialComponents`-Theme automatisch alle
+  Buttons/EditTexts mit.
+- **Bullshitometer**: `StreamAnalyzer` berechnete den rohen `speechRatio`
+  (Anteil erkannter Text-Chunks im Glättungsfenster) bereits intern für die
+  Hysterese, reichte ihn aber nicht nach außen. Neuer `_speechRatio:
+  MutableStateFlow<Double?>` (null = idle/noch kein volles Fenster),
+  durchgereicht über `PlaybackService.speechRatio` (gleiches Muster wie das
+  bestehende `status`), gebunden in `MainActivity.renderBullshitometer()` -
+  horizontale `ProgressBar` + Prozenttext, Farbverlauf grün→rot exakt wie im
+  Web (`hue = max(0, 120 - pct*1.2)`, HSL 70%/45%). Android kennt nur
+  HSV-Konvertierung, keine HSL - eigene `hslToColor()`-Hilfsfunktion, sonst
+  hätte der Farbverlauf sichtbar anders ausgesehen als im Web-Vorbild.
+  Bewusst KEIN separater "STT-Meter" (der Docker-Doppel-Detektor VAD+STT hat
+  in Android keine Entsprechung - hier gibt es nur Vosk direkt) und KEIN
+  "Fingerprint-Chip" (Phase 4/Fingerprinting ist noch nicht umgesetzt) - ein
+  zweiter, inhaltlich identischer Balken wäre reine Doppelung gewesen.
+- **"⚡ ZAPPEN!"-Button**: `PlaybackService.manualSkip()` ruft schlicht das
+  bereits bestehende `attemptAutoSwitch()` auf - inhaltlich exakt dieselbe
+  Aktion wie ein automatisch erkannter Sprache-Treffer (Cooldown setzen,
+  Ring weiterschalten, Pause-Eskalation bei "alle gesperrt"), nur manuell
+  statt automatisch ausgelöst. Kein Duplikat der Ring-Logik nötig.
+
+### Kodi-/M3U-Sender-Import (`importer/StationImporter.kt`, `importer/StationReachabilityChecker.kt`)
+
+Vorbild: `station_import.py` im Docker-Projekt. Zwei Rückfragen an den
+Nutzer vor der Umsetzung, weil der 8s-Audiofluss-Check des Vorbilds
+(ffmpeg, parallelisiert) auf dem Handy für eine mehrere-hundert-Sender-Liste
+(Kodinerds-Liste) zu langsam/akkuintensiv wäre:
+
+1. **Import selbst ohne Reachability-Check** (Nutzerentscheidung) - nur
+   laden/parsen/deduplizieren, alle neuen Sender deaktiviert in "Unsortiert"
+   übernehmen. Begründung: deaktivierte Sender sind ohnehin harmlos, bis der
+   Nutzer sie bewusst aktiviert.
+2. **Separater "🔍 Unsortierte Sender prüfen"-Knopf** (Nutzerentscheidung:
+   nur Kategorie "Unsortiert", Ergebnis rein informativ, kein
+   Auto-Löschen) trägt den echten Check nach, wer will.
+
+Umsetzung:
+
+- `StationImporter.parseM3u()` - 1:1 dieselbe `#EXTINF:...,Name`-Logik wie
+  `station_import.parse_m3u`. Default-URL identisch zum Docker-Projekt
+  (`http://bit.ly/kn-kodi-radio`, editierbar per Textfeld, SharedPreferences
+  wie `UpdateManager.getBaseUrl()`/`setBaseUrl()`).
+- **Live-Bug beim ersten echten Test entdeckt und gefixt**: `bit.ly`
+  redirected `http://` → `https://` (301). `HttpURLConnection` folgt
+  Redirects standardmäßig NUR innerhalb desselben Protokolls - bei einem
+  Protokollwechsel bekommt man kommentarlos die Redirect-Antwortseite selbst
+  statt der Playlist (erster Testlauf: "0 geprüft, 0 neu hinzugefügt" trotz
+  Erfolg ohne Exception). Fix: `fetchM3u()` folgt `Location`-Headern jetzt
+  von Hand, protokollübergreifend inklusive. Nach dem Fix: echter Import der
+  Kodinerds-Liste im Emulator, 362 Einträge geparst, 361 neu (1 Duplikat -
+  SWR3 war schon vorhanden - korrekt übersprungen).
+- `StationRepository.bulkAdd()` neu: wie `addStation()`, aber EIN
+  Schreibvorgang für die ganze Batch statt einem pro Sender (analog
+  `stations_store.bulk_add`).
+- `StationReachabilityChecker.checkReachable()` - eigenständige
+  MediaExtractor/MediaCodec-Dekodierschleife (kein Vosk nötig), Wall-Clock-
+  begrenzt auf `CHECK_WINDOW_MS=8000`/`CHECK_TAIL_MS=3000`/
+  `CHECK_MIN_SECONDS=3.0`, konzeptionell identisch zu
+  `station_import.check_reachable()` (siehe dessen Docstring/`../CLAUDE.md`
+  Abschnitt "Sender-Import"). `withTimeoutOrNull()` zusätzlich als
+  Sicherheitsnetz: `MediaExtractor.setDataSource()` kann bei einer nicht
+  routbaren Adresse länger blockieren als das Prüffenster selbst (OS-
+  Verbindungstimeout statt der eigenen 8s) - ohne die Grenze würde ein
+  einziger toter Kandidat den ganzen Check-Lauf verzögern.
+  `CHECK_CONCURRENCY=3` (Kotlin-`Semaphore`, deutlich weniger als die 10 im
+  Python-Vorbild) - MediaCodec-Dekodierung ist auf dem Handy teurer als ein
+  ffmpeg-Prozess auf dem Server, und nebenbei läuft im selben Prozess meist
+  noch Wiedergabe + Vosk-Analyse des aktuellen Senders.
+- UI: neue Sektion "📻 Sender-Import" + "🔍 Unsortierte Sender prüfen" in
+  `StationManagementActivity`, Statuszeilen nach dem `renderUpdateState()`-
+  Muster aus `MainActivity`. Neues `unreachableBadge` in
+  `item_station_manage.xml` ("⚠ nicht erreichbar"), sichtbar wenn
+  `station.id in StationReachabilityChecker.unreachableIds.value`.
+
+### Verifiziert (Emulator, `test_device`)
+
+- Optik: Banner + Türkis sichtbar auf beiden Bildschirmen, Bullshitometer
+  bewegt sich live (SWR3 abgespielt, Balken bei 0% während "🎵 Musik").
+  ZAPPEN! löst sofortigen Reconnect aus (Logcat: "Sprache erkannt auf
+  'SWR3...' - schalte weiter zu 'SWR3...'" - bei nur 1 aktivem Sender via
+  Eskalationspfad korrekt auf sich selbst zurück, kein Hängenbleiben).
+- Import: `362 geprüft, 361 neu hinzugefügt` mit der echten Kodinerds-Liste
+  über den Emulator (nach dem Redirect-Fix), `adb shell run-as
+  com.radiozapper.mvp cat files/stations.json` bestätigt alle 361 neuen
+  Einträge korrekt deaktiviert in Kategorie "Unsortiert", bestehender SWR3
+  unverändert aktiviert in "National".
+- Check-Knopf: Live-Lauf über alle 361 "Unsortiert"-Sender gestartet,
+  Fortschrittsanzeige zählt korrekt hoch ("Prüfe 8 / 361 …" nach ~45s bei
+  Concurrency 3), erster echter Treffer "⚠ nicht erreichbar" bei "100'5
+  Alemannia" korrekt als Badge angezeigt, Sender blieb unverändert in der
+  Liste (kein Auto-Löschen). Kompletten 361er-Lauf nicht bis zum Ende
+  abgewartet (~15-25 Min. bei dieser Sender-Zahl) - Mechanismus
+  (Concurrency, Fortschritt, Timeout-Sicherheitsnetz) damit aber am echten
+  Datensatz verifiziert, nicht nur gegen eine kleine Testliste.
+- Crash-Log-Buffer nach jedem Schritt leer geprüft (`adb logcat -d | grep
+  -iE "FATAL|AndroidRuntime"`) - keine Exception über die gesamte
+  Testreihe.
+
+### Bewusst NICHT gemacht
+
+Kein automatisches Löschen nicht erreichbarer Sender (Nutzerentscheidung -
+ein falsch-negativer Check, z.B. durch eine kurze Netzwerkstörung während
+des Checks, würde sonst einen echten Sender unwiderruflich entfernen).
+Keine Persistenz der Check-Ergebnisse über einen App-Neustart hinweg (rein
+informativ für die aktuelle Sitzung, `unreachableIds` lebt nur im
+In-Memory-`StateFlow` von `StationReachabilityChecker`). Kein Reachability-
+Check beim Import selbst (siehe oben) - bewusste Abweichung vom
+Docker-Vorbild, dort verhindert der Check das Eindringen toter Sender in
+die LAUFENDE Rotation, hier landen Importe ohnehin deaktiviert.

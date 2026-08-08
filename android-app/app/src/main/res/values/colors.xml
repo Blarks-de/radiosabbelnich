@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="primary">#1565C0</color>
-    <color name="primary_dark">#0D47A1</color>
-    <color name="accent">#FF6F00</color>
+    <!-- Türkis wie das Web-Interface (webui.py, #1abc9c) - Optik-Angleichung, siehe RadioZapper_Android_Fahrplan.md Phase 5. -->
+    <color name="primary">#1ABC9C</color>
+    <color name="primary_dark">#149174</color>
+    <color name="accent">#1ABC9C</color>
     <color name="ic_launcher_background">#1565C0</color>
+    <color name="bs_meter_track">#33888888</color>
 </resources>

@@ -66,6 +66,12 @@ class StreamAnalyzer(private val scope: CoroutineScope) {
     private val _status = MutableStateFlow(PlaybackStatus.IDLE)
     val status: StateFlow<PlaybackStatus> = _status
 
+    // Roh-Anteil (0.0-1.0) der letzten SMOOTHING_WINDOW_CHUNKS Haeppchen mit erkanntem
+    // Text, VOR der Hysterese - Basis fuers "Bullshitometer" in der UI. null = noch kein
+    // volles Fenster/idle, siehe runAnalysis() unten.
+    private val _speechRatio = MutableStateFlow<Double?>(null)
+    val speechRatio: StateFlow<Double?> = _speechRatio
+
     private var job: Job? = null
 
     fun start(url: String, modelPath: String) {
@@ -80,6 +86,7 @@ class StreamAnalyzer(private val scope: CoroutineScope) {
         job?.cancel()
         job = null
         _status.value = PlaybackStatus.IDLE
+        _speechRatio.value = null
     }
 
     private suspend fun runAnalysis(url: String, modelPath: String) {
@@ -170,6 +177,7 @@ class StreamAnalyzer(private val scope: CoroutineScope) {
 
                                 if (recentChunks.size >= SMOOTHING_WINDOW_CHUNKS) {
                                     val speechRatio = recentChunks.count { it }.toDouble() / recentChunks.size
+                                    _speechRatio.value = speechRatio
                                     val shouldBeSpeech = when {
                                         !hasConfirmedOnce -> speechRatio >= 0.5
                                         confirmedSpeech -> speechRatio > RATIO_TO_CONFIRM_MUSIC
@@ -203,6 +211,7 @@ class StreamAnalyzer(private val scope: CoroutineScope) {
         } catch (e: Exception) {
             Log.e(TAG, "Analyse abgebrochen fuer $url", e)
             _status.value = PlaybackStatus.ERROR
+            _speechRatio.value = null
         } finally {
             runCatching { codec?.stop() }
             runCatching { codec?.release() }

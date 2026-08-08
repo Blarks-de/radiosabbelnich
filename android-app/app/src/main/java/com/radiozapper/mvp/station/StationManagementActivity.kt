@@ -14,6 +14,10 @@ import com.radiozapper.mvp.R
 import com.radiozapper.mvp.databinding.ActivityStationManagementBinding
 import com.radiozapper.mvp.databinding.DialogEditStationBinding
 import com.radiozapper.mvp.databinding.ItemStationManageBinding
+import com.radiozapper.mvp.importer.CheckState
+import com.radiozapper.mvp.importer.ImportState
+import com.radiozapper.mvp.importer.StationImporter
+import com.radiozapper.mvp.importer.StationReachabilityChecker
 import com.radiozapper.mvp.model.Categories
 import com.radiozapper.mvp.model.Station
 import com.radiozapper.mvp.model.StationRepository
@@ -30,6 +34,7 @@ import kotlinx.coroutines.launch
 class StationManagementActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityStationManagementBinding
+    private var unreachableIds: Set<String> = emptySet()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -42,6 +47,67 @@ class StationManagementActivity : AppCompatActivity() {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 StationRepository.stations.collect { renderStations(it) }
             }
+        }
+
+        setupImport()
+        setupReachabilityCheck()
+    }
+
+    /** Vorbelegt mit der gespeicherten/Default-URL (siehe StationImporter.getImportUrl()). */
+    private fun setupImport() {
+        binding.importUrlInput.setText(StationImporter.getImportUrl(this))
+
+        binding.importButton.setOnClickListener {
+            StationImporter.setImportUrl(this, binding.importUrlInput.text.toString())
+            binding.importUrlInput.setText(StationImporter.getImportUrl(this))
+            lifecycleScope.launch { StationImporter.runImport(applicationContext) }
+        }
+
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                StationImporter.state.collect { state -> renderImportState(state) }
+            }
+        }
+    }
+
+    private fun renderImportState(state: ImportState) {
+        binding.importButton.isEnabled = state !is ImportState.Loading
+        binding.importStatusText.text = when (state) {
+            is ImportState.Idle -> ""
+            is ImportState.Loading -> getString(R.string.import_loading)
+            is ImportState.Done -> getString(R.string.import_done, state.checked, state.added)
+            is ImportState.Error -> getString(R.string.import_error, state.message)
+        }
+    }
+
+    /** Beschraenkt auf Categories.IMPORTED ("Unsortiert") - siehe StationReachabilityChecker-Klassen-Doc. */
+    private fun setupReachabilityCheck() {
+        binding.checkUnsortedButton.setOnClickListener {
+            lifecycleScope.launch { StationReachabilityChecker.checkCategory(Categories.IMPORTED) }
+        }
+
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                StationReachabilityChecker.state.collect { state -> renderCheckState(state) }
+            }
+        }
+
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                StationReachabilityChecker.unreachableIds.collect { ids ->
+                    unreachableIds = ids
+                    renderStations(StationRepository.stations.value)
+                }
+            }
+        }
+    }
+
+    private fun renderCheckState(state: CheckState) {
+        binding.checkUnsortedButton.isEnabled = state !is CheckState.Checking
+        binding.checkStatusText.text = when (state) {
+            is CheckState.Idle -> ""
+            is CheckState.Checking -> getString(R.string.check_running, state.checked, state.total)
+            is CheckState.Done -> getString(R.string.check_done, state.checked, state.unreachable)
         }
     }
 
@@ -78,6 +144,8 @@ class StationManagementActivity : AppCompatActivity() {
                 row.enabledCheckbox.setOnCheckedChangeListener { _, checked ->
                     lifecycleScope.launch { runCatchingToToast { StationRepository.setEnabled(station.id, checked) } }
                 }
+                row.unreachableBadge.visibility =
+                    if (station.id in unreachableIds) android.view.View.VISIBLE else android.view.View.GONE
                 row.editButton.setOnClickListener { showEditDialog(existing = station) }
                 row.deleteButton.setOnClickListener { confirmDelete(station) }
                 binding.categoriesContainer.addView(row.root)

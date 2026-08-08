@@ -56,4 +56,20 @@
 
     <string name="lock_reason_speech">⏸ Pause wegen Sprache</string>
     <string name="lock_reason_dead">⚠ Antwortet nicht</string>
+
+    <string name="btn_zappen">⚡ ZAPPEN!</string>
+    <string name="bs_meter_label">🤥 Bullshitometer</string>
+    <string name="bs_meter_off">–</string>
+    <string name="bs_meter_pct">%1$d%%</string>
+
+    <string name="cfg_import_heading">📻 Sender-Import</string>
+    <string name="label_import_url">Playlist-URL (M3U, z.B. Kodi-Radioliste)</string>
+    <string name="btn_import_stations">Sender importieren</string>
+    <string name="import_loading">Lade Playlist …</string>
+    <string name="import_done">%1$d geprüft, %2$d neu hinzugefügt (deaktiviert, „Unsortiert“).</string>
+    <string name="import_error">Import fehlgeschlagen: %1$s</string>
+    <string name="btn_check_unsorted">🔍 Unsortierte Sender prüfen</string>
+    <string name="check_running">Prüfe %1$d / %2$d …</string>
+    <string name="check_done">%1$d geprüft, %2$d nicht erreichbar.</string>
+    <string name="unreachable_badge">⚠ nicht erreichbar</string>
 </resources>

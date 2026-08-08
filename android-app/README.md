@@ -89,6 +89,31 @@ Ban-System, kein News-Break, keine Settings-UI.
   kein Kategorie-Gruppieren - das ist Aufgabe der Verwaltungs-Activity),
   Stop-Button, Statusanzeige, Modell-Download-Fortschritt, Button
   "Sender verwalten"
+- **Optik an das Web-Interface angeglichen** (`MainActivity.kt`): Banner-Bild
+  (dieselbe Datei wie im Web-Interface) und Türkis-Akzentfarbe (`#1ABC9C`).
+  Live-Balken "🤥 Bullshitometer" unter den Steuerbuttons zeigt die rohe
+  Sprache-Wahrscheinlichkeit (`StreamAnalyzer.speechRatio`, VOR der
+  Hysterese) mit demselben grün→rot-Farbverlauf wie im Web. Button "⚡
+  ZAPPEN!" neben "■ Stopp" fuer den manuellen Sofort-Wechsel (ruft
+  dieselbe Ring-Logik wie ein automatisch erkannter Sprache-Treffer auf).
+  Kein separater STT-Meter (Android hat nur einen Detektor, kein VAD+STT-
+  Kombi wie das Docker-Projekt) und kein Fingerprint-Chip (Fingerprinting
+  ist noch nicht umgesetzt, siehe Fahrplan Phase 4).
+- **Sender-Import aus einer M3U-Playlist** (`importer/StationImporter.kt`,
+  Vorbild `station_import.py`) - Textfeld "Sender-Import" in der
+  Verwaltungs-Activity, vorbelegt mit derselben Default-Playlist wie im
+  Docker-Projekt (Kodinerds-Kodi-Radioliste, `http://bit.ly/kn-kodi-radio`,
+  frei aenderbar). Laedt die Playlist, parst `#EXTINF`-Eintraege, filtert
+  gegen bereits vorhandene Sender (Name/URL) UND Duplikate innerhalb der
+  Playlist selbst, uebernimmt den Rest deaktiviert in die Kategorie
+  "Unsortiert" - genau wie beim Docker-Projekt landet ein Import nie
+  ungefragt in der laufenden Rotation. Bewusst OHNE Erreichbarkeitspruefung
+  beim Import selbst (siehe "Architektur in Kuerze" unten fuer die
+  Begruendung). Dafuer ein separater Button "🔍 Unsortierte Sender pruefen"
+  (`importer/StationReachabilityChecker.kt`), der genau diese Pruefung fuer
+  alle Sender in "Unsortiert" nachtraegt und nicht erreichbare Sender mit
+  einem Badge "⚠ nicht erreichbar" markiert - rein informativ, es wird
+  nichts automatisch geloescht.
 - **Build-Zeitstempel in der UI** (`Build: YYYY-MM-DD HH:MM` direkt unter
   dem App-Titel, `BuildConfig.BUILD_TIME`) - entsteht automatisch bei
   jedem Build. Zweck: von aussen erkennbar, ob eine gerade installierte
@@ -244,7 +269,14 @@ adb logcat -s PlaybackService:*   # zeigt jeden Sprache/Musik-Wechsel
   Datei noch nicht existiert.
 - `station/StationManagementActivity.kt` - eigener Bildschirm fuer CRUD,
   kategorie-gruppierte Liste (volles Neu-Aufbauen bei jeder Aenderung,
-  kein RecyclerView - Datenmenge klein), Add/Edit-`AlertDialog`.
+  kein RecyclerView - Datenmenge klein), Add/Edit-`AlertDialog`, plus die
+  Import-/Check-Sektion (siehe eigener Abschnitt unten).
+- `importer/StationImporter.kt` - laedt/parst eine M3U-Playlist und
+  uebernimmt neue Sender per `StationRepository.bulkAdd()` (siehe eigener
+  Abschnitt unten fuer Details).
+- `importer/StationReachabilityChecker.kt` - separater, manuell
+  ausgeloester Erreichbarkeits-Check fuer Sender der Kategorie "Unsortiert"
+  (siehe eigener Abschnitt unten).
 - `vosk/VoskModelManager.kt` - Download+Entpacken des Vosk-Modells nach
   `filesDir`, Fortschritt als `StateFlow<ModelState>`
 - `playback/StationLockReason.kt` - Enum `{SPEECH_COOLDOWN, DEAD}` fuer
@@ -254,16 +286,22 @@ adb logcat -s PlaybackService:*   # zeigt jeden Sprache/Musik-Wechsel
   geglaetteten Status mit automatischem Umschalten, auf Aenderungen aus
   `StationRepository.stations` (siehe oben) UND auf ExoPlayer-Fehler/
   Buffering-Timeouts (Watchdog, siehe eigener Abschnitt unten); exponiert
-  `currentStation`/`status`/`lockedStations` als StateFlows fuer die UI;
-  Notification via `NotificationCompat`/`ServiceCompat.startForeground`
+  `currentStation`/`status`/`speechRatio`/`lockedStations` als StateFlows
+  fuer die UI; `manualSkip()` fuer den "⚡ ZAPPEN!"-Button (ruft intern
+  dieselbe `attemptAutoSwitch()`-Logik wie ein automatisch erkannter
+  Sprache-Treffer auf); Notification via `NotificationCompat`/
+  `ServiceCompat.startForeground`
 - `analysis/StreamAnalyzer.kt` - **eigene** MediaExtractor/MediaCodec-
   Dekodierung desselben Stream-URLs nur fuer die Analyse (unabhaengig
   vom ExoPlayer der Wiedergabe), Downmix+Resample auf 16kHz-Mono
   (`MonoResampler.kt`), Fuetterung von Vosk, gleitendes Mehrheitsvotum
-  mit Hysterese fuer den geglaetteten Sprache/Musik-Status
+  mit Hysterese fuer den geglaetteten Sprache/Musik-Status. Der rohe
+  Anteil VOR der Hysterese (`speechRatio`) wird zusaetzlich als eigener
+  `StateFlow<Double?>` exponiert - Basis fuers "🤥 Bullshitometer" in der UI
+  (`null` = idle/noch kein volles Glaettungsfenster).
 - `MainActivity.kt` - bindet an den Service, zeigt Senderliste (reaktiv
-  aus `StationRepository`), Status und Modell-Fortschritt live an, Button
-  zur Verwaltungs-Activity
+  aus `StationRepository`), Status, Bullshitometer und Modell-Fortschritt
+  live an, Buttons zur Verwaltungs-Activity und fuer ZAPPEN!/Stopp
 
 ### Bewusste Vereinfachung ggue. dem Docker-Projekt: zwei Dekodierungen
 
@@ -328,6 +366,50 @@ beide Sperrgruende einheitlich, inkl. der "alle gesperrt"-Eskalation
 (beide Maps leeren statt haengenzubleiben, wie `dead_until.clear()`).
 Manuelle Sender-Wahl (`manualPlay()`, von `MainActivity` statt `play()`
 aufgerufen) hebt beide Sperren fuer den gewaehlten Sender auf.
+
+### M3U-/Kodi-Sender-Import
+
+Vorbild: `station_import.py` im Docker-Projekt (siehe dessen `CLAUDE.md`,
+Abschnitt "Sender-Import"). `StationImporter.runImport()` laedt die
+Playlist-URL (Default identisch zum Docker-Projekt: die Kodinerds-Kodi-
+Radioliste, editierbar per Textfeld, in `SharedPreferences` gespeichert wie
+bei `UpdateManager`), parst `#EXTINF:...,Name` + folgende URL-Zeile 1:1
+nach demselben Muster wie `station_import.parse_m3u`, filtert Duplikate
+(gegen die bestehende Senderliste UND innerhalb der Playlist selbst, je
+nach Name UND URL) und uebernimmt den Rest per neuem
+`StationRepository.bulkAdd()` (ein einziger Schreibvorgang fuer die ganze
+Batch statt einem pro Sender) deaktiviert in die Kategorie "Unsortiert".
+
+`HttpURLConnection` folgt Redirects nur INNERHALB desselben Protokolls
+automatisch - die Default-URL (`bit.ly/...`) leitet per 301 von `http://`
+auf `https://` um, was beim ersten echten Test kommentarlos die
+Redirect-Antwortseite statt der Playlist lieferte (siehe `SESSION.md`,
+2026-08-08). `fetchM3u()` folgt `Location`-Headern deshalb von Hand,
+protokolluebergreifend inklusive.
+
+**Bewusst OHNE** den 8s-Audiofluss-Check des Docker-Vorbilds
+(`check_reachable()`) waehrend des Imports selbst - bei einer Playlist mit
+hunderten Eintraegen waere das auf dem Handy zu langsam/akkuintensiv, UND
+unnoetig: importierte Sender landen ohnehin deaktiviert in "Unsortiert",
+eine kaputte URL darin ist harmlos bis zur bewussten Aktivierung durch den
+Nutzer (anders als im Docker-Projekt, wo der Check verhindert, dass ein
+toter Sender in die LAUFENDE Rotation gelangt). Stattdessen ein separater,
+manuell ausgeloester Button "🔍 Unsortierte Sender pruefen"
+(`StationReachabilityChecker.checkCategory()`, beschraenkt auf Kategorie
+"Unsortiert") mit einer eigenstaendigen MediaExtractor/MediaCodec-
+Dekodierschleife (kein Vosk noetig) - konzeptionell identisch zu
+`check_reachable()`: Wall-Clock-begrenztes Zeitfenster
+(`CHECK_WINDOW_MS=8000`), verlangt wird Audio bis in die letzten
+`CHECK_TAIL_MS=3000` hinein, nicht nur "kam ueberhaupt was". Begrenzte
+Parallelitaet per Kotlin-`Semaphore` (`CHECK_CONCURRENCY=3`, deutlich
+weniger als die 10 im Python-Vorbild - MediaCodec-Dekodierung ist auf dem
+Handy teurer, und nebenbei laeuft meist noch Wiedergabe + Vosk-Analyse im
+selben Prozess). Ergebnis ist rein informativ (`unreachableIds`, nur
+In-Memory fuer die aktuelle Sitzung) - ein Badge "⚠ nicht erreichbar" in
+der Verwaltungs-Activity, **kein automatisches Loeschen**: das bleibt eine
+bewusste Entscheidung ueber den bestehenden Loeschen-Button (ein
+falsch-negativer Check, z.B. durch eine kurze Netzwerkstoerung, wuerde
+sonst einen echten Sender unwiderruflich entfernen).
 
 ## Update-Mechanismus (Tailscale, kein Play Store)
 
@@ -433,13 +515,20 @@ dafuer das Textfeld - einfach die Tailscale-IP `100.92.3.18` eintragen.
   Play-Liste auf dem Hauptschirm).
 - **Kategorienliste selbst ist weiterhin nur im Code aenderbar**
   (`model/Categories.kt`) - anders als die Sender ist sie keine
-  Nutzerdateneinstellung. Kein Bulk-Import (M3U o.ae., anders als im
-  Docker-Projekt), keine Drag-Sortierung innerhalb einer Kategorie,
+  Nutzerdateneinstellung. Keine Drag-Sortierung innerhalb einer Kategorie,
   keine Sender-Suche - bei der auf dem Handy erwarteten Senderzahl
-  (Dutzende, nicht Hunderte) bisher nicht als notwendig eingeschaetzt.
-- **Kein Import-Reachability-Check** (anders als `station_import.py`s
-  `check_reachable()` im Docker-Projekt) - ein neu angelegter Sender mit
-  kaputter URL faellt erst beim tatsaechlichen Abspielversuch auf.
+  (Dutzende, nicht Hunderte je Kategorie) bisher nicht als notwendig
+  eingeschaetzt, auch wenn ein M3U-Import mittlerweile hunderte Sender auf
+  einen Schlag in "Unsortiert" ablegen kann (siehe "M3U-/Kodi-Sender-
+  Import" oben) - genau dafuer gibt es dort den separaten "🔍 Unsortierte
+  Sender pruefen"-Knopf statt eines automatischen Checks beim Import.
+- **Ein manuell einzeln angelegter Sender (Add-Dialog) hat weiterhin
+  keinen Reachability-Check** (anders als `station_import.py`s
+  `check_reachable()` im Docker-Projekt, das dort JEDEN neuen Sender prueft)
+  - eine kaputte URL faellt erst beim tatsaechlichen Abspielversuch auf.
+  Fuer Sender aus dem M3U-Import gibt es den Check jetzt (siehe oben), fuer
+  einzeln hinzugefuegte bewusst nicht dupliziert - der bestehende Watchdog
+  (siehe oben) faengt das beim ersten Abspielversuch ohnehin zuverlaessig ab.
 - **Update-Mechanismus braucht denselben Debug-Signierschluessel** ueber
   Installationen hinweg - Android verweigert ein Update, wenn der neue
   APK-Signer vom installierten abweicht. Solange `~/.android/
@@ -450,3 +539,11 @@ dafuer das Textfeld - einfach die Tailscale-IP `100.92.3.18` eintragen.
 - **Kein automatischer Update-Check, keine Benachrichtigung** - der
   Nutzer muss selbst auf "Nach Update suchen" tippen. Kein Hintergrund-
   Polling (bewusst - haette einen weiteren Dauer-Netzwerkzugriff bedeutet).
+- **"🔍 Unsortierte Sender pruefen" ist bei einer grossen Importliste
+  langsam** (live gemessen: ~8 Sender/45s bei `CHECK_CONCURRENCY=3`, bei
+  361 importierten Sendern also grob 15-25 Minuten) und verbraucht dabei
+  spuerbar Akku/Datenvolumen - bewusst in Kauf genommen statt eines
+  automatischen Checks beim Import selbst (siehe "M3U-/Kodi-Sender-Import"
+  oben fuer die Begruendung). Ergebnisse (`unreachableIds`) ueberleben
+  ausserdem keinen App-Neustart - rein informativ fuer die aktuelle
+  Sitzung, kein Persistenz-Feld in `stations.json`.

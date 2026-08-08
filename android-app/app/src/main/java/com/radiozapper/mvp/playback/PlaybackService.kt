@@ -158,6 +158,7 @@ class PlaybackService : LifecycleService() {
     }
 
     val status get() = analyzer.status
+    val speechRatio get() = analyzer.speechRatio
 
     override fun onCreate() {
         super.onCreate()
@@ -194,6 +195,14 @@ class PlaybackService : LifecycleService() {
         refreshLockedStationsSnapshot()
         play(station, modelPath)
     }
+
+    /**
+     * Fuer den "⚡ ZAPPEN!"-Button (analog zum Web-Interface): sofort weiterschalten,
+     * weil hier gerade geredet wird - inhaltlich exakt dieselbe Aktion wie ein
+     * automatisch erkannter Sprache-Treffer, nur manuell ausgeloest statt ueber
+     * handleStatusForAutoSwitch(). Reine Weiterleitung, kein Duplikat der Ring-Logik.
+     */
+    fun manualSkip() = attemptAutoSwitch()
 
     fun play(station: Station, modelPath: String?) {
         _currentStation.value = station
