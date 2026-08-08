@@ -184,7 +184,15 @@ class SttSettingsActivity : AppCompatActivity() {
                     Toast.makeText(this, R.string.language_action_error_empty, Toast.LENGTH_LONG).show()
                     return@setPositiveButton
                 }
-                SttSettings.addOrUpdateLanguage(this, code, LanguageConfig(modelUrl = modelUrl))
+                // Existiert der Code bereits (das ist zugleich die einzige
+                // Moeglichkeit, eine Modell-URL zu aendern), nur die URL
+                // ersetzen: ein frisches LanguageConfig wuerde sonst die
+                // kalibrierten Schwellen dieser Sprache stillschweigend auf
+                // die Defaults zuruecksetzen (Review-Befund 10, siehe
+                // SESSION.md).
+                val existing = SttSettings.getLanguages(this)[code]
+                val cfg = existing?.copy(modelUrl = modelUrl) ?: LanguageConfig(modelUrl = modelUrl)
+                SttSettings.addOrUpdateLanguage(this, code, cfg)
                 refreshAll()
             }
             .setNegativeButton(R.string.btn_cancel, null)
@@ -199,7 +207,13 @@ class SttSettingsActivity : AppCompatActivity() {
                 val modelUrl = SttSettings.getLanguages(this)[code]?.modelUrl
                 try {
                     SttSettings.deleteLanguage(this, code)
-                    if (modelUrl != null) VoskModelManager.deleteModel(this, code, modelUrl)
+                    // Der Modell-Ordner wird aus der URL abgeleitet (siehe
+                    // VoskModelManager), zwei Sprachen mit derselben URL teilen
+                    // sich also die Dateien - dann darf das Loeschen der einen
+                    // der anderen nicht das Modell wegnehmen (beim Aufraeumen
+                    // des Phase-8-Testaufbaus aufgefallen).
+                    val stillUsed = SttSettings.getLanguages(this).values.any { it.modelUrl == modelUrl }
+                    if (modelUrl != null && !stillUsed) VoskModelManager.deleteModel(this, code, modelUrl)
                     refreshAll()
                 } catch (e: IllegalStateException) {
                     Toast.makeText(this, e.message, Toast.LENGTH_LONG).show()

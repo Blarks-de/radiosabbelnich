@@ -78,18 +78,52 @@ private val SMOOTHING_WINDOW_CHUNKS = (SMOOTHING_WINDOW_SECONDS * TARGET_SAMPLE_
  * Mehrsprachigkeit (Phase 7): `voskModelCache` liefert das `Model`-Objekt
  * fuer `language` (Lazy-Load + LRU, siehe vosk/VoskModelCache.kt) - der
  * Cache BESITZT das Model, `StreamAnalyzer` darf es deshalb nie selbst
- * `close()`n (siehe `runAnalysis()`s `finally`-Block).
+ * `close()`n. Seit dem Phase-8-Review wird es fuer die Dauer eines Laufs
+ * per `acquire()`/`release()` belegt, damit die LRU-Verdraengung es nicht
+ * unter einem noch laufenden `Recognizer` wegschliesst (Review-Befund 3,
+ * siehe SESSION.md).
+ *
+ * Fehlerbehandlung seit dem Phase-8-Review (Befund 2): ein Fehler HIER
+ * bedeutet "die Analyse konnte nicht laufen", NICHT "der Sender ist tot" -
+ * ein nicht ladbares Vosk-Modell, ein Container, den `MediaExtractor` nicht
+ * versteht, oder ein fehlender Audio-Track sagen ueber die vom ExoPlayer
+ * abgespielte Quelle gar nichts aus. Deshalb landet die Ursache in
+ * `analyzerError` (rein informativ, PlaybackService startet die Analyse
+ * daraufhin begrenzt oft neu) statt wie frueher ueber
+ * `PlaybackStatus.ERROR` in der Tot-Sperre des Watchdogs.
+ *
+ * `generation` schuetzt gegen einen Nachzuegler: `stop()`/`start()` koennen
+ * einen laufenden Lauf nur KOOPERATIV abbrechen (die blockierenden
+ * MediaCodec-/MediaExtractor-Aufrufe sind nicht unterbrechbar). Ein
+ * abgeloester Lauf darf deshalb keine Status-/Fehler-/Fingerprint-Werte
+ * mehr veroeffentlichen - sonst wuerde z.B. ein spaeter Fehler der ALTEN
+ * Quelle dem laengst laufenden NEUEN Sender zugeschrieben (Befund 5).
  */
 class StreamAnalyzer(private val scope: CoroutineScope) {
 
     private val _status = MutableStateFlow(PlaybackStatus.IDLE)
     val status: StateFlow<PlaybackStatus> = _status
 
+    // Klartext-Ursache des letzten Analyse-Abbruchs (null = kein Fehler),
+    // siehe Klassen-Doc oben - bewusst getrennt vom Sender-Zustand.
+    private val _analyzerError = MutableStateFlow<String?>(null)
+    val analyzerError: StateFlow<String?> = _analyzerError
+
     // Roh-Anteil (0.0-1.0) der letzten SMOOTHING_WINDOW_CHUNKS Haeppchen mit erkanntem
     // Text, VOR der Hysterese - Basis fuers "Bullshitometer" in der UI. null = noch kein
     // volles Fenster/idle, siehe runAnalysis() unten.
     private val _speechRatio = MutableStateFlow<Double?>(null)
     val speechRatio: StateFlow<Double?> = _speechRatio
+
+    // Derselbe Rohwert, aber als EREIGNIS pro Haeppchen statt als Zustand:
+    // ein StateFlow verschluckt identische Folgewerte, und der Rohwert kennt
+    // nur SMOOTHING_WINDOW_CHUNKS+1 diskrete Stufen - bei stabiler Sprache
+    // steht er auf 1.0 und der Kalibrierungs-Wizard bekaeme danach kein
+    // einziges Sample mehr (Review-Befund 4, siehe SESSION.md). Die UI
+    // (Bullshitometer) nutzt weiterhin den StateFlow oben, die
+    // Sample-Sammlung diesen Flow hier.
+    private val _speechRatioSamples = MutableSharedFlow<Double>(extraBufferCapacity = 16)
+    val speechRatioSamples: SharedFlow<Double> = _speechRatioSamples
 
     // Fingerprint-Ergebnisse (siehe fingerprint/FingerprintDb.kt) sind
     // einmalige Ereignisse, kein Dauerzustand - bewusst SharedFlow statt
@@ -102,6 +136,11 @@ class StreamAnalyzer(private val scope: CoroutineScope) {
 
     private var job: Job? = null
 
+    // Siehe Klassen-Doc: laufende Nummer des aktuell gueltigen Laufs. Wird
+    // aus dem Analyse-Thread gelesen, deshalb @Volatile.
+    @Volatile
+    private var generation = 0
+
     fun start(
         url: String,
         modelPath: String,
@@ -113,10 +152,11 @@ class StreamAnalyzer(private val scope: CoroutineScope) {
         fingerprintDb: FingerprintDb?,
     ) {
         stop()
+        val myGeneration = ++generation
         _status.value = PlaybackStatus.CONNECTING
         job = scope.launch(Dispatchers.IO) {
             runAnalysis(
-                url, modelPath, language, voskModelCache,
+                myGeneration, url, modelPath, language, voskModelCache,
                 ratioToConfirmSpeech, ratioToConfirmMusic, stationLabel, fingerprintDb,
             )
         }
@@ -125,11 +165,17 @@ class StreamAnalyzer(private val scope: CoroutineScope) {
     fun stop() {
         job?.cancel()
         job = null
+        generation++ // ein noch auslaufender Lauf darf nichts mehr veroeffentlichen
         _status.value = PlaybackStatus.IDLE
         _speechRatio.value = null
+        _analyzerError.value = null
     }
 
+    /** True, solange `runGeneration` noch der aktuell gueltige Lauf ist (siehe Klassen-Doc). */
+    private fun isCurrent(runGeneration: Int): Boolean = runGeneration == generation
+
     private suspend fun runAnalysis(
+        runGeneration: Int,
         url: String,
         modelPath: String,
         language: String,
@@ -142,13 +188,16 @@ class StreamAnalyzer(private val scope: CoroutineScope) {
         var extractor: MediaExtractor? = null
         var codec: MediaCodec? = null
         var recognizer: Recognizer? = null
+        var modelAcquired = false
 
         try {
             // Model gehoert dem Cache (LRU, ggf. ueber mehrere Sender-Wechsel
             // hinweg wiederverwendet) - NICHT selbst schliessen, siehe
-            // Klassen-Doc oben.
-            val model: Model = voskModelCache.get(modelPath, language)
+            // Klassen-Doc oben. acquire()/release() haelt es fuer die Dauer
+            // dieses Laufs gegen die LRU-Verdraengung fest.
+            val model: Model = voskModelCache.acquire(modelPath, language)
                 ?: throw IllegalStateException("Vosk-Modell fuer Sprache '$language' nicht ladbar")
+            modelAcquired = true
             recognizer = Recognizer(model, TARGET_SAMPLE_RATE.toFloat())
 
             extractor = MediaExtractor()
@@ -170,7 +219,11 @@ class StreamAnalyzer(private val scope: CoroutineScope) {
             var channelCount = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
 
             val resampler = MonoResampler(TARGET_SAMPLE_RATE)
-            val chunkBuffer = ArrayDeque<Short>()
+            // Rest-Samples, die noch kein volles Haeppchen ergeben haben.
+            // Bewusst ShortArray statt ArrayDeque<Short>: letzteres boxt JEDES
+            // Sample einzeln (16.000 Objekte pro Sekunde, dauerhaft) - siehe
+            // Review-Befund 1 in SESSION.md.
+            var pending = ShortArray(0)
 
             // Gleitendes Fenster der letzten Chunk-Verdikte (true = Text erkannt)
             // fuer das Mehrheitsvotum, siehe Klassen-Doc oben.
@@ -181,8 +234,14 @@ class StreamAnalyzer(private val scope: CoroutineScope) {
             // Fingerprinting-Trigger (siehe Konstante FINGERPRINT_TRIGGER_CHUNKS
             // oben) - lokale Variablen wie recentChunks etc., dadurch bei jedem
             // start() automatisch frisch, kein manuelles Zuruecksetzen noetig.
+            // Der Puffer ist FEST auf die fuer einen Check noetigen Sekunden
+            // dimensioniert und wird nach dem Check nicht weiter gefuellt: er
+            // wird danach ohnehin nie wieder gelesen, wuchs frueher aber bis
+            // zum Ende des Sprache-Streaks weiter (Review-Befund 1, OOM bei
+            // langen Wortbeitraegen/waehrend einer Kalibrierung).
             var rawSpeechStreak = 0
-            val fingerprintBuffer = mutableListOf<Short>()
+            val fingerprintBuffer = ShortArray(CHUNK_SAMPLES * FINGERPRINT_TRIGGER_CHUNKS)
+            var fingerprintFilled = 0
             var fingerprintCheckedThisRun = false
 
             val bufferInfo = MediaCodec.BufferInfo()
@@ -219,10 +278,12 @@ class StreamAnalyzer(private val scope: CoroutineScope) {
 
                             val mono = downmixToMono(shorts, channelCount)
                             val resampled = resampler.process(mono, sourceRate)
-                            for (s in resampled) chunkBuffer.addLast(s)
+                            pending = if (pending.isEmpty()) resampled else pending + resampled
 
-                            while (chunkBuffer.size >= CHUNK_SAMPLES) {
-                                val chunk = ShortArray(CHUNK_SAMPLES) { chunkBuffer.removeFirst() }
+                            var consumed = 0
+                            while (pending.size - consumed >= CHUNK_SAMPLES) {
+                                val chunk = pending.copyOfRange(consumed, consumed + CHUNK_SAMPLES)
+                                consumed += CHUNK_SAMPLES
 
                                 val endOfUtterance = recognizer.acceptWaveForm(chunk, chunk.size)
                                 val text = extractText(
@@ -235,19 +296,26 @@ class StreamAnalyzer(private val scope: CoroutineScope) {
                                 // radiozapper.py main().
                                 if (chunkIsSpeech) {
                                     rawSpeechStreak++
-                                    fingerprintBuffer.addAll(chunk.toList())
-                                    if (fingerprintDb != null && !fingerprintCheckedThisRun &&
-                                        rawSpeechStreak >= FINGERPRINT_TRIGGER_CHUNKS
-                                    ) {
-                                        fingerprintCheckedThisRun = true
-                                        val outcome = fingerprintDb.matchOrLearn(
-                                            fingerprintBuffer.toShortArray(), TARGET_SAMPLE_RATE, stationLabel
-                                        )
-                                        if (outcome != null) _fingerprintOutcomes.tryEmit(outcome)
+                                    if (fingerprintDb != null && !fingerprintCheckedThisRun) {
+                                        val room = fingerprintBuffer.size - fingerprintFilled
+                                        val take = minOf(room, chunk.size)
+                                        if (take > 0) {
+                                            chunk.copyInto(fingerprintBuffer, fingerprintFilled, 0, take)
+                                            fingerprintFilled += take
+                                        }
+                                        if (rawSpeechStreak >= FINGERPRINT_TRIGGER_CHUNKS) {
+                                            fingerprintCheckedThisRun = true
+                                            val outcome = fingerprintDb.matchOrLearn(
+                                                fingerprintBuffer.copyOf(fingerprintFilled), TARGET_SAMPLE_RATE, stationLabel
+                                            )
+                                            if (outcome != null && isCurrent(runGeneration)) {
+                                                _fingerprintOutcomes.tryEmit(outcome)
+                                            }
+                                        }
                                     }
                                 } else {
                                     rawSpeechStreak = 0
-                                    fingerprintBuffer.clear()
+                                    fingerprintFilled = 0
                                     fingerprintCheckedThisRun = false
                                 }
 
@@ -256,9 +324,13 @@ class StreamAnalyzer(private val scope: CoroutineScope) {
                                     recentChunks.removeFirst()
                                 }
 
-                                if (recentChunks.size >= SMOOTHING_WINDOW_CHUNKS) {
+                                if (recentChunks.size >= SMOOTHING_WINDOW_CHUNKS && isCurrent(runGeneration)) {
                                     val speechRatio = recentChunks.count { it }.toDouble() / recentChunks.size
                                     _speechRatio.value = speechRatio
+                                    // Zusaetzlich als Ereignis, siehe Klassen-Doc
+                                    // (Kalibrierung braucht JEDES Haeppchen, auch
+                                    // wenn sich der Wert nicht geaendert hat).
+                                    _speechRatioSamples.tryEmit(speechRatio)
                                     val shouldBeSpeech = when {
                                         !hasConfirmedOnce -> speechRatio >= 0.5
                                         confirmedSpeech -> speechRatio > ratioToConfirmMusic
@@ -271,6 +343,7 @@ class StreamAnalyzer(private val scope: CoroutineScope) {
                                     }
                                 }
                             }
+                            if (consumed > 0) pending = pending.copyOfRange(consumed, pending.size)
                         }
                         codec.releaseOutputBuffer(outputIndex, false)
                         if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
@@ -289,18 +362,39 @@ class StreamAnalyzer(private val scope: CoroutineScope) {
                     }
                 }
             }
+
+            // Hier angekommen ohne Cancel heisst: der Stream hat ein Ende
+            // geliefert (Verbindungsabbruch, Sender aus). Frueher lief die
+            // Analyse danach stillschweigend nie wieder an - jetzt sichtbar
+            // als Fehler, damit PlaybackService sie begrenzt oft neu startet.
+            if (coroutineContext.isActive && isCurrent(runGeneration)) {
+                Log.w(TAG, "Analyse-Stream beendet fuer $url")
+                _status.value = PlaybackStatus.ERROR
+                _speechRatio.value = null
+                _analyzerError.value = "Analyse-Datenstrom beendet"
+            }
         } catch (e: Exception) {
-            Log.e(TAG, "Analyse abgebrochen fuer $url", e)
-            _status.value = PlaybackStatus.ERROR
-            _speechRatio.value = null
+            // Nachzuegler eines laengst abgeloesten Laufs duerfen nichts mehr
+            // veroeffentlichen (siehe Klassen-Doc, generation).
+            if (isCurrent(runGeneration)) {
+                Log.e(TAG, "Analyse abgebrochen fuer $url", e)
+                _status.value = PlaybackStatus.ERROR
+                _speechRatio.value = null
+                _analyzerError.value = e.message ?: e.toString()
+            } else {
+                Log.d(TAG, "Fehler eines abgeloesten Analyse-Laufs verworfen ($url): ${e.message}")
+            }
         } finally {
             runCatching { codec?.stop() }
             runCatching { codec?.release() }
             runCatching { extractor?.release() }
             runCatching { recognizer?.close() }
             // Model bewusst NICHT geschlossen - gehoert dem VoskModelCache
-            // (siehe oben), das duerfte hier noch fuer andere Sender/
-            // Sprachwechsel gebraucht werden.
+            // (siehe oben). Erst der release() gibt es zur LRU-Verdraengung
+            // frei, und zwar NACH dem recognizer.close() darueber - sonst
+            // koennte der Cache es unter einem noch offenen Recognizer
+            // wegschliessen (Review-Befund 3).
+            if (modelAcquired) voskModelCache.release(modelPath, language)
         }
     }
 

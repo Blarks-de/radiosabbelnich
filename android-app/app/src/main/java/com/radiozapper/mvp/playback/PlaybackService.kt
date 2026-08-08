@@ -12,6 +12,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -37,6 +38,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private const val TAG = "PlaybackService"
 private const val NOTIFICATION_CHANNEL_ID = "playback"
@@ -65,6 +67,15 @@ private const val STATION_DEAD_LOCK_SECONDS = 300L
 // auch "haengt mitten im Stream fest" ab, kein Sonderfall fuer die
 // Anfangsverbindung noetig, weil beides einfach "seit wann buffert es schon".
 private const val BUFFERING_TIMEOUT_SECONDS = 15L
+
+// Neustart der ANALYSE (nicht der Wiedergabe) nach einem Analyse-Fehler,
+// siehe handleAnalyzerError(). Begrenzte Anzahl, damit eine dauerhaft
+// unanalysierbare Quelle (Container, den MediaExtractor nicht versteht) nicht
+// alle paar Sekunden einen neuen Decoder hochfaehrt - der Sender laeuft dann
+// eben ohne Sprach-/Musik-Erkennung weiter, statt faelschlich als tot zu
+// gelten (Review-Befund 2, siehe SESSION.md).
+private const val ANALYZER_RETRY_SECONDS = 15L
+private const val ANALYZER_MAX_RETRIES = 3
 
 /**
  * Foreground Service: haelt den ExoPlayer fuer die eigentliche Wiedergabe UND
@@ -99,7 +110,18 @@ private const val BUFFERING_TIMEOUT_SECONDS = 15L
  * erkennt zwei Faelle - `onPlayerError()` (haretes Signal) und ein Sender,
  * der laenger als `BUFFERING_TIMEOUT_SECONDS` ununterbrochen buffert (deckt
  * "verbindet, liefert aber nie Daten" ab, das nie einen Error ausloest -
- * siehe `handlePlaybackFailure()`). Eigene Sperr-Map (`deadUntil`), bewusst
+ * siehe `handlePlaybackFailure()`). **Nur der ExoPlayer entscheidet ueber
+ * "Sender tot"** - ein Fehler des parallelen `StreamAnalyzer` tut das seit
+ * dem Phase-8-Review NICHT mehr (Review-Befund 2, siehe SESSION.md): dessen
+ * Fehler ("Vosk-Modell nicht ladbar", Container, den `MediaExtractor` nicht
+ * versteht, kein Audio-Track) sagen ueber die abgespielte Quelle nichts aus.
+ * Frueher sperrten sie den Sender trotzdem fuer 5 Minuten - bei einem
+ * kaputten Modell traf das jeden Sender der Kategorie in Sekunden, bis alle
+ * gesperrt waren und die Eskalation in eine Dauer-Schnellrotation lief.
+ * Stattdessen: `handleAnalyzerError()` startet die Analyse begrenzt oft neu
+ * und macht die Ursache ueber `analyzerError` in der UI sichtbar.
+ *
+ * Eigene Sperr-Map (`deadUntil`), bewusst
  * getrennt von `stationCooldownUntil` (siehe `StationLockReason`), aber
  * dieselbe Auswahl-Logik (`nextAvailableStation()`/`findNextOrEscalate()`)
  * behandelt beide Sperrgruende einheitlich - inkl. der "alle Sender
@@ -188,6 +210,11 @@ class PlaybackService : LifecycleService() {
     private val deadUntil = mutableMapOf<String, Long>()
     private var bufferingTimeoutJob: Job? = null
 
+    // Neustart-Buchhaltung fuer die ANALYSE (siehe handleAnalyzerError()) -
+    // pro Sender zurueckgesetzt, nicht global.
+    private var analyzerRetryJob: Job? = null
+    private var analyzerRetries = 0
+
     private val _lockedStations = MutableStateFlow<Map<String, StationLockReason>>(emptyMap())
     /** Momentaufnahme, neu berechnet bei jeder Aenderung einer der beiden Sperr-Maps - siehe refreshLockedStationsSnapshot(). */
     val lockedStations: StateFlow<Map<String, StationLockReason>> = _lockedStations
@@ -231,9 +258,18 @@ class PlaybackService : LifecycleService() {
     // reine In-Memory-Felder (kein Persistieren der Rohsamples noetig, nur
     // das Ergebnis landet ueber applyCalibrationSuggestion() in
     // SttSettings) - eine Session ueberlebt keinen Service-Neustart.
-    private var calibrationLanguage: String? = null
-    /** Read-only nach aussen - fuer CalibrationActivity, um beim erneuten Binden (z.B. nach onStop/onStart) zu erkennen, ob fuer dieselbe Sprache schon eine Session laeuft (nicht per startCalibration() zuruecksetzen). */
-    val activeCalibrationLanguage: String? get() = calibrationLanguage
+    private val _calibrationLanguage = MutableStateFlow<String?>(null)
+    /**
+     * Sprache der laufenden Kalibrierungs-Session, sonst null. Als StateFlow,
+     * damit auch die Startseite anzeigen kann, dass gerade kalibriert wird -
+     * eine Session ueberlebt das Verlassen des Wizard-Bildschirms (erst dessen
+     * onDestroy() beendet sie), und ohne Hinweis wirkte die dabei bewusst
+     * abgeschaltete Automatik wie ein Defekt (Review-Befund 9, siehe
+     * SESSION.md).
+     */
+    val calibrationLanguage: StateFlow<String?> = _calibrationLanguage
+    /** Fuer CalibrationActivity, um beim erneuten Binden (z.B. nach onStop/onStart) zu erkennen, ob fuer dieselbe Sprache schon eine Session laeuft (nicht per startCalibration() zuruecksetzen). */
+    val activeCalibrationLanguage: String? get() = _calibrationLanguage.value
     private val calibrationSpeechSamples = mutableListOf<Double>()
     private val calibrationMusicSamples = mutableListOf<Double>()
     private val _calibrationLevel = MutableStateFlow<CalibrationLevel?>(null)
@@ -302,11 +338,21 @@ class PlaybackService : LifecycleService() {
     val status get() = analyzer.status
     val speechRatio get() = analyzer.speechRatio
 
+    /** Klartext-Ursache, falls die Analyse gerade nicht laeuft (siehe StreamAnalyzer) - fuer den Hinweis auf der Startseite, loest KEINE Sendersperre aus. */
+    val analyzerError get() = analyzer.analyzerError
+
     override fun onCreate() {
         super.onCreate()
         analyzer = StreamAnalyzer(lifecycleScope)
         fingerprintDb = FingerprintDb(this)
-        player = ExoPlayer.Builder(this).build().apply { addListener(playerListener) }
+        player = ExoPlayer.Builder(this).build().apply {
+            // Nutzt die im Manifest laengst deklarierte WAKE_LOCK-Berechtigung
+            // (Review-Befund 7): ohne Wake-Mode kann die CPU bei
+            // ausgeschaltetem Display schlafen und Wiedergabe/Analyse stocken -
+            // im dauerwachen Emulator nie aufgefallen.
+            setWakeMode(C.WAKE_MODE_NETWORK)
+            addListener(playerListener)
+        }
         createNotificationChannel()
 
         lifecycleScope.launch {
@@ -317,10 +363,18 @@ class PlaybackService : LifecycleService() {
             analyzer.fingerprintOutcomes.collect { outcome -> handleFingerprintOutcome(outcome) }
         }
 
+        // Analyse-Fehler (NICHT Sender-Fehler, siehe Klassen-Doc).
+        lifecycleScope.launch {
+            analyzer.analyzerError.collect { message -> handleAnalyzerError(message) }
+        }
+
         // Fuettert eine laufende STT-Kalibrierung mit dem Rohwert - No-Op,
         // solange keine Session aktiv ist (siehe handleCalibrationSample()).
+        // Bewusst speechRatioSamples (Ereignis pro Haeppchen) statt
+        // speechRatio (StateFlow, verschluckt identische Folgewerte) - siehe
+        // Review-Befund 4 in SESSION.md.
         lifecycleScope.launch {
-            analyzer.speechRatio.collect { ratio -> handleCalibrationSample(ratio) }
+            analyzer.speechRatioSamples.collect { ratio -> handleCalibrationSample(ratio) }
         }
 
         // Reagiert auf Aenderungen der persistenten Senderliste (z.B. aus der
@@ -385,6 +439,10 @@ class PlaybackService : LifecycleService() {
      */
     fun play(station: Station) {
         _currentStation.value = station
+        // Neuer Sender = neue Analyse-Ausgangslage (siehe handleAnalyzerError()).
+        analyzerRetryJob?.cancel()
+        analyzerRetryJob = null
+        analyzerRetries = 0
 
         val warm = preloadedPlayer
         if (warm != null && preloadedStationId == station.id) {
@@ -431,7 +489,7 @@ class PlaybackService : LifecycleService() {
      * Kategorie-Aufloesung - genau dafuer ist die Kalibrierung da.
      */
     private fun refreshAnalyzer(station: Station) {
-        val language = calibrationLanguage ?: SttSettings.resolveLanguage(this, station.category)
+        val language = _calibrationLanguage.value ?: SttSettings.resolveLanguage(this, station.category)
         val cfg = SttSettings.getLanguages(this)[language]
         val modelPath = cfg?.let { VoskModelManager.modelPathOrNull(this, language, it.modelUrl) }
         if (cfg != null && modelPath != null) {
@@ -460,7 +518,7 @@ class PlaybackService : LifecycleService() {
      * einer eventuell vorherigen Session werden verworfen.
      */
     fun startCalibration(language: String) {
-        calibrationLanguage = language
+        _calibrationLanguage.value = language
         calibrationSpeechSamples.clear()
         calibrationMusicSamples.clear()
         _calibrationLevel.value = null
@@ -475,12 +533,12 @@ class PlaybackService : LifecycleService() {
 
     /** Beendet die Session - der gerade laufende Sender wechselt zurueck auf die normale Kategorie-Sprachaufloesung. */
     fun stopCalibration() {
-        calibrationLanguage = null
+        _calibrationLanguage.value = null
         _calibrationLevel.value = null
         _currentStation.value?.let { refreshAnalyzer(it) }
     }
 
-    /** Live-Vorschlag aus den bisher gesammelten Samples - null, solange eine der beiden Listen leer ist. Wird bei jeder Aenderung von calibrationSampleCounts neu berechnet, nicht zwischengespeichert (siehe stt/Calibration.kt). */
+    /** Live-Vorschlag aus den bisher gesammelten Samples - null, solange eine der beiden Seiten zu wenige Samples hat (siehe stt/Calibration.kt). Wird bei jeder Aenderung von calibrationSampleCounts neu berechnet, nicht zwischengespeichert. */
     fun calibrationSuggestion(): CalibrationSuggestion? =
         suggestRatios(calibrationSpeechSamples.toList(), calibrationMusicSamples.toList())
 
@@ -492,7 +550,7 @@ class PlaybackService : LifecycleService() {
      * Session - der Nutzer kann weiter sammeln/erneut uebernehmen.
      */
     fun applyCalibrationSuggestion(): Boolean {
-        val language = calibrationLanguage ?: return false
+        val language = _calibrationLanguage.value ?: return false
         val suggestion = calibrationSuggestion() ?: return false
         if (suggestion.overlapping) return false
         val existing = SttSettings.getLanguages(this)[language] ?: return false
@@ -509,8 +567,8 @@ class PlaybackService : LifecycleService() {
     }
 
     /** No-Op, solange keine Session aktiv ODER kein Level markiert ist - siehe Klassen-Doc, Abschnitt STT-Kalibrierung. */
-    private fun handleCalibrationSample(ratio: Double?) {
-        if (calibrationLanguage == null || ratio == null) return
+    private fun handleCalibrationSample(ratio: Double) {
+        if (_calibrationLanguage.value == null) return
         when (_calibrationLevel.value) {
             CalibrationLevel.SPEECH -> calibrationSpeechSamples.add(ratio)
             CalibrationLevel.MUSIC -> calibrationMusicSamples.add(ratio)
@@ -549,6 +607,7 @@ class PlaybackService : LifecycleService() {
         preloadedStationId = candidate.id
         Log.d(TAG, "Waerme '${candidate.name}' als naechsten Kandidaten vor")
         preloadedPlayer = ExoPlayer.Builder(this).build().apply {
+            setWakeMode(C.WAKE_MODE_NETWORK) // siehe player-Erzeugung in onCreate()
             addListener(preloadFailureListener)
             setMediaItem(MediaItem.fromUri(candidate.url))
             prepare()
@@ -580,7 +639,7 @@ class PlaybackService : LifecycleService() {
      * ein leerer/ungueltiger Ordner bei jedem Tick erneut versucht, bis das
      * Fenster von selbst vorbei ist (analog zum Docker-Projekt).
      */
-    private fun checkNewsBreak() {
+    private suspend fun checkNewsBreak() {
         val slot = NewsBreak.activeSlot(NewsBreakSettings.getConfig(this))
         if (slot != null && !_newsBreakActive.value && slot != newsBreakServedSlot) {
             newsBreakServedSlot = slot
@@ -598,9 +657,14 @@ class PlaybackService : LifecycleService() {
      * Ordner leer/ungueltig ist (der Aufrufer entscheidet dann, was
      * stattdessen passiert - Eintritt: gar nichts, laufender Sender bleibt
      * unangetastet; laufende Pause: beenden).
+     *
+     * Das Auflisten des SAF-Ordners ist eine ContentResolver-Abfrage und laeuft
+     * deshalb auf Dispatchers.IO (Review-Befund 6): bei einem grossen oder
+     * langsamen Ordner-Provider blockierte es vorher den Main-Thread. Die
+     * ExoPlayer-Aufrufe darunter muessen dagegen auf dem Main-Thread bleiben.
      */
-    private fun playNextNewsBreakFile(): Boolean {
-        val files = NewsBreakSettings.listMp3s(this)
+    private suspend fun playNextNewsBreakFile(): Boolean {
+        val files = withContext(Dispatchers.IO) { NewsBreakSettings.listMp3s(this@PlaybackService) }
         val chosen = NewsBreak.pickRandom(files, newsBreakRecentFiles.toList()) { it.name ?: "" } ?: return false
         val name = chosen.name ?: return false
 
@@ -617,7 +681,7 @@ class PlaybackService : LifecycleService() {
         return true
     }
 
-    private fun enterNewsBreak() {
+    private suspend fun enterNewsBreak() {
         if (!playNextNewsBreakFile()) {
             Log.w(TAG, "📰 Nachrichten-Pause-Fenster erreicht, aber keine MP3 verfuegbar - uebersprungen")
             return
@@ -634,14 +698,22 @@ class PlaybackService : LifecycleService() {
         )
     }
 
-    /** MP3 zu Ende ODER fehlgeschlagen: laeuft das Fenster noch, naechste Datei laden - sonst Pause beenden. Ohne das endete die Pause nach genau einer Datei (siehe Klassen-Doc/SESSION.md). */
+    /**
+     * MP3 zu Ende ODER fehlgeschlagen: laeuft das Fenster noch, naechste Datei
+     * laden - sonst Pause beenden. Ohne das endete die Pause nach genau einer
+     * Datei (siehe Klassen-Doc/SESSION.md). Startet eine Coroutine, weil die
+     * Aufrufer (Player.Listener-Callbacks, Buffering-Watchdog) keine
+     * suspend-Kontexte sind, playNextNewsBreakFile() aber inzwischen einer ist.
+     */
     private fun advanceNewsBreak() {
-        val stillActive = NewsBreak.activeSlot(NewsBreakSettings.getConfig(this)) != null
-        if (stillActive && playNextNewsBreakFile()) {
-            Log.i(TAG, "📰 Nachrichten-Pause: naechste Datei '${_newsBreakFileName.value}'")
-            return
+        lifecycleScope.launch {
+            val stillActive = NewsBreak.activeSlot(NewsBreakSettings.getConfig(this@PlaybackService)) != null
+            if (stillActive && playNextNewsBreakFile()) {
+                Log.i(TAG, "📰 Nachrichten-Pause: naechste Datei '${_newsBreakFileName.value}'")
+                return@launch
+            }
+            resumeFromNewsBreak("Nachrichten-Pause-MP3 zu Ende")
         }
-        resumeFromNewsBreak("Nachrichten-Pause-MP3 zu Ende")
     }
 
     /** Beendet die Pause und schaltet zurueck zum vorher laufenden Sender - dieselbe Funktion (play()) wie jeder normale Wechsel. */
@@ -677,6 +749,9 @@ class PlaybackService : LifecycleService() {
         refreshLockedStationsSnapshot()
         bufferingTimeoutJob?.cancel()
         bufferingTimeoutJob = null
+        analyzerRetryJob?.cancel()
+        analyzerRetryJob = null
+        analyzerRetries = 0
         newsBreakTickerJob?.cancel()
         newsBreakTickerJob = null
         _newsBreakActive.value = false
@@ -697,7 +772,7 @@ class PlaybackService : LifecycleService() {
      */
     private fun handleStatusForAutoSwitch(status: PlaybackStatus) {
         if (_newsBreakActive.value) return // keine automatische Umschaltung, ausgeloest von einer MP3
-        if (calibrationLanguage != null) return // Kalibrierung erzwingt die Sprache, ein verfaelschtes Ergebnis darf nicht automatisch umschalten (siehe Klassen-Doc)
+        if (_calibrationLanguage.value != null) return // Kalibrierung erzwingt die Sprache, ein verfaelschtes Ergebnis darf nicht automatisch umschalten (siehe Klassen-Doc)
         when (status) {
             PlaybackStatus.MUSIC -> {
                 autoSwitchAttempts = 0 // Treffer - Zaehler fuer die naechste Sprache-Serie zuruecksetzen
@@ -711,12 +786,45 @@ class PlaybackService : LifecycleService() {
                 refreshLockedStationsSnapshot()
             }
             PlaybackStatus.SPEECH -> attemptAutoSwitch()
-            // StreamAnalyzers eigene, unabhaengige Dekodierung (siehe dessen
-            // Klassen-Doc) ist eine zweite, praktisch kostenlose Bestaetigung
-            // "diese URL ist kaputt" - haengt an denselben Sperr-Mechanismus
-            // wie ein ExoPlayer-Fehler.
-            PlaybackStatus.ERROR -> handlePlaybackFailure()
+            // PlaybackStatus.ERROR loest hier BEWUSST nichts mehr aus (frueher:
+            // handlePlaybackFailure()). Ein Fehler der zweiten, unabhaengigen
+            // Dekodierung heisst "die Analyse konnte nicht laufen", nicht "der
+            // Sender ist kaputt" - siehe Klassen-Doc und handleAnalyzerError().
             else -> Unit
+        }
+    }
+
+    /**
+     * Ein Analyse-Fehler (siehe StreamAnalyzer.analyzerError) beendet NICHT die
+     * Wiedergabe und sperrt keinen Sender - er startet die Analyse fuer den
+     * laufenden Sender begrenzt oft neu. Danach laeuft der Sender bewusst ohne
+     * Sprach-/Musik-Erkennung weiter (der Nutzer sieht die Ursache auf der
+     * Startseite), statt dass ein Modell-/Decoder-Problem die komplette
+     * Rotation lahmlegt (Review-Befund 2, siehe SESSION.md).
+     */
+    private fun handleAnalyzerError(message: String?) {
+        if (message == null) return
+        if (_newsBreakActive.value) return // waehrend der Pause laeuft absichtlich keine Analyse
+        val station = _currentStation.value ?: return
+
+        if (analyzerRetries >= ANALYZER_MAX_RETRIES) {
+            Log.w(TAG, "Analyse fuer '${station.name}' bleibt aus ($message) - Wiedergabe laeuft weiter")
+            return
+        }
+        analyzerRetries++
+        Log.w(
+            TAG,
+            "Analyse-Fehler bei '${station.name}': $message - Neuversuch " +
+                "$analyzerRetries/$ANALYZER_MAX_RETRIES in ${ANALYZER_RETRY_SECONDS}s"
+        )
+        analyzerRetryJob?.cancel()
+        analyzerRetryJob = lifecycleScope.launch {
+            delay(ANALYZER_RETRY_SECONDS * 1000)
+            val current = _currentStation.value ?: return@launch
+            // Sender kann zwischenzeitlich gewechselt haben - dann hat play()
+            // die Analyse ohnehin frisch aufgesetzt.
+            if (current.id != station.id || _newsBreakActive.value) return@launch
+            refreshAnalyzer(current)
         }
     }
 
@@ -739,7 +847,7 @@ class PlaybackService : LifecycleService() {
                     "🔁 Bekannter Jingle/Werbespot wiedererkannt: '${outcome.label}' " +
                         "(Clip #${outcome.clipId}, ${outcome.timesSeen}x gesehen, Staerke ${outcome.matchStrength})"
                 )
-                if (calibrationLanguage == null) attemptAutoSwitch() // siehe Klassen-Doc, Abschnitt STT-Kalibrierung
+                if (_calibrationLanguage.value == null) attemptAutoSwitch() // siehe Klassen-Doc, Abschnitt STT-Kalibrierung
             }
             is FingerprintOutcome.Learned -> Unit
         }
@@ -760,6 +868,20 @@ class PlaybackService : LifecycleService() {
         }
         _lastFingerprintMatch.value = null
         if (_lastFingerprintOutcome.value == match) _lastFingerprintOutcome.value = null
+    }
+
+    /**
+     * Leert die gelernten Fingerprint-Clips (Knopf "🗑 Fingerprint-DB leeren").
+     * Die DB begrenzt sich seit dem Phase-8-Review zwar selbst (MAX_CLIPS in
+     * FingerprintDb), ein bewusster Neuanfang war aber ueberhaupt nicht
+     * moeglich - `clearAll()` hatte bis dahin keinen einzigen Aufrufer
+     * (Review-Befund 16, siehe SESSION.md).
+     */
+    suspend fun clearFingerprints(): Int {
+        val deleted = withContext(Dispatchers.IO) { fingerprintDb.clearAll() }
+        _lastFingerprintMatch.value = null
+        _lastFingerprintOutcome.value = null
+        return deleted
     }
 
     private fun attemptAutoSwitch() {
@@ -984,6 +1106,7 @@ class PlaybackService : LifecycleService() {
     override fun onDestroy() {
         bufferingTimeoutJob?.cancel()
         newsBreakTickerJob?.cancel()
+        analyzerRetryJob?.cancel()
         analyzer.stop()
         player?.release()
         player = null

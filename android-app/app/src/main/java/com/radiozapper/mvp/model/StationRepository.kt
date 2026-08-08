@@ -200,6 +200,14 @@ object StationRepository {
             )
         }
     } catch (e: Exception) {
+        // Kaputte Datei zur Seite legen, BEVOR der naechste Schreibvorgang sie
+        // mit dem Startbestand ueberschreibt - vorher war der Verlust der
+        // kompletten (u.U. hunderte Sender umfassenden) Liste endgueltig und
+        // unbemerkt (Review-Befund 13, siehe SESSION.md).
+        val backup = File(stationsFile.parentFile, "$STATIONS_FILE_NAME.corrupt")
+        runCatching { stationsFile.copyTo(backup, overwrite = true) }
+            .onSuccess { Log.e(TAG, "stations.json unlesbar - Kopie gesichert unter ${backup.name}") }
+            .onFailure { Log.e(TAG, "stations.json unlesbar, Sicherungskopie ebenfalls fehlgeschlagen", it) }
         Log.e(TAG, "stations.json konnte nicht gelesen werden, falle auf Startbestand zurueck", e)
         DEFAULT_STATIONS
     }

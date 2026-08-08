@@ -17,6 +17,15 @@ private const val DB_VERSION = 1
 // fingerprint.py, das aus demselben Grund CHUNK=500 verwendet).
 private const val QUERY_CHUNK_SIZE = 500
 
+// Obergrenze fuer gelernte Clips. matchOrLearn() lernt JEDEN ungematchten
+// 2s-Sprachclip mit mehreren hundert Hash-Zeilen - auf dem Handy waechst die
+// DB dadurch dauerhaft weiter (im Docker-Projekt als offener Punkt bekannt,
+// hier vorher gar nicht bedacht - Review-Befund 16, siehe SESSION.md).
+// Verdraengt wird nach last_seen: ein Clip, der seit langem nicht mehr
+// wiedererkannt wurde, war offensichtlich kein wiederkehrender Jingle.
+private const val MAX_CLIPS = 500
+private const val PRUNE_BATCH = 50
+
 sealed class FingerprintOutcome {
     data class Match(val clipId: Long, val label: String, val timesSeen: Int, val matchStrength: Int) : FingerprintOutcome()
     data object Learned : FingerprintOutcome()
@@ -170,7 +179,35 @@ class FingerprintDb(context: Context) : SQLiteOpenHelper(context.applicationCont
         } finally {
             db.endTransaction()
         }
+        pruneIfNeeded(db)
         return FingerprintOutcome.Learned
+    }
+
+    /**
+     * Haelt die DB bei MAX_CLIPS (siehe Konstante oben). Geloescht wird in
+     * Batches (PRUNE_BATCH), damit nicht bei JEDEM gelernten Clip ein
+     * Loeschvorgang laeuft - die aeltesten nach `last_seen` zuerst.
+     */
+    private fun pruneIfNeeded(db: SQLiteDatabase) {
+        val count = db.rawQuery("SELECT COUNT(*) FROM clips", null).use { cursor ->
+            cursor.moveToFirst()
+            cursor.getInt(0)
+        }
+        if (count <= MAX_CLIPS) return
+
+        val toDelete = maxOf(count - MAX_CLIPS, PRUNE_BATCH)
+        db.beginTransaction()
+        try {
+            db.execSQL(
+                "DELETE FROM hashes WHERE clip_id IN (SELECT id FROM clips ORDER BY last_seen ASC LIMIT ?)",
+                arrayOf(toDelete),
+            )
+            db.execSQL("DELETE FROM clips WHERE id IN (SELECT id FROM clips ORDER BY last_seen ASC LIMIT ?)", arrayOf(toDelete))
+            db.setTransactionSuccessful()
+            Log.i(TAG, "🧹 Fingerprint-DB gekuerzt: $toDelete aelteste Clip(s) entfernt (Obergrenze $MAX_CLIPS)")
+        } finally {
+            db.endTransaction()
+        }
     }
 
     /**

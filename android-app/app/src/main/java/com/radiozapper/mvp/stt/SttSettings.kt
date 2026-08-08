@@ -142,7 +142,19 @@ object SttSettings {
         save(context, root)
     }
 
-    /** Kategorie -> Sprachcode, fehlender Eintrag -> "de" (analog `resolve_stt_language()` im Docker-Projekt). */
-    fun resolveLanguage(context: Context, category: String): String =
-        getCategoryLanguages(context)[category] ?: DEFAULT_LANGUAGE
+    /**
+     * Kategorie -> Sprachcode (analog `resolve_stt_language()` im
+     * Docker-Projekt). Fehlender Eintrag -> `"de"`, aber nur solange "de"
+     * ueberhaupt noch konfiguriert ist: sonst die erste konfigurierte Sprache.
+     * Vorher fuehrte das Loeschen von "de" dazu, dass jede nicht explizit
+     * zugeordnete Kategorie dauerhaft "kein Modell" meldete und die Analyse
+     * still ausblieb, obwohl Sprachen vorhanden waren (Review-Befund 12,
+     * siehe SESSION.md).
+     */
+    fun resolveLanguage(context: Context, category: String): String {
+        val configured = getLanguages(context)
+        getCategoryLanguages(context)[category]?.let { if (it in configured) return it }
+        if (DEFAULT_LANGUAGE in configured) return DEFAULT_LANGUAGE
+        return configured.keys.firstOrNull() ?: DEFAULT_LANGUAGE
+    }
 }

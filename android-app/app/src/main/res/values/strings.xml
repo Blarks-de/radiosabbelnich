@@ -21,6 +21,8 @@
 
     <string name="btn_manage_stt_languages">🌐 STT-Sprachen verwalten</string>
     <string name="stt_model_missing">⚠ Kein Modell für „%1$s“ – Analyse pausiert.</string>
+    <string name="analyzer_error">⚠ Analyse gestoppt: %1$s (Wiedergabe läuft weiter)</string>
+    <string name="calibration_active_hint">🎚 Kalibrierung für „%1$s“ läuft – automatisches Zappen ist solange aus.</string>
     <string name="stt_settings_title">STT-Sprachen verwalten</string>
     <string name="stt_languages_heading">🌐 STT-Sprachen</string>
     <string name="btn_add_language">+ Neue Sprache</string>
@@ -43,7 +45,7 @@
     <string name="calibration_level_speech">Markiert als: Sprache</string>
     <string name="calibration_level_music">Markiert als: Musik</string>
     <string name="calibration_sample_counts">Sprache-Samples: %1$d · Musik-Samples: %2$d</string>
-    <string name="calibration_suggestion_none">Noch kein Vorschlag – erst Sprache UND Musik markieren und ein paar Sekunden sammeln.</string>
+    <string name="calibration_suggestion_none">Noch kein Vorschlag – erst Sprache UND Musik markieren und je mindestens ca. 10 Sekunden sammeln.</string>
     <string name="calibration_suggestion_overlapping">Verteilungen überlappen sich noch – kein sauberer Vorschlag möglich. Mehr Samples sammeln oder Sender wechseln.</string>
     <string name="calibration_suggestion">Vorschlag: Sprache ab %1$.2f, Musik bis %2$.2f</string>
     <string name="btn_calibration_apply">Übernehmen</string>
@@ -119,5 +121,9 @@
     <string name="fp_chip_off">–</string>
     <string name="fp_chip_match">%1$s (%2$dx gesehen)</string>
     <string name="fp_chip_learned">Neuer Clip gelernt</string>
+    <string name="btn_clear_fingerprints">🗑 Fingerprint-DB leeren</string>
+    <string name="fp_cleared">Fingerprint-DB geleert: %1$d Clip(s) gelöscht.</string>
+    <string name="fp_clear_confirm_title">Fingerprint-DB leeren?</string>
+    <string name="fp_clear_confirm_message">Alle gelernten Jingle-/Werbe-Clips werden gelöscht. Die Erkennung lernt danach von vorn.</string>
     <string name="btn_zapping_error">🛑 Zapping-Fehler</string>
 </resources>

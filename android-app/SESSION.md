@@ -902,3 +902,309 @@ Detektor).
   Bildschirm** - nicht eigens gegengetestet (Emulator lief durchgehend im
   Hochformat), bleibt bei einer echten Drehung auf einem physischen Geraet
   zu bestaetigen.
+
+## 2026-08-08 (Fortsetzung 6) — Review-Befunde: kompletter Durchgang durch android-app/ (Phase 8 aus dem Fahrplan)
+
+Auslöser: `RadioZapper_Android_Fahrplan.md`, Phase 8 - nach den sieben
+Feature-Phasen einmal komplett durch den Code, analog zum Review des
+Docker-Projekts vom 2026-08-03, das dort den Watchdog-Bug aufdeckte.
+Auftrag laut Fahrplan explizit: **nichts sofort ändern**, erst einen
+Befund-Bericht liefern und gemeinsam priorisieren. Gelesen wurden alle 24
+Kotlin-Dateien, Manifest, Gradle-Config und Ressourcen, plus Quervergleich
+mit den Python-Vorbildern (`news_break.py`, `station_import.py`,
+`fingerprint.py`) an allen Stellen, an denen README/CLAUDE.md Parität
+behaupten. Dieser Eintrag hält den Bericht fest; die Umsetzung steht im
+nächsten Eintrag.
+
+### P1 - echte Fehlfunktionen
+
+1. **`fingerprintBuffer` wächst unbegrenzt während eines Sprache-Streaks**
+   (`analysis/StreamAnalyzer.kt`): nach dem einmaligen Fingerprint-Check
+   (`fingerprintCheckedThisRun = true`) werden weiter 8.000 Samples pro
+   Sprache-Chunk angehängt, ohne je wieder gelesen zu werden - geleert wird
+   nur bei einem Nicht-Sprache-Chunk. Dazu `mutableListOf<Short>`, also ein
+   geboxtes Objekt pro Sample (~16.000/s). Bei durchgehender Sprache
+   (Nachrichtenblock, Wortbeitrag - besonders während einer Kalibrierung,
+   wo Auto-Switch bewusst aus ist) nach wenigen Minuten dreistellige MB,
+   OOM-Kandidat.
+2. **Analyse-Fehler werden als "Sender ist tot" behandelt**
+   (`StreamAnalyzer`s `catch` -> `PlaybackStatus.ERROR` ->
+   `PlaybackService.handleStatusForAutoSwitch()` -> `handlePlaybackFailure()`):
+   auch "Vosk-Modell nicht ladbar", "kein Audio-Track" und "Codec nicht
+   unterstützt" landen so in der 5-Minuten-Tot-Sperre. Bei einem kaputten
+   Modell trifft das JEDEN Sender der betroffenen Kategorie in Sekunden ->
+   alle gesperrt -> `findNextOrEscalate()` leert beide Maps -> Endlos-
+   Schnellrotation ohne je stabile Wiedergabe. Die "praktisch kostenlose
+   zweite Bestätigung" aus Phase 2 ist nur korrekt, wenn der Fehler
+   tatsächlich von der Quelle kommt.
+3. **`VoskModelCache` schließt Modelle, die ein laufender `Recognizer` noch
+   benutzt**: `Model.close()` gibt nativen Speicher frei, der `Recognizer`
+   im Analyzer hält einen Zeiger darauf. Zwei Fenster - LRU-Verdrängung (ab
+   der 3. genutzten Sprache, genau der Pfad, der laut Fortsetzung 4 noch nie
+   live lief) und `clear()` in `PlaybackService.onDestroy()`, wo
+   `analyzer.stop()` nur kooperativ abbricht und die Schleife noch in
+   `acceptWaveForm()` stehen kann. Ergebnis wäre ein nativer Absturz ohne
+   Java-Stacktrace.
+4. **Die Kalibrierung verliert systematisch Samples, ein einzelner Ausreißer
+   kippt den Vorschlag**: gesammelt wird über `analyzer.speechRatio`, einen
+   `StateFlow` - identische Folgewerte werden verschluckt. Der Rohwert kennt
+   nur 9 diskrete Stufen (0/8...8/8); bei stabiler Sprache steht er auf 1.0
+   und es kommt KEIN weiteres Sample mehr an, gezählt werden vor allem
+   Übergangswerte. `suggestRatios()` nutzt dann `min(speech)`/`max(music)`,
+   also genau die Extreme - ein einziges Übergangssample reicht für
+   `overlapping=true`. Sehr plausible Erklärung dafür, dass im Live-Test aus
+   Fortsetzung 5 nur der Warnpfad und nie der Erfolgspfad zu sehen war.
+
+### P2 - Robustheit und Ressourcen
+
+5. **Blockierende Decoder-Aufrufe sind nicht abbrechbar**: `job.cancel()`
+   bzw. `withTimeoutOrNull` beenden nur die Coroutine,
+   `MediaExtractor.setDataSource()` läuft bis zum OS-Timeout weiter. Folgen:
+   alte und neue Analyse dekodieren kurzzeitig parallel; im
+   Erreichbarkeits-Check gibt `withPermit` das Semaphor frei, obwohl der
+   Thread noch hängt (faktisch mehr als `CHECK_CONCURRENCY=3` offene
+   Verbindungen); und wirft der ALTE Job im Abwind noch eine Exception,
+   sperrt er über Befund 2 den bereits laufenden NEUEN Sender - dieselbe
+   Klasse wie die dokumentierte `onPlayerError()`-Race, aber bisher nirgends
+   erwähnt.
+6. **Main-Thread-I/O**: `StationRepository.init()` parst `stations.json`
+   synchron in `Application.onCreate()` (mit den real importierten 361
+   Sendern spürbar), `NewsBreakSettings.listMp3s()` macht eine
+   SAF-ContentResolver-Abfrage aus dem Main-Dispatcher-Ticker heraus
+   (ANR-Risiko bei großem/langsamem Ordner).
+7. **Kein Wakelock, obwohl deklariert**: `WAKE_LOCK` steht im Manifest, wird
+   aber nirgends genutzt, ExoPlayer bekommt kein `setWakeMode()`. Bei
+   ausgeschaltetem Display kann die CPU schlafen - im dauerwachen Emulator
+   nie beobachtbar gewesen.
+8. **Verwaltungs-Activity skaliert nicht mit dem eigenen Import**: jede
+   Änderung baut alle Zeilen synchron neu auf, bei 361 Sendern hunderte
+   `inflate()` im Main-Thread pro Checkbox-Klick.
+
+### P3 - Zustands- und Konsistenzfehler
+
+9. Eine **Kalibrierungs-Session läuft weiter, wenn man den Bildschirm nur
+   verlässt** (Home/Task-Switch statt "Fertig") - erst `onDestroy()` ruft
+   `stopCalibration()`. Auto-Switch bleibt aus, die Sprache bleibt
+   erzwungen, ohne jeden Hinweis auf der Startseite.
+10. **Sprachen sind nur anlegbar/löschbar, nicht editierbar**: erneutes
+    Anlegen desselben Codes (die einzige Möglichkeit, die Modell-URL zu
+    ändern) überschreibt stillschweigend die kalibrierten Schwellen mit den
+    Defaults. Zusätzlich cached `VoskModelManager.state()` den StateFlow pro
+    Code inkl. des aus der ALTEN URL abgeleiteten Pfads.
+11. **Kein Cache-Invalidieren bei Konfigurationsänderung**: Modell gelöscht/
+    neu heruntergeladen lässt das alte `Model` im `VoskModelCache` des
+    laufenden Service (das Docker-Vorbild leert den Cache genau dafür beim
+    Reload); ein einmal gecachter Fehlschlag wird nie erneut versucht.
+12. **`resolveLanguage()` fällt hart auf "de" zurück** - wird "de" gelöscht,
+    steht für jede nicht explizit gesetzte Kategorie dauerhaft "kein
+    Modell", obwohl Sprachen konfiguriert sind.
+13. **`StationRepository.readFromDisk()` überschreibt eine kaputte Datei
+    endgültig**: Fallback auf den 3-Sender-Startbestand, der nächste
+    Schreibvorgang macht den Verlust permanent. Kein Backup, keine
+    Unterscheidung "Datei kaputt" vs. "Datei fehlt".
+14. **`UpdateManager.downloadUpdate()` prüft keinen Response-Code** (eine
+    404-HTML-Seite landet als `radiozapper.apk` im Cache);
+    **`VoskModelManager.unzip()` hat keinen Zip-Slip-Schutz** bei frei
+    eintragbarer Download-URL.
+15. **`StationReachabilityChecker.checkCategory()` ohne Reentrancy-Schutz**
+    (zwei parallele Läufe teilen sich `_unreachableIds`);
+    `StationImporter._state` bleibt als Singleton auf `Done` stehen und
+    zeigt beim nächsten Öffnen ein altes Ergebnis.
+16. **Toter Code + fehlende Grenze**: `FingerprintDb.clearAll()` wird
+    nirgends aufgerufen - es gibt keine Möglichkeit, die DB zu leeren,
+    während `matchOrLearn()` jeden ungematchten 2s-Sprachclip mit hunderten
+    Hash-Zeilen lernt (unbegrenztes Wachstum ohne Pruning; im Docker-Projekt
+    als offener Punkt dokumentiert, hier gar nicht).
+17. **Kein HLS/DASH**: nur `media3-exoplayer`/`media3-common`, kein
+    `media3-exoplayer-hls`/`-dash`. `.m3u8`-Sender aus der Kodinerds-Liste
+    können prinzipiell nicht laufen und erscheinen als "⚠ Antwortet nicht"
+    bzw. "nicht erreichbar", ohne erkennbare Ursache (der Analysepfad kann
+    es ebenso wenig, `MediaExtractor` parst keine m3u8).
+
+### P4 - Doku vs. tatsächlicher Stand
+
+18. README "Bekannte Grenzen": "Vosk-`Model` wird bei jedem Play-/
+    Auto-Switch-Klick neu geladen ... ca. 1-2 Sekunden" - seit Phase 7
+    (`VoskModelCache`) überholt.
+19. README-Bullet "Geglätteter Status" nennt `RATIO_TO_CONFIRM_*` weiter als
+    Konstanten in `StreamAnalyzer.kt`; seit Phase 7 sind es Pro-Sprache-
+    Werte aus `LanguageConfig`. Der spätere Phase-7-Abschnitt widerspricht
+    dem direkt.
+20. README-Kopf verweist für den Verlauf auf `../SESSION.md`, obwohl es seit
+    2026-08-07 diese Datei hier gibt.
+21. **`android-app/CLAUDE.md` beschreibt architektonisch nur den Stand bis
+    Phase 2**: Vorwärmung, M3U-Import/Reachability-Check, Fingerprinting,
+    News-Break, Mehrsprachigkeit inkl. `VoskModelCache` und der
+    Kalibrierungs-Wizard fehlen komplett, die dort genannten Hysterese-
+    Konstanten sind ebenfalls überholt. Größter Doku-Rückstand.
+22. Nicht dokumentierte Grenzen: unbegrenzt wachsende Fingerprint-DB
+    (Befund 16), fehlendes HLS/DASH (Befund 17).
+
+### Geprüft und in Ordnung
+
+Watchdog-Eskalation inkl. Doppelsperr-Priorisierung; Übernahme des
+vorgewärmten Players inkl. `armBufferingWatchdog()`-Randfall; News-Break-
+Slot-Logik und `pickRandom()` semantisch identisch zu `news_break.py`
+(inkl. ±Fenster um :00/:30); M3U-Parsing 1:1 wie
+`station_import.parse_m3u`; atomarer Schreibvorgang und ID-Stabilität im
+Repository; FFT/2D-Peak-Erkennung und das (clip_id, delta)-Voting
+entsprechen `fingerprint.py`; alle Format-Strings passen zu ihren
+Argumenten; außer `clearAll()` kein toter öffentlicher Code.
+
+### Vereinbarte Reihenfolge
+
+Nutzerentscheidung nach dem Bericht: **2 → 1 → 4 → 3**, danach die
+Doku-Gruppe P4 in einem Rutsch, dann P2/P3 nach Bedarf. Umsetzung im
+nächsten Eintrag.
+
+## 2026-08-08 (Fortsetzung 7) — Umsetzung der Review-Befunde aus Phase 8
+
+Auslöser: Freigabe des Berichts aus dem vorigen Eintrag mit der dort
+vorgeschlagenen Reihenfolge (**2 → 1 → 4 → 3**, danach P4-Doku, dann P2/P3
+nach Bedarf). Umgesetzt wurden alle vier P1-Befunde, die komplette
+P4-Doku-Gruppe und die P2/P3-Punkte, die klein und eindeutig richtig waren -
+was bewusst offen blieb, steht unten.
+
+### P1: Analyse-Fehler sind keine Sender-Fehler mehr (Befund 2)
+
+`StreamAnalyzer` hat jetzt ein eigenes `analyzerError: StateFlow<String?>`
+(Klartext-Ursache). `PlaybackStatus.ERROR` löst in
+`handleStatusForAutoSwitch()` NICHTS mehr aus - die Tot-Sperre gehört
+ausschließlich dem ExoPlayer (Fehler-Callback/Buffering-Timeout).
+Stattdessen `handleAnalyzerError()`: bis zu `ANALYZER_MAX_RETRIES=3`
+Neustarts der Analyse im Abstand von `ANALYZER_RETRY_SECONDS=15` (ein
+abgerissener Analyse-Stream fängt sich damit von selbst wieder), danach
+läuft der Sender bewusst ohne Erkennung weiter und die Startseite zeigt
+"⚠ Analyse gestoppt: … (Wiedergabe läuft weiter)". Zähler wird in `play()`
+pro Sender zurückgesetzt.
+
+Zusätzlich meldet der Analyzer jetzt auch ein reguläres Stream-Ende als
+Fehler: vorher lief die Analyse nach einem Verbindungsabbruch
+stillschweigend nie wieder an (die Schleife endete einfach), jetzt greift
+derselbe begrenzte Neustart.
+
+### P1: Fingerprint-Puffer und Boxing im Audio-Pfad (Befund 1)
+
+`fingerprintBuffer` ist ein `ShortArray` fester Größe
+(`CHUNK_SAMPLES * FINGERPRINT_TRIGGER_CHUNKS`, also genau die 2s, die der
+Check braucht) und wird nach dem einmaligen Check pro Streak NICHT mehr
+weitergefüllt. Gleiche Gelegenheit, gleiche Ursache: der Rest-Puffer
+zwischen zwei Häppchen war eine `ArrayDeque<Short>` - beides zusammen
+boxte dauerhaft ~16.000 `Short`-Objekte pro Sekunde. Jetzt `ShortArray` +
+`copyOfRange`, unverändertes Verhalten, ohne Dauer-Allokation.
+
+### P1: Kalibrierung sammelt wieder vollständig (Befund 4)
+
+Neuer `speechRatioSamples: SharedFlow<Double>` (ein Ereignis pro
+0.5s-Häppchen) neben dem bestehenden `speechRatio`-StateFlow: die UI
+(Bullshitometer) nutzt weiter den StateFlow, die Sample-Sammlung den neuen
+Flow. `suggestRatios()` arbeitet außerdem mit dem 90.-/10.-Perzentil statt
+`max()`/`min()` und verlangt `MIN_SAMPLES_PER_LEVEL=20` Samples pro Seite -
+vorher genügte ein einziger Übergangswert, um jeden Vorschlag als
+"überlappend" zu verwerfen.
+
+### P1: `VoskModelCache` schließt keine benutzten Modelle mehr (Befund 3)
+
+`acquire()`/`release()` mit Belegzähler statt `get()`: `StreamAnalyzer`
+hält das Modell für die Dauer seines Laufs und gibt es im `finally` NACH
+`recognizer.close()` frei. Verdrängt/geschlossen wird nur, was niemand
+benutzt; noch belegte Einträge werden vorgemerkt (`pendingClose`) und beim
+`release()` geschlossen - das gilt auch für `clear()` aus
+`PlaybackService.onDestroy()`, wo ein Analyse-Lauf noch auslaufen kann.
+Cache-Schlüssel ist jetzt Sprachcode UND Modellpfad, und gecachte
+Fehlschläge laufen nach `FAILURE_RETRY_MS=60_000` ab (vorher blieb eine
+Sprache für die gesamte Service-Lebensdauer kaputt, auch nach erneutem
+Download - Befund 11).
+
+### P2/P3 mit erledigt
+
+- **Befund 5 (Teil)**: `StreamAnalyzer` hat eine laufende Nummer
+  (`generation`); ein abgelöster Lauf kann keine Status-/Fehler-/
+  Fingerprint-Werte mehr veröffentlichen. Die blockierenden Aufrufe selbst
+  bleiben unabbrechbar (siehe "bewusst NICHT").
+- **Befund 6 (Teil)**: `NewsBreakSettings.listMp3s()` läuft über
+  `Dispatchers.IO` statt im Main-Dispatcher-Ticker.
+- **Befund 7**: `setWakeMode(C.WAKE_MODE_NETWORK)` für beide ExoPlayer -
+  nutzt die längst deklarierte, bis dahin ungenutzte `WAKE_LOCK`-Berechtigung.
+- **Befund 9**: `calibrationLanguage` ist ein StateFlow, die Startseite
+  zeigt "🎚 Kalibrierung für „…" läuft – automatisches Zappen ist solange
+  aus."
+- **Befund 10**: erneutes Anlegen eines vorhandenen Sprachcodes (die einzige
+  Möglichkeit, die Modell-URL zu ändern) behält die kalibrierten Schwellen;
+  `VoskModelManager`-States sind nach Code+URL geschlüsselt.
+- **Befund 12**: `resolveLanguage()` fällt auf die erste konfigurierte
+  Sprache zurück, wenn "de" gelöscht wurde.
+- **Befund 13**: eine unlesbare `stations.json` wird als
+  `stations.json.corrupt` gesichert, bevor der Startbestand sie überschreibt.
+- **Befund 14**: Response-Code-Prüfung beim APK-Download, Zip-Slip-Schutz
+  beim Modell-Entpacken.
+- **Befund 15**: Reentrancy-Schutz im Erreichbarkeits-Check.
+- **Befund 16**: `FingerprintDb` begrenzt sich selbst (`MAX_CLIPS=500`,
+  Verdrängung der nach `last_seen` ältesten in Batches) und `clearAll()` ist
+  kein toter Code mehr - Knopf "🗑 Fingerprint-DB leeren" auf der Startseite
+  (mit Rückfrage).
+- **Neu beim Aufräumen des Testaufbaus gefunden**: zwei Sprachen mit
+  derselben Modell-URL teilen sich den Ordner - das Löschen der einen nahm
+  der anderen das Modell weg. `SttSettingsActivity` löscht die Dateien jetzt
+  nur, wenn keine andere konfigurierte Sprache dieselbe URL nutzt.
+
+### Verifiziert (Emulator, API 34 x86_64)
+
+- `./gradlew clean assembleDebug` sauber, **keine** Compiler-Warnings.
+- **Befund 2, der eigentliche Regressionstest**: deutsches Modell gezielt
+  zerstört (`am/final.mdl` auf 7 Byte gekürzt, Datei existiert also weiter,
+  `Model()` scheitert), Deutschlandfunk abgespielt. Logcat zeigt exakt
+  "Neuversuch 1/3", "2/3", "3/3" im 15s-Takt, danach "Analyse für
+  'Deutschlandfunk' bleibt aus (…) - Wiedergabe läuft weiter". **Null**
+  Treffer für "antwortet nicht"/"aus der Rotation"/"schalte weiter" im
+  gesamten Lauf (vorher hätte hier die Kaskade durch alle Sender begonnen),
+  UI-Dump zeigt den Hinweistext, Wiedergabe lief durchgehend weiter.
+- **Befund 4**: Kalibrierung für "de" gestartet, "🗣 Das ist Sprache"
+  markiert - Zähler stieg auf 59 Samples nach 30s und 108 nach 50s (exakt
+  2/s, ein Sample pro Häppchen), und zwar bei konstantem Rohwert 0%. Genau
+  dieser Fall (Wert ändert sich nicht) hätte vorher nach EINEM Sample
+  aufgehört zu zählen.
+- **Befund 3, der bis dahin nie live gelaufene Pfad**: dritte Sprache "de2"
+  angelegt (dieselbe Modell-URL wie "de", dadurch ohne zweiten 45MB-Download
+  ein drittes gleichzeitig geladenes `Model`), über den Wizard nacheinander
+  "en" und "de2" erzwungen - Logcat zeigt "Vosk-Modell fuer Sprache 'de2'
+  geladen" und danach "… aus dem Cache verdraengt (LRU, max 2 gleichzeitig)",
+  kein Absturz, Wiedergabe/Auto-Switch liefen normal weiter. Crash-Buffer
+  (`adb logcat -b crash`) über die gesamte Testreihe leer.
+- **Befund 16**: Knopf leerte eine real gewachsene DB mit **321** gelernten
+  Clips ("🗑 Fingerprint-DB geleert: 321 Clip(s) gelöscht") - schöner Beleg
+  dafür, dass das unbegrenzte Wachstum kein theoretisches Problem war.
+- **Nebenbei bestätigt**: der neue Zip-Slip-Schutz bricht keinen normalen
+  Modell-Download (deutsches Modell nach dem Test regulär über die App neu
+  geladen, "Modell bereit."), und das Löschen einer Sprache mit geteilter
+  Modell-URL lässt die andere intakt (Dateisystem nach dem Löschen von "de2"
+  geprüft).
+- Emulator danach wieder im Ausgangszustand (dieselben Sender, "de"/"en"
+  bereit, "de2" entfernt).
+
+### Bewusst NICHT gemacht
+
+- **Befund 17 (kein HLS/DASH)**: nur dokumentiert. Das Nachziehen von
+  `media3-exoplayer-hls`/`-dash` ist eine Funktionserweiterung (mehr
+  spielbare Sender), keine Review-Korrektur - Entscheidung dafür gehört in
+  eine eigene Runde, zumal der Analysepfad HLS weiterhin nicht lesen könnte
+  (`MediaExtractor` parst keine m3u8) und solche Sender dann dauerhaft ohne
+  Erkennung liefen.
+- **Befund 8 (Verwaltungs-Activity mit hunderten Sendern)**: nur
+  dokumentiert. Ein RecyclerView-Umbau samt Suche/Filter ist Feature-Arbeit.
+- **Befund 5 (Rest)**: blockierende MediaExtractor-/MediaCodec-Aufrufe
+  bleiben unabbrechbar - ein sauberer Fix bräuchte einen eigenen,
+  interruptierbaren Thread pro Lauf. Entschärft ist nur die Folge
+  (Nachzügler können nichts mehr veröffentlichen), nicht die Ursache.
+- **Befund 6 (Rest)**: `StationRepository.init()` liest `stations.json`
+  weiterhin synchron in `Application.onCreate()` - asynchron zu machen
+  würde die dort bewusst hergestellte Invariante "Repository ist fertig,
+  bevor irgendeine Komponente läuft" aufweichen; das ist die teurere
+  Änderung von beiden.
+- Kein Test des Wake-Mode bei ausgeschaltetem Display (Befund 7) - im
+  headless-Emulator nicht sinnvoll nachstellbar, bleibt auf einem echten
+  Gerät zu bestätigen.
+- Kein Test des Erfolgspfads der Kalibrierung mit zwei echt
+  unterschiedlichen Quellen (offen seit Fortsetzung 5) - die Sample-Sammlung
+  ist jetzt verifiziert, ein sauberer `overlapping=false`-Vorschlag samt
+  "Übernehmen" weiterhin nicht.

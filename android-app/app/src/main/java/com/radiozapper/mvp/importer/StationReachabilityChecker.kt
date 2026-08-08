@@ -58,7 +58,29 @@ object StationReachabilityChecker {
 
     private val lock = Any()
 
+    // Ein zweiter, parallel gestarteter Lauf (Doppelklick auf den Knopf, oder
+    // Neustart der Activity waehrend ein Lauf noch laeuft) wuerde sich
+    // dieselben Flows teilen und dem ersten die Ergebnisse unter den Fuessen
+    // wegziehen (Review-Befund 15, siehe SESSION.md).
+    @Volatile
+    private var running = false
+
     suspend fun checkCategory(category: String) {
+        synchronized(lock) {
+            if (running) {
+                Log.d(TAG, "Erreichbarkeits-Check laeuft bereits - zweiter Start ignoriert")
+                return
+            }
+            running = true
+        }
+        try {
+            runCheck(category)
+        } finally {
+            running = false
+        }
+    }
+
+    private suspend fun runCheck(category: String) {
         val targets = StationRepository.stations.value.filter { it.category == category }
         _unreachableIds.value = emptySet()
 

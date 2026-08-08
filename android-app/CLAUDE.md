@@ -85,10 +85,31 @@ Fehlerfläche. Preis: der Stream läuft effektiv doppelt über das Netz —
 für Mobilfunk ungeeignet, nur WLAN/Prototyp. `StreamAnalyzer` resampelt
 per `analysis/MonoResampler.kt` (reine lineare Interpolation, kein
 Anti-Aliasing) auf 16kHz-Mono und füttert Vosk; ein gleitendes
-Mehrheitsvotum über `SMOOTHING_WINDOW_SECONDS=4.0` mit Hysterese
-(`RATIO_TO_CONFIRM_SPEECH=0.65`/`RATIO_TO_CONFIRM_MUSIC=0.30`, **nicht**
-an echten Sendern kalibriert, anders als die Docker-Werte) liefert den
-geglätteten Sprache/Musik-Status statt Einzel-Chunk-Flackern.
+Mehrheitsvotum über `SMOOTHING_WINDOW_SECONDS=4.0` mit Hysterese liefert
+den geglätteten Sprache/Musik-Status statt Einzel-Chunk-Flackern. Die beiden
+Hysterese-Schwellen (`ratioToConfirmSpeech`/`ratioToConfirmMusic`, Defaults
+0.65/0.30) sind seit Phase 7 **pro Sprache** konfigurierbar
+(`stt/SttSettings.kt`, `LanguageConfig`) und über den Kalibrierungs-Wizard
+messbar — die Defaults selbst sind weiterhin **nicht** an echten Sendern
+kalibriert, anders als die Docker-Werte.
+
+Drei Invarianten in `StreamAnalyzer`, alle aus dem Phase-8-Review (siehe
+`SESSION.md`), die beim Anfassen dieser Datei gelten:
+
+1. **Ein Analyse-Fehler ist KEIN Sender-Fehler.** Fehler landen in
+   `analyzerError` (Klartext), nicht in der Tot-Sperre des Watchdogs —
+   `PlaybackService.handleAnalyzerError()` startet die Analyse begrenzt oft
+   neu und zeigt die Ursache an. Über "Sender tot" entscheidet
+   ausschließlich der ExoPlayer.
+2. **Ein abgelöster Lauf darf nichts mehr veröffentlichen** (`generation`):
+   `stop()` kann die blockierenden MediaCodec-/MediaExtractor-Aufrufe nur
+   kooperativ abbrechen, ein Nachzügler würde sonst Status/Fehler dem
+   längst laufenden nächsten Sender zuschreiben.
+3. **Kein Boxing im Audio-Pfad und keine unbegrenzten Puffer.** Chunk-Rest
+   und Fingerprint-Puffer sind `ShortArray` fester Größe; der
+   Fingerprint-Puffer wird nach dem einmaligen Check pro Streak NICHT
+   weitergefüllt (vorher: `List<Short>`, 16.000 geboxte Objekte/Sekunde,
+   unbegrenzt wachsend bis zum Ende des Sprache-Streaks → OOM).
 
 ### `PlaybackService.kt`: Wiedergabe, Auto-Switch, Watchdog in einem
 
@@ -126,8 +147,56 @@ hier Reaktionen aus:
 Bekannte Grenze dabei: eine schmale Race, bei der ein spät eintreffender
 `onPlayerError()` der ALTEN Quelle nach bereits erfolgtem Wechsel die NEUE
 Quelle fälschlich sperren könnte — bewusst nicht per Generation-Counter
-abgesichert (Zeitfenster sehr schmal). Beide Sperren sind reines
+abgesichert (Zeitfenster sehr schmal; der ANALYSE-seitige Zwilling dieser
+Race ist seit dem Phase-8-Review dagegen abgesichert, siehe
+`StreamAnalyzer`-Invariante 2 oben). Beide Sperren sind reines
 In-Memory-Timing, überleben also keinen App-Neustart.
+
+Dazu kommen vier weitere Subsysteme im selben Service, alle nach demselben
+Muster wie die Vorbilder im Docker-Projekt: **reine Domänenlogik in einer
+eigenen Datei ohne Android-/Player-Bezug, die Audio-Umschaltung bleibt hier**
+— `newsbreak/NewsBreak.kt` (Zeitfenster/Zufallsauswahl der
+Nachrichten-Pause; `_currentStation` bleibt währenddessen bewusst der
+pausierte Sender), `fingerprint/Fingerprint.kt` + `FingerprintDb.kt`
+(Constellation-Map auf dem ohnehin laufenden 16kHz-Analysestrom, Treffer →
+derselbe `attemptAutoSwitch()` wie ein Sprache-Treffer, DB selbstbegrenzt auf
+`MAX_CLIPS=500`), `stt/Calibration.kt` (Vorschlagsformel des Wizards) und die
+Vorwärmung (`refreshPreload()`, genau EIN vorbereiteter Kandidat, kein Pool
+wie `prebuffer_count` im Docker-Projekt). Details und Begründungen stehen in
+`README.md`; hier nur die Stelle, an der sie zusammenlaufen.
+
+### Mehrsprachiges STT: `stt/SttSettings.kt` + `vosk/VoskModelCache.kt`
+
+Zuordnung **Kategorie → Sprache** (nicht Sender → Sprache), identisch zum
+Docker-Vorbild. `play()` löst Sprache und Modellpfad bei JEDEM Aufruf intern
+über `SttSettings.resolveLanguage(station.category)` auf — bewusst kein
+durchgereichter Parameter, weil genau das im Docker-Projekt eine vergessene
+Aufrufstelle und damit einen Absturz produziert hat.
+
+`VoskModelCache` hält geladene `Model`-Objekte (LRU,
+`MAX_LOADED_VOSK_LANGUAGES=2`). **Ein `Model` darf nie geschlossen werden,
+solange ein `Recognizer` es benutzt** — `Model.close()` gibt nativen Speicher
+frei, ein Zugriff danach stürzt ohne Java-Stacktrace ab. Deshalb
+`acquire()`/`release()` mit Belegzähler: verdrängt/geschlossen wird nur, was
+niemand benutzt; noch belegte Einträge werden vorgemerkt und beim `release()`
+geschlossen (Phase-8-Review, Befund 3). Cache-Schlüssel ist Sprachcode UND
+Modellpfad, damit eine geänderte Modell-URL nicht das alte Modell liefert.
+
+Eine laufende Kalibrierungs-Session (`calibrationLanguage`) erzwingt ihre
+Sprache für jeden Sender und schaltet automatisches Umschalten ab; sie endet
+erst mit `onDestroy()` der `CalibrationActivity`, weshalb die Startseite
+sichtbar darauf hinweist.
+
+### `importer/`: M3U-Import und Erreichbarkeits-Check
+
+`StationImporter` lädt/parst eine M3U-Playlist (Default identisch zum
+Docker-Projekt) und übernimmt neue Sender **deaktiviert** in „Unsortiert" —
+bewusst OHNE Erreichbarkeitsprüfung beim Import selbst (bei hunderten
+Einträgen zu langsam, und ein deaktivierter Sender ist harmlos). Die Prüfung
+gibt es als separaten, manuell ausgelösten Schritt
+(`StationReachabilityChecker`, nur Kategorie „Unsortiert",
+`CHECK_CONCURRENCY=3`), Ergebnis rein informativ, es wird nie automatisch
+gelöscht. Beide sind Singletons mit eigenem `StateFlow` für die UI.
 
 ### `model/StationRepository.kt`: Persistenz als flache JSON-Datei
 

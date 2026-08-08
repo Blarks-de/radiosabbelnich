@@ -12,6 +12,7 @@ import android.os.IBinder
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
@@ -51,7 +52,13 @@ class MainActivity : AppCompatActivity() {
     private var fingerprintOutcomeJob: Job? = null
     private var fingerprintMatchJob: Job? = null
     private var sttModelMissingJob: Job? = null
+    private var analyzerErrorJob: Job? = null
+    private var calibrationJob: Job? = null
     private var lockedStations: Map<String, StationLockReason> = emptyMap()
+
+    // Zwei Ursachen, ein Hinweisfeld (siehe renderAnalysisHint()).
+    private var latestMissingModelLanguage: String? = null
+    private var latestAnalyzerError: String? = null
 
     // Fuer die kombinierte "Läuft: ..."-Anzeige (siehe renderCurrentDisplay()) -
     // currentStation und newsBreakActive/newsBreakFileName sind drei getrennte
@@ -151,11 +158,31 @@ class MainActivity : AppCompatActivity() {
             sttModelMissingJob?.cancel()
             sttModelMissingJob = lifecycleScope.launch {
                 service.sttModelMissing.collect { language ->
+                    latestMissingModelLanguage = language
+                    renderAnalysisHint()
+                }
+            }
+
+            // Analyse gestoppt, Wiedergabe laeuft weiter (siehe
+            // PlaybackService.handleAnalyzerError()) - frueher sperrte genau
+            // dieser Fall den Sender stillschweigend als "tot".
+            analyzerErrorJob?.cancel()
+            analyzerErrorJob = lifecycleScope.launch {
+                service.analyzerError.collect { message ->
+                    latestAnalyzerError = message
+                    renderAnalysisHint()
+                }
+            }
+
+            // Laufende Kalibrierung (siehe PlaybackService.calibrationLanguage).
+            calibrationJob?.cancel()
+            calibrationJob = lifecycleScope.launch {
+                service.calibrationLanguage.collect { language ->
                     if (language != null) {
-                        binding.sttModelMissingText.text = getString(R.string.stt_model_missing, language)
-                        binding.sttModelMissingText.visibility = android.view.View.VISIBLE
+                        binding.calibrationActiveText.text = getString(R.string.calibration_active_hint, language)
+                        binding.calibrationActiveText.visibility = android.view.View.VISIBLE
                     } else {
-                        binding.sttModelMissingText.visibility = android.view.View.GONE
+                        binding.calibrationActiveText.visibility = android.view.View.GONE
                     }
                 }
             }
@@ -173,6 +200,8 @@ class MainActivity : AppCompatActivity() {
             fingerprintOutcomeJob?.cancel()
             fingerprintMatchJob?.cancel()
             sttModelMissingJob?.cancel()
+            analyzerErrorJob?.cancel()
+            calibrationJob?.cancel()
             lockedStations = emptyMap()
         }
     }
@@ -230,6 +259,8 @@ class MainActivity : AppCompatActivity() {
             playbackService?.undoLastFingerprintMatch()
         }
 
+        binding.clearFingerprintsButton.setOnClickListener { confirmClearFingerprints() }
+
         setupNewsBreakSection()
     }
 
@@ -272,6 +303,28 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Ein Hinweisfeld fuer beide Gruende, aus denen gerade keine Analyse
+     * laeuft: fehlendes Modell (Vorrang, weil konkret behebbar) oder ein
+     * Analyse-Fehler. Beides betrifft NUR die Erkennung - die Wiedergabe
+     * laeuft in beiden Faellen normal weiter (siehe PlaybackService).
+     */
+    private fun renderAnalysisHint() {
+        val missing = latestMissingModelLanguage
+        val error = latestAnalyzerError
+        when {
+            missing != null -> {
+                binding.sttModelMissingText.text = getString(R.string.stt_model_missing, missing)
+                binding.sttModelMissingText.visibility = android.view.View.VISIBLE
+            }
+            error != null -> {
+                binding.sttModelMissingText.text = getString(R.string.analyzer_error, error)
+                binding.sttModelMissingText.visibility = android.view.View.VISIBLE
+            }
+            else -> binding.sttModelMissingText.visibility = android.view.View.GONE
+        }
+    }
+
     /** "Läuft: ..."-Text: waehrend einer Nachrichten-Pause die MP3, sonst der normale Sendername. Kein Live-Countdown (reiner Kosmetik-Tick, siehe Bullshitometer-Begruendung). */
     private fun renderCurrentDisplay() {
         binding.currentStationText.text = if (latestNewsBreakActive) {
@@ -301,6 +354,8 @@ class MainActivity : AppCompatActivity() {
         fingerprintOutcomeJob?.cancel()
         fingerprintMatchJob?.cancel()
         sttModelMissingJob?.cancel()
+        analyzerErrorJob?.cancel()
+        calibrationJob?.cancel()
     }
 
     /**
@@ -387,6 +442,22 @@ class MainActivity : AppCompatActivity() {
         binding.bsMeterPercentText.text = getString(R.string.bs_meter_pct, pct)
         val hue = (120 - pct * 1.2).coerceAtLeast(0.0).toFloat()
         binding.bsMeterBar.progressTintList = android.content.res.ColorStateList.valueOf(hslToColor(hue, 0.70f, 0.45f))
+    }
+
+    /** Rueckfrage vor dem Leeren - die gelernten Clips sind Betriebsdaten mehrerer Stunden Laufzeit, kein Wegwerfzustand. */
+    private fun confirmClearFingerprints() {
+        val service = playbackService ?: return
+        AlertDialog.Builder(this)
+            .setTitle(R.string.fp_clear_confirm_title)
+            .setMessage(R.string.fp_clear_confirm_message)
+            .setPositiveButton(R.string.btn_clear_fingerprints) { _, _ ->
+                lifecycleScope.launch {
+                    val deleted = service.clearFingerprints()
+                    Toast.makeText(this@MainActivity, getString(R.string.fp_cleared, deleted), Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton(R.string.btn_cancel, null)
+            .show()
     }
 
     /** "🔎 Fingerprint"-Chip analog zum Web-Interface: letztes Ereignis (Match/Learned) oder "–", solange noch nichts passiert ist. */

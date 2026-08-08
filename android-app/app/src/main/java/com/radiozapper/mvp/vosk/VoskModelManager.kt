@@ -54,9 +54,15 @@ object VoskModelManager {
     private fun isModelPresent(modelDir: File): Boolean =
         File(modelDir, "am/final.mdl").exists() && File(modelDir, "conf/model.conf").exists()
 
-    /** Ein StateFlow pro Sprachcode, ueber Activity-Instanzen hinweg geteilt (siehe Klassen-Doc). */
+    // Schluessel ist Sprachcode UND Modell-URL: aendert der Nutzer die URL
+    // einer bestehenden Sprache, zeigt der abgeleitete Ordner woanders hin -
+    // ein rein sprachcode-basierter Schluessel meldete danach weiter den
+    // Ready-Status des ALTEN Modells (Review-Befund 10, siehe SESSION.md).
+    private fun stateKey(code: String, modelUrl: String) = "$code|$modelUrl"
+
+    /** Ein StateFlow pro Sprache+Modell-URL, ueber Activity-Instanzen hinweg geteilt (siehe Klassen-Doc). */
     fun state(context: Context, code: String, modelUrl: String): StateFlow<ModelState> =
-        states.getOrPut(code) {
+        states.getOrPut(stateKey(code, modelUrl)) {
             val dir = modelDirFor(context, modelUrl)
             MutableStateFlow(if (isModelPresent(dir)) ModelState.Ready(dir.absolutePath) else ModelState.NotReady)
         }.asStateFlow()
@@ -71,7 +77,7 @@ object VoskModelManager {
 
     suspend fun downloadAndUnpack(context: Context, code: String, modelUrl: String) {
         val dir = modelDirFor(context, modelUrl)
-        val flow = states.getOrPut(code) { MutableStateFlow(ModelState.NotReady) }
+        val flow = states.getOrPut(stateKey(code, modelUrl)) { MutableStateFlow(ModelState.NotReady) }
         if (isModelPresent(dir)) {
             flow.value = ModelState.Ready(dir.absolutePath)
             return
@@ -100,7 +106,7 @@ object VoskModelManager {
     /** Loescht die heruntergeladenen Modelldateien - fuer SttSettings.deleteLanguage() (Speicherplatz freigeben, keine verwaisten Dateien). */
     fun deleteModel(context: Context, code: String, modelUrl: String) {
         modelDirFor(context, modelUrl).deleteRecursively()
-        states[code]?.value = ModelState.NotReady
+        states[stateKey(code, modelUrl)]?.value = ModelState.NotReady
     }
 
     private fun downloadWithProgress(modelUrl: String, destination: File, flow: MutableStateFlow<ModelState>) {
@@ -138,11 +144,19 @@ object VoskModelManager {
      * direkt stimmt.
      */
     private fun unzip(zipFile: File, targetDir: File) {
+        val targetRoot = targetDir.canonicalFile
         ZipInputStream(zipFile.inputStream().buffered()).use { zis ->
             var entry = zis.nextEntry
             val buffer = ByteArray(64 * 1024)
             while (entry != null) {
                 val outFile = File(targetDir, entry.name)
+                // "Zip Slip": ein Eintragsname wie ../../x wuerde sonst
+                // ausserhalb von filesDir schreiben. Die Modell-URL ist
+                // Freitext aus der UI, also nicht per se vertrauenswuerdig
+                // (Review-Befund 14, siehe SESSION.md).
+                if (!outFile.canonicalPath.startsWith(targetRoot.path + File.separator)) {
+                    throw SecurityException("Zip-Eintrag zeigt aus dem Zielverzeichnis heraus: ${entry.name}")
+                }
                 if (entry.isDirectory) {
                     outFile.mkdirs()
                 } else {

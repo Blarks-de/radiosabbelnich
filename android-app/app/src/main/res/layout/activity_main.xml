@@ -51,6 +51,21 @@
             android:textColor="#CC3333"
             android:visibility="gone" />
 
+        <!--
+            Laufende STT-Kalibrierung: die Session ueberlebt das Verlassen des
+            Wizard-Bildschirms, und solange sie laeuft, ist das automatische
+            Umschalten bewusst aus (siehe PlaybackService) - ohne diesen Hinweis
+            sah das wie ein Defekt aus (Review-Befund 9, siehe SESSION.md).
+        -->
+        <TextView
+            android:id="@+id/calibrationActiveText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textSize="12sp"
+            android:textColor="#1ABC9C"
+            android:visibility="gone" />
+
         <View
             android:layout_width="match_parent"
             android:layout_height="1dp"
@@ -181,6 +196,19 @@
                 android:text="@string/fp_chip_off"
                 android:textSize="14sp" />
         </LinearLayout>
+
+        <!--
+            Bis zum Phase-8-Review gab es ueberhaupt keine Moeglichkeit, die
+            gelernten Clips loszuwerden (clearAll() war toter Code, siehe
+            Review-Befund 16 in SESSION.md) - sinnvoll z.B. nach einer laengeren
+            Fehlklassifikations-Serie oder beim Wechsel des Senderbestands.
+        -->
+        <Button
+            android:id="@+id/clearFingerprintsButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/btn_clear_fingerprints" />
 
         <View
             android:layout_width="match_parent"

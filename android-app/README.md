@@ -1,7 +1,8 @@
 # RadioZapper MVP (Android)
 
 > ⚠️ **Aktiver Prototyp im Bau, kein fertiges Produkt.** Wird laufend
-> weiterentwickelt (siehe `../SESSION.md` fuer den aktuellen Verlauf) -
+> weiterentwickelt (Verlauf: `SESSION.md` in diesem Verzeichnis, aeltere
+> Eintraege bis 2026-08-07 in `../SESSION.md`) -
 > Verhalten, Konstanten und sogar die Architektur einzelner Teile koennen
 > sich zwischen zwei Sessions noch aendern.
 
@@ -54,12 +55,16 @@ Grenzen").
   (`stt/CalibrationActivity.kt`, "Kalibrieren"-Button pro heruntergeladener
   Sprache): erzwingt die gewaehlte Sprache fuer den gerade laufenden Sender,
   sammelt beim Antippen von "🗣 Das ist Sprache"/"🎵 Das ist Musik" den
-  Live-Rohwert (`StreamAnalyzer.speechRatio`) in zwei Listen und schlaegt
+  Live-Rohwert (`StreamAnalyzer.speechRatioSamples`, ein Wert pro 0.5s-
+  Haeppchen) in zwei Listen und schlaegt
   daraus `ratioToConfirmSpeech`/`ratioToConfirmMusic` fuer diese Sprache vor
   - live neu berechnet bei jedem neuen Sample, mit Warnung statt
   Vorschlag, falls sich Sprache-/Musik-Samples noch ueberlappen. Automatisches
   Umschalten bleibt waehrend einer Session aus, Sender koennen aber jederzeit
-  ueber die Startseite gewechselt werden.
+  ueber die Startseite gewechselt werden. Die Session endet erst mit
+  "Fertig"/Zurueck (nicht schon beim Wegwischen des Bildschirms) - solange
+  weist die Startseite ausdruecklich darauf hin, dass das automatische Zappen
+  gerade aus ist.
 - Parallele Analyse: eine zweite, unabhaengige Dekodierung desselben
   Streams (MediaExtractor/MediaCodec) wird auf 16kHz-Mono resampelt und
   laufend in Vosk (`Recognizer.acceptWaveForm`) gefuettert; erkannter
@@ -67,7 +72,9 @@ Grenzen").
 - **Geglaetteter Status** (`StreamAnalyzer.kt`): gleitendes
   Mehrheitsvotum ueber die letzten `SMOOTHING_WINDOW_SECONDS=4.0`
   Sekunden statt Einzel-Chunk-Anzeige, mit Hysterese
-  (`RATIO_TO_CONFIRM_SPEECH=0.65` / `RATIO_TO_CONFIRM_MUSIC=0.30`) gegen
+  (`ratioToConfirmSpeech`/`ratioToConfirmMusic`, Defaults 0.65/0.30 -
+  seit Phase 7 pro Sprache konfigurierbar und ueber den
+  Kalibrierungs-Wizard messbar, siehe unten) gegen
   Flackern nahe der 50%-Grenze. Ersetzt eine fruehere strikte
   "N Sekunden ohne Unterbrechung"-Serie, die bei ganz normalen kurzen
   Sprechpausen zu haeufig zurueckgesetzt wurde (live beobachtet).
@@ -334,7 +341,9 @@ adb logcat -s PlaybackService:*   # zeigt jeden Sprache/Musik-Wechsel
 - `playback/StationLockReason.kt` - Enum `{SPEECH_COOLDOWN, DEAD}` fuer
   die beiden unterscheidbaren Sperrgruende (siehe `PlaybackService`).
 - `playback/PlaybackService.kt` - Foreground Service, haelt ExoPlayer
-  (Wiedergabe) UND `StreamAnalyzer` (Analyse); reagiert auf den
+  (Wiedergabe, mit `C.WAKE_MODE_NETWORK` - nutzt die laengst deklarierte
+  `WAKE_LOCK`-Berechtigung, damit bei ausgeschaltetem Display nicht die CPU
+  schlafen geht) UND `StreamAnalyzer` (Analyse); reagiert auf den
   geglaetteten Status mit automatischem Umschalten, auf Aenderungen aus
   `StationRepository.stations` (siehe oben) UND auf ExoPlayer-Fehler/
   Buffering-Timeouts (Watchdog, siehe eigener Abschnitt unten); exponiert
@@ -405,9 +414,15 @@ angepasst statt 1:1 uebersetzt. Zwei Erkennungswege, beide in
   aber dauerhaft leer). Timer startet bei Eintritt in `STATE_BUFFERING`,
   bricht bei jedem anderen Zustand ab - deckt automatisch auch die
   anfaengliche "Verbinde…"-Phase mit ab.
-- Bonus, praktisch kostenlos: `StreamAnalyzer`s eigenes, unabhaengiges
-  `PlaybackStatus.ERROR` (vorher komplett ignoriert) haengt jetzt ebenfalls
-  am selben Mechanismus.
+- **NICHT mehr am Watchdog**: `StreamAnalyzer`s eigenes
+  `PlaybackStatus.ERROR` haengte bis zum Phase-8-Review ebenfalls an diesem
+  Mechanismus ("praktisch kostenlose zweite Bestaetigung"). Das war falsch -
+  ein Analyse-Fehler heisst "die Analyse konnte nicht laufen" (nicht ladbares
+  Vosk-Modell, Container, den `MediaExtractor` nicht versteht, kein
+  Audio-Track), nicht "der Sender ist tot". Bei einem kaputten Modell traf das
+  in Sekunden jeden Sender der Kategorie, bis alle gesperrt waren und die
+  Eskalation in eine Dauer-Schnellrotation lief. Analyse-Fehler laufen
+  jetzt ueber `handleAnalyzerError()`, siehe eigener Abschnitt unten.
 
 Eigene Sperr-Map `deadUntil` (`STATION_DEAD_LOCK_SECONDS=300`, 5 Min. wie
 im Docker-Projekt), bewusst getrennt von `stationCooldownUntil` (Sprache-
@@ -418,6 +433,26 @@ beide Sperrgruende einheitlich, inkl. der "alle gesperrt"-Eskalation
 (beide Maps leeren statt haengenzubleiben, wie `dead_until.clear()`).
 Manuelle Sender-Wahl (`manualPlay()`, von `MainActivity` statt `play()`
 aufgerufen) hebt beide Sperren fuer den gewaehlten Sender auf.
+
+### Analyse-Fehler getrennt von Sender-Fehlern
+
+Seit dem Phase-8-Review (siehe `SESSION.md`, Review-Befund 2): der
+`StreamAnalyzer` meldet eine Klartext-Ursache ueber `analyzerError`, statt
+ueber `PlaybackStatus.ERROR` den Watchdog auszuloesen. `PlaybackService`
+startet die Analyse daraufhin bis zu `ANALYZER_MAX_RETRIES=3`-mal im Abstand
+von `ANALYZER_RETRY_SECONDS=15` neu (ein abgerissener Analyse-Stream faengt
+sich damit von selbst wieder). Danach laeuft der Sender bewusst OHNE
+Sprach-/Musik-Erkennung weiter, und die Startseite zeigt "⚠ Analyse gestoppt:
+… (Wiedergabe laeuft weiter)". Wiedergabe und Sperr-Logik bleiben davon
+unberuehrt - ueber "Sender tot" entscheidet ausschliesslich der ExoPlayer
+(Fehler-Callback bzw. Buffering-Timeout, siehe Watchdog-Abschnitt oben).
+
+Zusaetzlich hat der Analyzer eine laufende Nummer (`generation`): ein durch
+`stop()`/`start()` abgeloester Lauf kann seine blockierenden MediaCodec-/
+MediaExtractor-Aufrufe nicht sofort abbrechen und laeuft noch kurz aus -
+Status, Fehler und Fingerprint-Treffer eines solchen Nachzueglers werden
+verworfen, damit sie nicht dem laengst laufenden naechsten Sender
+zugeschrieben werden.
 
 ### Vorwärmung: ein vorgewärmter Kandidat für lückenlosere Wechsel
 
@@ -592,7 +627,15 @@ Senderliste, nur in die andere Richtung (hier rechtfertigt der indizierte
 Hash-Lookup echtes SQL, aber keine Room-Boilerplate fuer zwei simple
 Tabellen). `matchOrLearn()`/`deleteClip()`/`clearAll()` folgen 1:1
 `FingerprintDB`s Vorbild, inkl. desselben Voting-Mechanismus
-((clip_id, delta)-Zaehlung fuer konsistenten Zeitversatz).
+((clip_id, delta)-Zaehlung fuer konsistenten Zeitversatz). **Anders als das
+Vorbild begrenzt sich die DB selbst** (seit dem Phase-8-Review, siehe
+`SESSION.md`): `matchOrLearn()` lernt jeden ungematchten 2s-Sprachclip mit
+mehreren hundert Hash-Zeilen, auf dem Handy waechst das sonst unbegrenzt.
+Ab `MAX_CLIPS=500` werden die nach `last_seen` aeltesten Clips in Batches
+verdraengt - ein Clip, der lange nicht mehr wiedererkannt wurde, war
+offensichtlich kein wiederkehrender Jingle. Zusaetzlich der Knopf
+"🗑 Fingerprint-DB leeren" auf der Startseite (mit Rueckfrage) fuer einen
+bewussten Neuanfang.
 
 `StreamAnalyzer` zaehlt fuers Fingerprint-Timing einen zusaetzlichen
 ROHEN, ungeglaetteten Speech-Streak mit (`FINGERPRINT_TRIGGER_CHUNKS=4` =
@@ -678,13 +721,19 @@ das auch das "Bullshitometer" zeigt.
 `stt/Calibration.kt` ist reine Domänenlogik (kennt weder `PlaybackService`
 noch `StreamAnalyzer`, analog `NewsBreak.kt`/`Fingerprint.kt`):
 `suggestRatios(speechSamples, musicSamples)` trennt die beiden
-Verteilungen ueber `musicMax`/`speechMin` und teilt die Luecke dazwischen
+Verteilungen ueber `musicHigh`/`speechLow` und teilt die Luecke dazwischen
 im Verhaeltnis `MARGIN_RATIO=0.7` auf (identischer Wert wie
 `_THRESHOLD_MARGIN_RATIO` im Docker-Projekt, Richtung Sprache-Seite
-gewichtet) - `ratioToConfirmMusic` liegt naeher an `musicMax`,
-`ratioToConfirmSpeech` naeher an `speechMin`. Ueberlappen sich die
-Verteilungen (`musicMax >= speechMin`), liefert die Funktion
+gewichtet) - `ratioToConfirmMusic` liegt naeher an `musicHigh`,
+`ratioToConfirmSpeech` naeher an `speechLow`. Ueberlappen sich die
+Verteilungen (`musicHigh >= speechLow`), liefert die Funktion
 `overlapping=true` statt eines potenziell falschen Vorschlags.
+
+`musicHigh`/`speechLow` sind seit dem Phase-8-Review (siehe `SESSION.md`,
+Befund 4) das 90.- bzw. 10.-Perzentil, NICHT mehr `max()`/`min()`, und es
+braucht `MIN_SAMPLES_PER_LEVEL=20` Samples pro Seite (ca. 10 Sekunden).
+Vorher genuegte ein einziger Uebergangswert - der Moderator holt Luft, ein
+Jingle laeuft an - um jeden Vorschlag als "ueberlappend" zu verwerfen.
 
 `PlaybackService` haelt die Session direkt als Felder (kein eigenes
 State-Objekt) - dieselbe Entscheidung wie bei Fingerprint/News-Break,
@@ -819,9 +868,12 @@ dafuer das Textfeld - einfach die Tailscale-IP `100.92.3.18` eintragen.
   UEBER der Schwelle) wurde mangels eines garantiert wiederkehrenden
   Test-Clips noch nicht live beobachtet, nur der gleiche, im Docker-Projekt
   bereits bewaehrte Algorithmus neu in Kotlin geschrieben.
-- **Vosk-`Model` wird bei jedem Play-/Auto-Switch-Klick neu geladen**
-  (kein Wiederverwenden ueber Sender-Wechsel hinweg) - kostet jedes Mal
-  ca. 1-2 Sekunden zusaetzliche Verzoegerung, nicht optimiert.
+- **Ein Vosk-Modellwechsel kostet weiterhin Ladezeit** (ca. 1-2s), wenn
+  die Zielsprache nicht mehr im `VoskModelCache` liegt - innerhalb der
+  `MAX_LOADED_VOSK_LANGUAGES=2` zuletzt genutzten Sprachen wird das
+  geladene Modell dagegen ueber Sender-Wechsel hinweg wiederverwendet
+  (seit Phase 7; die frueher hier stehende Aussage "wird bei JEDEM
+  Play-Klick neu geladen" galt nur bis dahin).
 - **Resampler ist reine lineare Interpolation ohne Anti-Aliasing-Filter**
   (`MonoResampler.kt`) - fuer die grobe Sprache/Musik-Unterscheidung
   ausreichend (siehe Live-Test), aber keine hochwertige Audiobearbeitung.
@@ -864,6 +916,25 @@ dafuer das Textfeld - einfach die Tailscale-IP `100.92.3.18` eintragen.
   `play()`-Wechsel auf eine neue koennte theoretisch die NEUE (gerade erst
   gestartete) Quelle faelschlich sperren - bewusst nicht durch einen
   Generation-Counter o.ae. abgesichert, Zeitfenster sehr schmal.
+- **Kein HLS/DASH**: eingebunden sind nur `media3-exoplayer`/
+  `media3-common`, nicht `media3-exoplayer-hls`/`-dash`. Sender mit
+  `.m3u8`-URL (in der Kodinerds-Importliste durchaus vorhanden) koennen
+  deshalb prinzipiell nicht laufen - sie erscheinen als "⚠ Antwortet nicht"
+  bzw. "nicht erreichbar", ohne dass die Ursache erkennbar waere. Auch der
+  Analysepfad kann sie nicht lesen (`MediaExtractor` parst keine m3u8). Beim
+  Phase-8-Review bewusst nur dokumentiert, nicht behoben - das Nachziehen der
+  Dependency ist eine Funktionserweiterung, keine Review-Korrektur.
+- **Verwaltungs-Activity baut bei jeder Aenderung alle Zeilen neu auf** -
+  bei den real importierten 361 Sendern hunderte `inflate()` im Main-Thread
+  pro Checkbox-Klick (bekannt seit dem Phase-8-Review, nicht behoben: ein
+  RecyclerView-Umbau ist Feature-Arbeit, kein Bugfix).
+- **Blockierende Decoder-Aufrufe lassen sich nicht abbrechen**
+  (`MediaExtractor.setDataSource()` haengt bis zum OS-Timeout): ein
+  abgeloester Analyse-Lauf und ein abgelaufener Erreichbarkeits-Check laufen
+  im Hintergrund noch aus. Die daraus folgende Verwechslungsgefahr ist
+  entschaerft (Nachzuegler koennen nichts mehr veroeffentlichen, siehe
+  "Analyse-Fehler getrennt von Sender-Fehlern"), der doppelte
+  Ressourcenverbrauch fuer die Restlaufzeit bleibt.
 - **Kein Sperr-Anzeige in der Verwaltungs-Activity** (nur in der
   Play-Liste auf dem Hauptschirm).
 - **Kategorienliste selbst ist weiterhin nur im Code aenderbar**

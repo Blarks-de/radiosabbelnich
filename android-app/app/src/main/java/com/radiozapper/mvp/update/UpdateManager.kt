@@ -90,6 +90,12 @@ class UpdateManager(private val context: Context) {
                 val connection = URL("${getBaseUrl()}/radiozapper.apk").openConnection() as HttpURLConnection
                 connection.connectTimeout = 15_000
                 connection.readTimeout = 15_000
+                // Ohne diese Pruefung landete z.B. eine 404-Fehlerseite als
+                // "radiozapper.apk" im Cache und scheiterte erst kommentarlos
+                // im System-Installer (Review-Befund 14, siehe SESSION.md).
+                if (connection.responseCode !in 200..299) {
+                    throw IllegalStateException("Server antwortete mit HTTP ${connection.responseCode}")
+                }
                 connection.inputStream.use { input ->
                     apkFile.outputStream().use { output -> input.copyTo(output) }
                 }
