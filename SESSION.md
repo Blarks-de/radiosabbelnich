@@ -4543,3 +4543,49 @@ gegengelesen (Icecast-URLs, `<title>`-Tags, Hinweistexte in beiden
 Sprachen). Android-Seite: `AndroidManifest.xml`, `build.gradle.kts`,
 `themes.xml`, alle `package`-Deklarationen einzeln geprüft — `applicationId`
 und alle 24 Package-Zeilen bestätigt unverändert `com.radiozapper.mvp`.
+
+## 2026-08-08 (Fortsetzung 2) — Neues Banner-Bild nachgezogen
+
+Auslöser: der Rename-Eintrag oben hielt ausdrücklich fest, dass
+`pics/keinsabbelradio.webp` weiterhin den alten „RADIOZAPPER“-Schriftzug
+zeigt (kein Bildgenerierungs-Tool zur Hand). Nutzer hat inzwischen selbst
+ein neues Motiv besorgt und als `pics/KeinSabbelRadio.png` (1536×1024,
+PNG) im Repo abgelegt.
+
+Umsetzung: `cwebp -q 90` zu `pics/keinsabbelradio.webp` konvertiert
+(gleiche Auflösung wie vorher, Dateiname/Pfad unverändert — keine
+Code-Änderung an `webui.py`/`Dockerfile`/`web/sw.js` nötig, die
+referenzieren nur den Pfad). Dieselbe Datei nach
+`android-app/app/src/main/res/drawable-nodpi/banner.webp` kopiert (analog
+zur ursprünglichen Übernahme in Phase 5, siehe `android-app/SESSION.md`).
+Die Quell-PNG bleibt unversioniert in `pics/` liegen (kein Code
+referenziert sie, nur als Rohmaterial für künftige Anpassungen) — bewusst
+nicht committet, um die großen Binärdaten nicht doppelt im Repo zu
+haben.
+
+Da sich eine Android-Ressource geändert hat, war ein Rebuild PFLICHT
+(analog zum Rename-Eintrag oben):
+
+```bash
+./gradlew assembleDebug   # BUILD SUCCESSFUL, 2s
+cp app/build/outputs/apk/debug/app-debug.apk keinsabbelradio.apk
+echo "{\"buildTime\": \"2026-08-08 18:02\"}" > version.json
+```
+
+### Verifiziert
+
+- Konvertierte `.webp` visuell gegen die Quell-PNG geprüft (per Read-Tool
+  gerendert) — keine sichtbaren Kompressionsartefakte, Auflösung/Motiv
+  identisch.
+- Update-Server nach dem Rebuild live getestet: `curl
+  http://localhost:8098/version.json` → `200`,
+  `{"buildTime": "2026-08-08 18:02"}`.
+- `file pics/keinsabbelradio.webp` bestätigt gültiges WebP (VP8,
+  1536x1024), passend zur bisherigen Auflösung — keine Anpassung an
+  CSS/Layout in `webui.py` nötig.
+
+### Bewusst NICHT gemacht
+
+Kein `adb install`/Emulator-Screenshot dieser spezifischen APK — reine
+Asset-Änderung ohne Verhaltensänderung. Die Quell-PNG nicht ins Repo
+aufgenommen (s.o.).

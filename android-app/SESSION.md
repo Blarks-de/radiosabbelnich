@@ -1297,3 +1297,18 @@ früheren Einträgen bereits ausführlich verifiziert. Kein neues
 App-Icon/Logo (Banner-Bild `pics/keinsabbelradio.webp` zeigt weiterhin
 den alten „RADIOZAPPER“-Schriftzug) — kein Bildgenerierungs-Tool zur
 Hand, offener Folgepunkt.
+
+## 2026-08-08 (Fortsetzung 10) — Neues Banner-Bild übernommen
+
+Auslöser: der offene Folgepunkt aus dem vorigen Eintrag — Nutzer hat ein
+neues Motiv besorgt (Details/Konvertierung siehe `../SESSION.md`, Eintrag
+vom selben Tag). Neue `drawable-nodpi/banner.webp` (1536×1024, identisch
+zur Web-Variante `pics/keinsabbelradio.webp`) übernommen, `./gradlew
+assembleDebug` neu gebaut (BUILD SUCCESSFUL, 2s), APK + `version.json`
+aktualisiert (`buildTime: 2026-08-08 18:02`). Reine Asset-Änderung, sonst
+nichts angefasst.
+
+### Verifiziert
+
+Update-Server liefert nach dem Rebuild die neue `version.json` (`curl
+http://localhost:8098/version.json` → `200`, `buildTime` passend).
