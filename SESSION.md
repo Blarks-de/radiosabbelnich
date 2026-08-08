@@ -4807,3 +4807,14 @@ oben, "Update-Installationen brauchen über die Zeit denselben
 Debug-Signierschlüssel"). Für zukünftige Installationen auf demselben
 Gerät, solange derselbe Build-Host/Keystore verwendet wird, sollte das
 Problem nicht wieder auftreten.
+
+## 2026-08-08 (Fortsetzung 6) — README: Hinweis zur Namensänderung ergänzt
+
+Nutzer hat README.md direkt selbst um einen kurzen Absatz ganz oben
+ergänzt (vor der Einleitung, nach dem Link zur englischen Version): der
+ursprüngliche Name RadioZapper war bereits vergeben, daher die
+Umbenennung zu KeinSabbelRadio — mit dem Hinweis, dass eine
+Google-Suche zum neuen Namen aktuell praktisch nur Duden-Treffer liefert
+und der Name deshalb erstmal so bleiben soll. Reine Doku-Ergänzung, ich
+habe nur committet/gepusht (siehe Konversation), kein eigener
+inhaltlicher Beitrag.
