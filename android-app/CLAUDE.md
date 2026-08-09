@@ -3,20 +3,20 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 > Dieses Verzeichnis ist ein **eigenständiges** Projekt innerhalb des
-> KeinSabbelRadio-Repos — siehe `../CLAUDE.md`, Abschnitt "Android-Prototyp
+> RadioSabbelNich-Repos — siehe `../CLAUDE.md`, Abschnitt "Android-Prototyp
 > (separates Projekt)", für die Abgrenzung zum Docker-Dienst. Zwei feste
 > Regeln von dort gelten weiterhin unbedingt: nach jedem Build die APK
-> lokal nach `keinsabbelradio.apk` kopieren + `version.json` neu schreiben
-> UND beides zeitgestempelt nach `blarks.de/update_keinsabbelradio/`
+> lokal nach `radiosabbelnich.apk` kopieren + `version.json` neu schreiben
+> UND beides zeitgestempelt nach `blarks.de/update_radiosabbelnich/`
 > hochladen (siehe unten), und `README.md` bei jeder inhaltlichen Änderung
 > nachziehen.
 
 Fertig im Sinne des Fahrplans (alle acht Phasen aus
-`KeinSabbelRadio_Android_Fahrplan.md` umgesetzt, zuletzt Phase 8 am
+`RadioSabbelNich_Android_Fahrplan.md` umgesetzt, zuletzt Phase 8 am
 2026-08-08) — keine geplanten Ausbaustufen mehr offen, aber weiterhin
 Eigenbedarfs-Software mit dokumentierten Grenzen, kein Play-Store-Produkt
 (siehe README, "Bekannte Grenzen"). Natives Kotlin/Android, das
-dasselbe Grundprinzip wie das KeinSabbelRadio-Docker-Projekt lokal auf dem
+dasselbe Grundprinzip wie das RadioSabbelNich-Docker-Projekt lokal auf dem
 Handy nachbildet: mehrere Internetradio-Sender abspielen, per Vosk
 (Speech-to-Text) grob Sprache/Musik unterscheiden, bei Sprache automatisch
 zum nächsten Sender weiterschalten. Kein Web-Wrapper, keine Abhängigkeit
@@ -44,21 +44,21 @@ cd android-app
 ./gradlew assembleDebug
 
 # PFLICHT nach jedem Build (siehe ../CLAUDE.md):
-cp app/build/outputs/apk/debug/app-debug.apk keinsabbelradio.apk   # lokal, fuer adb install
+cp app/build/outputs/apk/debug/app-debug.apk radiosabbelnich.apk   # lokal, fuer adb install
 STAMP=$(date '+%Y%m%d-%H%M%S')
-APK_NAME="keinsabbelradio-${STAMP}.apk"
-cp keinsabbelradio.apk "$APK_NAME"
+APK_NAME="radiosabbelnich-${STAMP}.apk"
+cp radiosabbelnich.apk "$APK_NAME"
 echo "{\"buildTime\": \"$(date '+%Y-%m-%d %H:%M')\", \"apkFile\": \"$APK_NAME\"}" > version.json
-scp "$APK_NAME" version.json strato:/srv/www/blarks.de/update_keinsabbelradio/
+scp "$APK_NAME" version.json strato:/srv/www/blarks.de/update_radiosabbelnich/
 rm "$APK_NAME"   # blarks.de ist die Quelle der Wahrheit, keine doppelte lokale Ablage
 ```
 
 Ohne den Upload-Schritt sieht der Update-Server weiterhin den alten Stand
 (`UpdateManager` vergleicht das dort liegende `version.json` gegen
 `BuildConfig.BUILD_TIME` als reinen String, siehe unten) — der lokale
-`keinsabbelradio.apk`-Schritt allein reicht nicht, der ist nur fürs
+`radiosabbelnich.apk`-Schritt allein reicht nicht, der ist nur fürs
 Emulator-`adb install` gedacht. Jede Datei bekommt einen eigenen,
-zeitgestempelten Namen (`keinsabbelradio-YYYYMMDD-HHMMSS.apk`) statt
+zeitgestempelten Namen (`radiosabbelnich-YYYYMMDD-HHMMSS.apk`) statt
 überschrieben zu werden — `version.json`s `apkFile`-Feld sagt der App,
 welche genau die aktuelle ist (siehe "Update-Mechanismus" unten). Ältere
 Stände bleiben auf `blarks.de` liegen, es gibt aktuell kein automatisches
@@ -76,17 +76,17 @@ google_apis x86_64):
 ```bash
 emulator -avd test_device -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect &
 adb wait-for-device
-adb install -r keinsabbelradio.apk
+adb install -r radiosabbelnich.apk
 adb logcat -s PlaybackService:*   # jeder Sprache/Musik-Wechsel, Watchdog-Events
 ```
 
 Installation auf einem echten Gerät und Update-Server-Details
-(`blarks.de/update_keinsabbelradio`, statisch per Apache ausgeliefert):
+(`blarks.de/update_radiosabbelnich`, statisch per Apache ausgeliefert):
 siehe README-Abschnitte "Installation" und "Update-Mechanismus".
 
 ## Architektur
 
-`KeinSabbelRadioApplication.onCreate()` ruft `StationRepository.init()` VOR
+`RadioSabbelNichApplication.onCreate()` ruft `StationRepository.init()` VOR
 jeder anderen Komponente auf (Application läuft garantiert zuerst) — kein
 "wer zuerst dran ist, ruft init() auf"-Muster in einzelnen Komponenten.
 
@@ -242,13 +242,13 @@ Update auf diese Version nichts sichtbar ändert.
 Kein Play Store, keine Signaturprüfung über die Debug-Signierung hinaus.
 Lädt `version.json` vom in `SharedPreferences` gespeicherten Server
 (Textfeld auf der Startseite, Default `DEFAULT_UPDATE_BASE_URL` =
-`https://blarks.de/update_keinsabbelradio`), vergleicht `buildTime` als
+`https://blarks.de/update_radiosabbelnich`), vergleicht `buildTime` als
 reinen String gegen `BuildConfig.BUILD_TIME` — deshalb ist der
 `version.json`-Schritt beim Bauen (siehe oben) nicht optional. Seit dem
 Umzug von der lokalen Tailscale-Adresse auf `blarks.de` (2026-08-08,
 siehe SESSION.md) bekommt jede hochgeladene APK einen eigenen,
 zeitgestempelten Dateinamen statt eines fest überschriebenen
-`keinsabbelradio.apk` — `version.json`s zweites Feld `apkFile` sagt der
+`radiosabbelnich.apk` — `version.json`s zweites Feld `apkFile` sagt der
 App den exakten Namen, `UpdateManager` merkt sich das Ergebnis aus
 `checkForUpdate()` intern für den nachfolgenden `downloadUpdate()`-Aufruf
 (kein fest verdrahteter Dateiname mehr im Code). Bei Unterschied:
@@ -256,7 +256,7 @@ APK-Download in den Cache, dann System-Installer über `FileProvider` +
 `ACTION_VIEW` (`REQUEST_INSTALL_PACKAGES`) — keine stille
 Auto-Installation. Server-seitige Gegenstelle ist keine eigene Software
 mehr, sondern der ganz normale Apache-Webserver von `blarks.de`
-(statisches Verzeichnis `/srv/www/blarks.de/update_keinsabbelradio/`,
+(statisches Verzeichnis `/srv/www/blarks.de/update_radiosabbelnich/`,
 Verzeichnis-Listing per vhost-Konfiguration gesperrt, `.apk`-MIME-Type
 kommt automatisch aus `/etc/mime.types`) — kein Auth, dafür jetzt
 öffentlich statt nur übers Tailscale-Netz erreichbar (bewusste
@@ -272,7 +272,7 @@ das Update, weil sich der APK-Signer geändert hat.
 
 Der Update-Mechanismus hat keinerlei Authentifizierung — seit 2026-08-08
 bewusst und explizit auf Nutzerwunsch öffentlich erreichbar unter
-`blarks.de/update_keinsabbelradio` (vorher: nur übers Tailscale-Netz,
+`blarks.de/update_radiosabbelnich` (vorher: nur übers Tailscale-Netz,
 siehe SESSION.md für die Abwägung). Das ist eine bewusste Ausnahme, keine
 Blaupause: anders als beim Docker-Projekt (dessen `CLAUDE.md`, "Kein
 Auth, nur hinter VPN", weiterhin uneingeschränkt gilt — dort steht ein

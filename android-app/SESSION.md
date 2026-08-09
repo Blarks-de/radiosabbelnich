@@ -1,4 +1,4 @@
-# KeinSabbelRadio Android MVP — Session-Log
+# RadioSabbelNich Android MVP — Session-Log
 
 Laufendes Protokoll der Arbeit an `android-app/` (chronologisch, neueste
 Einträge unten) — hier steht das *Wie und Warum* der einzelnen Schritte,
@@ -1374,3 +1374,46 @@ Alt-Installation von `com.radiozapper.mvp`, kein Fehler im
 Update-Mechanismus selbst. Deinstallieren + Neuinstallieren hat es
 behoben (Nutzer-bestätigt). `README.md` bekam dafür einen
 Troubleshooting-Absatz.
+
+## 2026-08-09 — Projekt-Umbenennung KeinSabbelRadio → RadioSabbelNich
+
+Teil des repo-weiten Renames, volle Begründung in `../SESSION.md`
+(Eintrag vom selben Tag). Für diese App konkret: `KeinSabbelRadioApplication.kt`
+→ `RadioSabbelNichApplication.kt` (nur Klasse umbenannt, Package
+`com.radiozapper.mvp` bewusst unverändert — wie schon beim vorigen Rename,
+siehe Eintrag "Nachtrag: Installationsfehler..." oben, wo genau dieser
+Package-Name schon als Altlast auftauchte). `Theme.KeinSabbelRadioMvp` →
+`Theme.RadioSabbelNichMvp`, `strings.xml`-`app_name`, `USER_AGENT` in
+`StationImporter.kt`, `DEFAULT_UPDATE_BASE_URL` in `UpdateManager.kt`
+(`.../update_keinsabbelradio` → `.../update_radiosabbelnich`) sowie der
+lokale APK-Cache-Dateiname dort (`keinsabbelradio.apk` →
+`radiosabbelnich.apk`), `.gitignore`, `settings.gradle.kts`-Projektname,
+`KeinSabbelRadio_Android_Fahrplan.md` → `RadioSabbelNich_Android_Fahrplan.md`,
+`README.md`, `CLAUDE.md`. Banner-Bild (`res/drawable-nodpi/banner.webp`)
+mit dem neuen, vom Nutzer bereitgestellten Motiv ersetzt (Dateiname
+unverändert, da über `@drawable/banner` referenziert) — Launcher-Icon
+(abstraktes Vektor-Icon ohne Bezug zum alten Namen) bewusst unangetastet.
+
+Bewusst NICHT gemacht: Android-Package `com.radiozapper.mvp` nicht
+umbenannt (Nutzer-Entscheidung, siehe `../SESSION.md`-Eintrag — hätte
+alle 24 `.kt`-Dateien plus Verzeichnisbaum betroffen und würde die
+`applicationId` ändern, wodurch Android eine bestehende Installation
+nicht mehr als Update erkennt, sondern als neue App behandelt). Kein
+echter Gradle-Build und kein APK-Upload nach `blarks.de/update_radiosabbelnich`
+in diesem Durchgang — braucht ein separates OK, da Upload auf einen
+externen Server. Die alte lokale Kompatibilitätskopie
+`keinsabbelradio.apk` (gitignored, 46 MB) wurde gelöscht statt liegen
+gelassen, weil sie nach der `.gitignore`-Umstellung auf
+`radiosabbelnich*.apk` nicht mehr erfasst war und sonst bei `git add -A`
+versehentlich mitcommittet worden wäre — reiner Build-Rest, entsteht beim
+nächsten echten Build ohnehin neu. `version.json` (ebenfalls gitignored)
+bleibt bis dahin mit altem Inhalt liegen.
+
+### Verifiziert
+
+`grep` über `android-app/` (alle .kt/.xml/.kts/.md-Dateien außer
+`SESSION.md`-Historie, außerhalb generierter `app/build/`-Artefakte):
+keine Treffer mehr für `KeinSabbelRadio`/`keinsabbelradio` mehr; einzige
+verbleibenden `radiozapper`-Treffer sind die bewusst unangetastete
+Package-Deklaration/-Imports (`com.radiozapper.mvp`, 24 Dateien) und ein
+`adb`-Befehl in `README.md`, der exakt diesen Package-Namen referenziert.

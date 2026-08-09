@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-keinsabbelradio.py — Internetradio abspielen, bei Moderation (Sprache) auf
+radiosabbelnich.py — Internetradio abspielen, bei Moderation (Sprache) auf
 den nächsten Sender in der Liste umschalten.
 
 Erkennung pro Analysefenster (~1 Sekunde), in dieser Reihenfolge:
@@ -28,7 +28,7 @@ Abhängigkeiten:
     (sounddevice nur für die lokale Wiedergabe ohne --icecast-url)
 
 Nutzung:
-    python3 keinsabbelradio.py
+    python3 radiosabbelnich.py
     (Sender-Liste in stations.json pflegen, oder über die Config-Seite
     des Web-Interfaces unter /config — siehe stations_store.py)
 
@@ -56,7 +56,7 @@ import stt_filter
 import webui
 from speech_detector import SpeechDetector
 
-log = logging.getLogger("keinsabbelradio")
+log = logging.getLogger("radiosabbelnich")
 
 # ----------------------------------------------------------------------
 # KONFIGURATION
@@ -255,7 +255,7 @@ class StreamSource:
         Default: die sind durch die Netzwerk-Auslieferung beim Sender
         selbst schon in Echtzeit getaktet (das ist der Mechanismus, der
         den ganzen Hauptloop auf ~1 Analysefenster/Sekunde hält, ohne dass
-        keinsabbelradio.py selbst irgendwo bremst).
+        radiosabbelnich.py selbst irgendwo bremst).
 
         PFLICHT dagegen für lokale Dateien (siehe news_break.py/
         Nachrichten-Pause): ohne -re dekodiert ffmpeg eine lokale Datei so
@@ -580,7 +580,7 @@ def sync_prebuffer(prebuffer: dict, current_id: str, active: list, sample_rate: 
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="KeinSabbelRadio: schaltet bei Moderation um.")
+    parser = argparse.ArgumentParser(description="RadioSabbelNich: schaltet bei Moderation um.")
     parser.add_argument("--verbose", action="store_true",
                          help="Feature-Werte (zcr/flat/evar/bass), VAD-Wahrscheinlichkeiten und "
                               "Fingerprint-Infos auch auf der Konsole ausgeben (in der Logdatei "
@@ -605,7 +605,7 @@ def main():
     parser.add_argument("--icecast-admin-user", default=None)
     parser.add_argument("--icecast-admin-password", default=None)
     parser.add_argument("--icecast-mount", default=None,
-                         help="Icecast-Mountpoint für die Hörer-Abfrage, z.B. /keinsabbelradio.mp3")
+                         help="Icecast-Mountpoint für die Hörer-Abfrage, z.B. /radiosabbelnich.mp3")
     parser.add_argument("--icecast-public-port", default=None,
                          help="Port, unter dem der Browser den Icecast-Stream selbst erreicht "
                               "(für den eingebetteten Player im Web-Interface), z.B. 8000")
@@ -632,7 +632,7 @@ def main():
     args = parser.parse_args()
 
     log_path = logging_setup.setup(args.log_file, verbose=args.verbose)
-    log.info("🎬 KeinSabbelRadio startet.")
+    log.info("🎬 RadioSabbelNich startet.")
     if log_path:
         log.info("📝 Logdatei: %s (immer DEBUG, rotierend: %d × %d MB)",
                  log_path, logging_setup.BACKUP_COUNT, logging_setup.MAX_BYTES // (1024 * 1024))

@@ -1,7 +1,7 @@
-# KeinSabbelRadio (Android)
+# RadioSabbelNich (Android)
 
 > ✅ **Fertig im Sinne des Fahrplans**: alle acht Phasen aus
-> `KeinSabbelRadio_Android_Fahrplan.md` sind umgesetzt und live getestet,
+> `RadioSabbelNich_Android_Fahrplan.md` sind umgesetzt und live getestet,
 > zuletzt Phase 8 (Review + Feinschliff) am 2026-08-08. Es sind keine
 > geplanten Ausbaustufen mehr offen - die App wird im Alltag benutzt, nicht
 > mehr Stück für Stück aufgebaut. Was sie bewusst NICHT kann, steht
@@ -13,7 +13,7 @@
 > bis 2026-08-07 in `../SESSION.md`.
 
 Eigenstaendige Android-App, die dasselbe Grundprinzip wie das
-KeinSabbelRadio-Docker-Projekt (`../`) auf dem Handy abbildet: Radiostream
+RadioSabbelNich-Docker-Projekt (`../`) auf dem Handy abbildet: Radiostream
 abspielen und per Vosk (Speech-to-Text) grob erkennen, ob gerade Sprache
 oder Musik laeuft, und bei Sprache automatisch weiterschalten. **Kein
 Web-Wrapper, keine Abhaengigkeit von der Docker-Instanz** - reines
@@ -21,7 +21,7 @@ natives Kotlin/Android.
 
 Ursprünglich bewusst minimal gestartet (drei hartcodierte Sender, kein
 Watchdog/Ban-System, kein News-Break, keine Settings-UI) und dann entlang
-des Feature-Parität-Fahrplans (`KeinSabbelRadio_Android_Fahrplan.md`) auf den
+des Feature-Parität-Fahrplans (`RadioSabbelNich_Android_Fahrplan.md`) auf den
 heutigen Stand gewachsen: Senderverwaltung, Watchdog, Vorwärmung,
 M3U-Import, Nachrichten-Pause, Audio-Fingerprinting und mehrsprachiges STT
 inklusive Kalibrierungs-Wizard - siehe Feature-Liste unten. Weiterhin
@@ -189,7 +189,7 @@ merkt (siehe "Bekannte Grenzen").
 - **Update-Mechanismus mit konfigurierbarer Adresse** (`update/
   UpdateManager.kt`, siehe eigener Abschnitt unten) - Textfeld "Update-
   Server:" auf der Startseite (Default `https://blarks.de/
-  update_keinsabbelradio`, oeffentlich erreichbar, kein VPN noetig).
+  update_radiosabbelnich`, oeffentlich erreichbar, kein VPN noetig).
   Button "Nach Update suchen" prueft den dort eingetragenen Server, laedt
   bei Bedarf die neue APK und stoesst den System-Installer an. Kein Play
   Store, keine Signatur-Pruefung ueber die Debug-Signierung hinaus.
@@ -200,7 +200,7 @@ Deutschlandfunk (Sprache) gestartet → nach ~15s bestaetigt "Sprache"
 erkannt → automatisch zu 1LIVE gewechselt → dort ueber 1 Minute stabil
 "🎵 Musik", kein Nachflackern, kein weiteres Springen. Keine Abstuerze/
 Exceptions im Logcat. Details und weitere Durchlaeufe siehe
-`../SESSION.md`, Eintrag "2026-08-07 — Android KeinSabbelRadio MVP".
+`../SESSION.md`, Eintrag "2026-08-07 — Android RadioSabbelNich MVP".
 
 Zweiter Durchlauf (nach Ergaenzung des Build-Zeitstempels, gleicher
 Emulator): Deutschlandfunk → 1LIVE → SWR3 → Deutschlandfunk → 1LIVE →
@@ -259,7 +259,7 @@ leicht auffindbaren Pfad (siehe `../CLAUDE.md`, Abschnitt
 "Android-Prototyp"):
 
 ```
-android-app/keinsabbelradio.apk
+android-app/radiosabbelnich.apk
 ```
 
 (daneben weiterhin auch unter dem von Gradle erzeugten
@@ -269,7 +269,7 @@ tief verschachtelt und gitignored).
 Per USB (ADB, falls Entwickleroptionen aktiv sind):
 
 ```bash
-adb install -r android-app/keinsabbelradio.apk
+adb install -r android-app/radiosabbelnich.apk
 ```
 
 Alternativ die APK-Datei per Kabel/Cloud aufs Handy kopieren und dort
@@ -302,12 +302,12 @@ für künftige nahtlose Updates ist danach derselbe Debug-Signierschlüssel
 ```bash
 cd android-app
 ./gradlew assembleDebug
-cp app/build/outputs/apk/debug/app-debug.apk keinsabbelradio.apk   # lokal, adb install
+cp app/build/outputs/apk/debug/app-debug.apk radiosabbelnich.apk   # lokal, adb install
 STAMP=$(date '+%Y%m%d-%H%M%S')
-APK_NAME="keinsabbelradio-${STAMP}.apk"
-cp keinsabbelradio.apk "$APK_NAME"
+APK_NAME="radiosabbelnich-${STAMP}.apk"
+cp radiosabbelnich.apk "$APK_NAME"
 echo "{\"buildTime\": \"$(date '+%Y-%m-%d %H:%M')\", \"apkFile\": \"$APK_NAME\"}" > version.json
-scp "$APK_NAME" version.json strato:/srv/www/blarks.de/update_keinsabbelradio/
+scp "$APK_NAME" version.json strato:/srv/www/blarks.de/update_radiosabbelnich/
 rm "$APK_NAME"
 ```
 
@@ -329,13 +329,13 @@ konfiguriert). Kurzform:
 ```bash
 emulator -avd test_device -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect &
 adb wait-for-device
-adb install -r keinsabbelradio.apk
+adb install -r radiosabbelnich.apk
 adb logcat -s PlaybackService:*   # zeigt jeden Sprache/Musik-Wechsel
 ```
 
 ## Architektur in Kuerze
 
-- `KeinSabbelRadioApplication.kt` - einziger Zweck: `StationRepository.init()`
+- `RadioSabbelNichApplication.kt` - einziger Zweck: `StationRepository.init()`
   garantiert VOR jeder Komponente aufrufen (`Application.onCreate()` laeuft
   immer zuerst) - kein "wer zuerst dran ist, ruft init() auf"-Muster in
   den einzelnen Komponenten, das ein neuer Einstiegspunkt leicht vergessen
@@ -807,7 +807,7 @@ muss, liefert `UpdateManager.kt` sie per HTTP(S) direkt aus dem Netz nach.
 Seit 2026-08-08 (vorher: eigener Python-Server nur uebers Tailscale-Netz,
 siehe SESSION.md) ist die Gegenstelle keine eigene Software mehr, sondern
 ein ganz normales, statisches Verzeichnis auf dem oeffentlich erreichbaren
-Webserver von `blarks.de`: `/srv/www/blarks.de/update_keinsabbelradio/`
+Webserver von `blarks.de`: `/srv/www/blarks.de/update_radiosabbelnich/`
 (per SSH-Host-Alias `strato` erreichbar). Apache liefert Dateien von dort
 direkt aus - Verzeichnis-Listing ist per vhost-Konfiguration gesperrt
 (`Options -Indexes`), der `.apk`-MIME-Type (`application/vnd.android.
@@ -815,19 +815,19 @@ package-archive`) kommt automatisch aus `/etc/mime.types`, kein
 Zusatzcode noetig.
 
 **Jede hochgeladene APK bekommt einen eigenen, zeitgestempelten Namen**
-(`keinsabbelradio-YYYYMMDD-HHMMSS.apk`) statt eine bestehende Datei zu
+(`radiosabbelnich-YYYYMMDD-HHMMSS.apk`) statt eine bestehende Datei zu
 ueberschreiben - `version.json` (`{"buildTime": "...", "apkFile":
-"keinsabbelradio-...apk"}`) sagt der App, welche Datei gerade aktuell
+"radiosabbelnich-...apk"}`) sagt der App, welche Datei gerade aktuell
 ist. Kompletter Bauen-und-Verteilen-Schritt (siehe auch `../CLAUDE.md`):
 
 ```bash
 ./gradlew assembleDebug
-cp app/build/outputs/apk/debug/app-debug.apk keinsabbelradio.apk   # lokal, adb install
+cp app/build/outputs/apk/debug/app-debug.apk radiosabbelnich.apk   # lokal, adb install
 STAMP=$(date '+%Y%m%d-%H%M%S')
-APK_NAME="keinsabbelradio-${STAMP}.apk"
-cp keinsabbelradio.apk "$APK_NAME"
+APK_NAME="radiosabbelnich-${STAMP}.apk"
+cp radiosabbelnich.apk "$APK_NAME"
 echo "{\"buildTime\": \"$(date '+%Y-%m-%d %H:%M')\", \"apkFile\": \"$APK_NAME\"}" > version.json
-scp "$APK_NAME" version.json strato:/srv/www/blarks.de/update_keinsabbelradio/
+scp "$APK_NAME" version.json strato:/srv/www/blarks.de/update_radiosabbelnich/
 rm "$APK_NAME"
 ```
 
@@ -845,7 +845,7 @@ haelt sie in `SharedPreferences` (`getBaseUrl()`/`setBaseUrl()`), mit
 einem Textfeld direkt auf der Startseite ("Update-Server:") jederzeit
 ohne Rebuild aenderbar. `DEFAULT_UPDATE_BASE_URL` im Code ist nur der
 Startwert, falls noch nichts gespeichert ist - jetzt
-`https://blarks.de/update_keinsabbelradio`. Wer die APK von woanders
+`https://blarks.de/update_radiosabbelnich`. Wer die APK von woanders
 bekommt oder einen eigenen Server betreiben will, traegt einfach eine
 andere Adresse ins Textfeld ein.
 

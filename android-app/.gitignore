@@ -12,12 +12,12 @@ local.properties
 # Bequemlichkeits-Kopie der Debug-APK fuer lokale adb-Installs (siehe
 # CLAUDE.md, "Android-Prototyp") - Build-Artefakt wie app-debug.apk selbst,
 # deshalb ebenfalls nicht versioniert.
-/keinsabbelradio.apk
+/radiosabbelnich.apk
 # Zeitgestempelte Kopien, die vor dem Upload nach blarks.de entstehen
 # (siehe README "Update-Mechanismus") - Wegwerf-Zwischenstand, die
 # eigentliche Ablage ist der Webserver, nicht dieses Repo.
-/keinsabbelradio-*.apk
+/radiosabbelnich-*.apk
 # Lokal erzeugter Versions-Stempel zu genau dieser APK, wird nach
-# blarks.de/update_keinsabbelradio hochgeladen (siehe README) - selbes
-# Argument wie bei keinsabbelradio.apk.
+# blarks.de/update_radiosabbelnich hochgeladen (siehe README) - selbes
+# Argument wie bei radiosabbelnich.apk.
 /version.json

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">KeinSabbelRadio MVP</string>
+    <string name="app_name">RadioSabbelNich MVP</string>
     <string name="build_time">Build: %1$s</string>
 
     <string name="status_idle">Gestoppt</string>

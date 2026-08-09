@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-resource_monitor.py — Live-Ressourcenverbrauch von KeinSabbelRadio selbst (nicht
+resource_monitor.py — Live-Ressourcenverbrauch von RadioSabbelNich selbst (nicht
 des Hosts) für die Config-Seite. Reine Domänenlogik ohne Bezug zu
 StreamSource/SwitcherState, analog zu news_break.py/stt_filter.py: kein
 Setter/Property auf SwitcherState nötig, da der Webserver-Thread hier nichts
@@ -10,7 +10,7 @@ host_paths-Abschnitt für dasselbe Muster).
 
 RAM/CPU umfassen bewusst NICHT nur den Python-Hauptprozess, sondern auch alle
 ffmpeg-Kindprozesse (laufender Sender + vorgewärmte Prebuffer-Kandidaten,
-siehe PrebufferedSource in keinsabbelradio.py) -- die machen den Großteil des
+siehe PrebufferedSource in radiosabbelnich.py) -- die machen den Großteil des
 tatsächlichen Fußabdrucks aus, ein Wert ohne sie wäre irreführend niedrig.
 """
 

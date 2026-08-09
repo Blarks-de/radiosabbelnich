@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-KeinSabbelRadio hört mehrere Internetradio-Sender mit, schaltet bei Sprache
+RadioSabbelNich hört mehrere Internetradio-Sender mit, schaltet bei Sprache
 (Moderation/Werbung/Jingles) automatisch weiter und strahlt das Ergebnis per
 Icecast neu aus. Überblick und Feature-Beschreibung: `README.md`.
 
@@ -17,13 +17,13 @@ VERSION-Pflege) gelten für den Docker-Dienst, nicht 1:1 für den Android-Code.
 Seit 2026-08-07 wird es aber mitgepflegt, dafür zwei feste Regeln:
 
 - **Nach jedem Android-Build** die entstandene Debug-APK lokal nach
-  `android-app/keinsabbelradio.apk` kopieren (fester, einfach auffindbarer
+  `android-app/radiosabbelnich.apk` kopieren (fester, einfach auffindbarer
   Pfad statt des tief verschachtelten
   `app/build/outputs/apk/debug/app-debug.apk` — letzterer ist ohnehin
   gitignored) UND zusätzlich mit Zeitstempel im Dateinamen
-  (`keinsabbelradio-YYYYMMDD-HHMMSS.apk`) sowie ein passendes
+  (`radiosabbelnich-YYYYMMDD-HHMMSS.apk`) sowie ein passendes
   `version.json` (`{"buildTime": "...", "apkFile": "..."}`) nach
-  `blarks.de/update_keinsabbelradio/` hochladen (siehe
+  `blarks.de/update_radiosabbelnich/` hochladen (siehe
   `android-app/README.md`, Abschnitt "Update-Mechanismus" — sonst hält
   die App den alten Stand weiterhin für aktuell).
 - **`android-app/README.md` bei jeder inhaltlichen Änderung an der App
@@ -34,7 +34,7 @@ Der Update-Mechanismus lief bis 2026-08-08 über einen eigenständigen
 lokalen Server (`update_server.py` + systemd-Service, nur übers
 Tailscale-Netz erreichbar) — seitdem stattdessen über den ganz normalen,
 öffentlich erreichbaren Webserver von `blarks.de`
-(`/srv/www/blarks.de/update_keinsabbelradio/`, statisches Verzeichnis,
+(`/srv/www/blarks.de/update_radiosabbelnich/`, statisches Verzeichnis,
 kein eigener Server-Prozess mehr nötig). Bewusste Ausnahme von "Kein Auth,
 nur hinter VPN" unten: verteilt nur eine App-Binary ohne Nutzerdaten,
 Details und Abwägung in `android-app/SESSION.md`.
@@ -78,9 +78,9 @@ läuft über die unten beschriebenen manuellen Muster und wird in SESSION.md
 protokolliert.
 
 ```bash
-docker compose up -d --build keinsabbelradio   # bauen + neustarten (Standard-Zyklus)
-docker compose logs -f keinsabbelradio         # Konsole: nur Ereignisse (INFO)
-tail -f data/logs/keinsabbelradio.log          # Volles DEBUG-Log, überlebt Neustarts
+docker compose up -d --build radiosabbelnich   # bauen + neustarten (Standard-Zyklus)
+docker compose logs -f radiosabbelnich         # Konsole: nur Ereignisse (INFO)
+tail -f data/logs/radiosabbelnich.log          # Volles DEBUG-Log, überlebt Neustarts
 ```
 
 Ein frischer Clone braucht `cp env.example .env` **und `touch data/fingerprints.db`**:
@@ -99,7 +99,7 @@ anlegen und gegen einen **separaten** Icecast-Mount streamen — der Hauptloop
 schreibt sonst in die echte Senderliste und den echten Mount.
 
 ```bash
-python3 keinsabbelradio.py --icecast-url "icecast://source:PASS@localhost:8000/test.mp3" \
+python3 radiosabbelnich.py --icecast-url "icecast://source:PASS@localhost:8000/test.mp3" \
     --no-fingerprint --webui-port 0 --log-file logs/test.log
 ```
 
@@ -116,7 +116,7 @@ Senderliste ist Produktivzustand des Nutzers.
 
 ### Ein Prozess, zwei Akteure, geteilter Zustand
 
-`keinsabbelradio.main()` fährt den Hauptloop (~1 Analysefenster pro Sekunde);
+`radiosabbelnich.main()` fährt den Hauptloop (~1 Analysefenster pro Sekunde);
 `webui.start_server()` hängt einen `ThreadingHTTPServer` als Daemon-Thread
 daneben. Kommunikation läuft **ausschließlich** über `webui.SwitcherState`:
 lock-geschützter In-Memory-Zustand, kein IPC, kein Datei-Polling.
@@ -151,7 +151,7 @@ zeigt ihn nur an, ändert nie etwas daran). `host_paths` (Web-Interface-
 Konstruktor-Parameter, NICHT SwitcherState) ist ein dritter, noch
 einfacherer Fall: rein statische Werte aus `.env` (`NEWS_MP3_FOLDER_HOST`/
 `VOSK_MODEL_FOLDER_HOST`), einmalig beim Start durchgereicht (Env-Var →
-CLI-Arg in `keinsabbelradio.py` → `webui.start_server()`), damit die Config-
+CLI-Arg in `radiosabbelnich.py` → `webui.start_server()`), damit die Config-
 Seite den echten Host-Pfad neben dem Container-Pfad anzeigen kann — der
 Container kennt ihn sonst grundsätzlich nicht, Docker übersetzt Host→
 Container-Pfad nur einmalig beim Anlegen des Containers, das ist für den
@@ -328,7 +328,7 @@ zusammenhängender Text in der jeweils erwarteten Sprache? Genau wie
 `news_break.py` kennt dieses Modul weder `StreamSource` noch
 `SwitcherState`. Die **einzige** Kopplungsstelle mit der bestehenden
 Switch-Logik ist `stt_filter.combine_label()`, eingehängt in die
-`classify()`-Closure in `keinsabbelradio.py`s `main()` — Streak-Zählung,
+`classify()`-Closure in `radiosabbelnich.py`s `main()` — Streak-Zählung,
 Fingerprint-Trigger und `do_switch()` dahinter bleiben dadurch komplett
 unverändert, Fingerprint merkt von alldem nichts.
 

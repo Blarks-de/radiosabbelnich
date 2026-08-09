@@ -2,12 +2,12 @@
 """
 news_break.py — "Nachrichten-Pause": zur vollen und halben Stunde
 verlesen praktisch alle Radiosender Nachrichten. Statt dessen spielt
-KeinSabbelRadio für ein kurzes, konfigurierbares Zeitfenster eine zufällige
+RadioSabbelNich für ein kurzes, konfigurierbares Zeitfenster eine zufällige
 MP3 aus einem lokalen Ordner (z.B. ein SMB-Mount mit eigenen Jingles/
 Musikstücken) statt eines Radiosenders.
 
 Reine Domänenlogik hier drin — KEIN Zugriff auf StreamSource/SwitcherState/
-den Hauptloop-Zustand. Der Hauptloop (keinsabbelradio.py) entscheidet anhand
+den Hauptloop-Zustand. Der Hauptloop (radiosabbelnich.py) entscheidet anhand
 von active_slot(), ob gerade ein Fenster läuft, und ruft bei Bedarf
 pick_random_mp3() auf; alles Audio-Routing (Sender pausieren, MP3
 abspielen, zurückschalten) bleibt bewusst dort, weil dort schon die
@@ -47,7 +47,7 @@ def active_slot(cfg: dict, now: datetime = None) -> str | None:
     sich pro Slot, ob er schon bedient wurde (MP3 zu Ende, Fenster
     abgelaufen, Nutzer hat manuell weggeschaltet: in jedem Fall wird
     derselbe Slot nicht ein zweites Mal bedient, siehe
-    news_break_served_slot in keinsabbelradio.py)."""
+    news_break_served_slot in radiosabbelnich.py)."""
     if not cfg.get("enabled"):
         return None
     now = now or datetime.now()

@@ -37,7 +37,7 @@ Burst dauerhaft ungefähr in Echtzeit weiter (gemessen SWR3: 12s Audio in
 7,4s) und besteht das mühelos; eine Quelle, die nur einen Vorrat
 ausschüttet und dann verstummt, fällt durch. Das ist exakt die Bedingung,
 an der auch der Hauptloop hängt (StreamSource.read_window in
-keinsabbelradio.py liest fortlaufend genau solche Fenster).
+radiosabbelnich.py liest fortlaufend genau solche Fenster).
 """
 
 import logging
@@ -60,13 +60,13 @@ CHECK_SAMPLE_RATE = 8000 # Prüf-Samplerate (Mono); nur zum Mitzählen, keine Hi
 CHECK_CONCURRENCY = 10   # max. gleichzeitige Checks
 FETCH_TIMEOUT = 15.0     # Sekunden zum Laden der M3U-Datei
 
-USER_AGENT = "KeinSabbelRadio/1.0"
+USER_AGENT = "RadioSabbelNich/1.0"
 
 _EXTINF_RE = re.compile(r"^#EXTINF:[^,]*,(.*)$")
 
 
 def fetch_m3u(url: str, timeout: float = FETCH_TIMEOUT) -> str:
-    req = urllib.request.Request(url, headers={"User-Agent": "KeinSabbelRadio/1.0"})
+    req = urllib.request.Request(url, headers={"User-Agent": "RadioSabbelNich/1.0"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         raw = resp.read()
     return raw.decode("utf-8", errors="replace")

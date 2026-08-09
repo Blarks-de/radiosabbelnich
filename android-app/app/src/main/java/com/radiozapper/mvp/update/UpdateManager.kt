@@ -16,11 +16,11 @@ import java.net.URL
 // Absichtlich NICHT hartcodiert: der Wert liegt in SharedPreferences (siehe
 // getBaseUrl()/setBaseUrl() unten), per Textfeld in der UI aenderbar, ohne
 // Rebuild - nur der DEFAULT ist fest im Code. Seit 2026-08-08 der oeffentliche
-// Server unter https://blarks.de/update_keinsabbelradio (vorher: private
+// Server unter https://blarks.de/update_radiosabbelnich (vorher: private
 // Tailscale-Adresse eines einzelnen Hosts, siehe SESSION.md) - kein VPN mehr
 // noetig, damit koennte die APK jetzt auch tatsaechlich an andere
 // weitergegeben werden, ohne dass die den Default erst umstellen muessten.
-private const val DEFAULT_UPDATE_BASE_URL = "https://blarks.de/update_keinsabbelradio"
+private const val DEFAULT_UPDATE_BASE_URL = "https://blarks.de/update_radiosabbelnich"
 private const val PREFS_NAME = "update_prefs"
 private const val PREF_BASE_URL = "base_url"
 
@@ -49,9 +49,9 @@ class UpdateManager(private val context: Context) {
 
     // Von checkForUpdate() befuellt, von downloadUpdate() gelesen: seit dem
     // Umzug auf blarks.de bekommt jede hochgeladene APK einen eigenen,
-    // zeitgestempelten Dateinamen (keinsabbelradio-YYYYMMDD-HHMMSS.apk,
+    // zeitgestempelten Dateinamen (radiosabbelnich-YYYYMMDD-HHMMSS.apk,
     // siehe README "Update-Mechanismus") statt eines fest ueberschriebenen
-    // "keinsabbelradio.apk" - der tatsaechliche Name steht deshalb nur noch
+    // "radiosabbelnich.apk" - der tatsaechliche Name steht deshalb nur noch
     // in version.json, nicht mehr fest im Code.
     private var remoteApkFileName: String? = null
 
@@ -100,12 +100,12 @@ class UpdateManager(private val context: Context) {
                 val fileName = remoteApkFileName
                     ?: throw IllegalStateException("Kein Update-Dateiname bekannt - erst nach Update suchen.")
                 val updatesDir = File(context.cacheDir, "updates").apply { mkdirs() }
-                val apkFile = File(updatesDir, "keinsabbelradio.apk")
+                val apkFile = File(updatesDir, "radiosabbelnich.apk")
                 val connection = URL("${getBaseUrl()}/$fileName").openConnection() as HttpURLConnection
                 connection.connectTimeout = 15_000
                 connection.readTimeout = 15_000
                 // Ohne diese Pruefung landete z.B. eine 404-Fehlerseite als
-                // "keinsabbelradio.apk" im Cache und scheiterte erst kommentarlos
+                // "radiosabbelnich.apk" im Cache und scheiterte erst kommentarlos
                 // im System-Installer (Review-Befund 14, siehe SESSION.md).
                 if (connection.responseCode !in 200..299) {
                     throw IllegalStateException("Server antwortete mit HTTP ${connection.responseCode}")

@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-logging_setup.py — zentrale Logging-Konfiguration für alle KeinSabbelRadio-Module.
+logging_setup.py — zentrale Logging-Konfiguration für alle RadioSabbelNich-Module.
 
-Ein Aufruf von setup() in keinsabbelradio.main() konfiguriert den Root-Logger;
+Ein Aufruf von setup() in radiosabbelnich.main() konfiguriert den Root-Logger;
 alle Module holen sich danach einfach ihren eigenen Logger über
 logging.getLogger("<name>") und schreiben dorthin. Zwei Ziele:
 
   - Konsole (stdout): das, was vorher per print() rausging — landet
-    unverändert in `docker compose logs -f keinsabbelradio`. Default INFO,
+    unverändert in `docker compose logs -f radiosabbelnich`. Default INFO,
     mit --verbose DEBUG.
-  - Logdatei (logs/keinsabbelradio.log, rotierend): IMMER auf DEBUG, egal was
+  - Logdatei (logs/radiosabbelnich.log, rotierend): IMMER auf DEBUG, egal was
     die Konsole zeigt. Genau dafür ist sie da — wenn nachts etwas schiefgeht,
     will man hinterher die Feature-Werte/VAD-Wahrscheinlichkeiten/HTTP-
     Requests sehen können, ohne den Container vorher zufällig im richtigen
@@ -28,7 +28,7 @@ import threading
 from logging.handlers import RotatingFileHandler
 
 DEFAULT_LOG_FILE = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "logs", "keinsabbelradio.log"
+    os.path.dirname(os.path.abspath(__file__)), "logs", "radiosabbelnich.log"
 )
 MAX_BYTES = 10 * 1024 * 1024   # pro Datei
 BACKUP_COUNT = 5               # -> max. ~60MB Logs insgesamt

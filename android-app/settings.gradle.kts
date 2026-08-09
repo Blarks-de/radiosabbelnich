@@ -13,5 +13,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "KeinSabbelRadioMvp"
+rootProject.name = "RadioSabbelNichMvp"
 include(":app")

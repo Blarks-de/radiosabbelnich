@@ -1,4 +1,4 @@
-# KeinSabbelRadio Android — Fahrplan zur Feature-/Optik-Parität mit dem Python-Projekt
+# RadioSabbelNich Android — Fahrplan zur Feature-/Optik-Parität mit dem Python-Projekt
 
 Stand: 2026-08-07. Basis: `android-app/` (Kotlin/ExoPlayer/Vosk, 3 hartcodierte
 Sender, Glättung + Auto-Switch + Cooldown, Update-Mechanismus) vs. das

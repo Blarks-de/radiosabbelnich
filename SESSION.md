@@ -1,4 +1,4 @@
-# KeinSabbelRadio — Session-Log
+# RadioSabbelNich — Session-Log
 
 Laufendes Protokoll der Arbeit an diesem Projekt (chronologisch, neueste
 Einträge unten) — hier steht das *Wie und Warum* der einzelnen Schritte.
@@ -4818,3 +4818,169 @@ Google-Suche zum neuen Namen aktuell praktisch nur Duden-Treffer liefert
 und der Name deshalb erstmal so bleiben soll. Reine Doku-Ergänzung, ich
 habe nur committet/gepusht (siehe Konversation), kein eigener
 inhaltlicher Beitrag.
+
+## 2026-08-08 (Fortsetzung 7) — Landingpage auf blarks.de/radio angelegt (außerhalb des Git-Repos)
+
+Auslöser: Nutzer hat SSH-Zugriff auf den Strato-Host eingerichtet (Alias
+`strato`, siehe `~/.ssh/config`) und wollte unter `blarks.de/radio` eine
+einfache, erweiterbare Landingpage fürs Projekt — analog zum
+Update-Server-Umzug (siehe Eintrag weiter oben) reine
+Host-Infrastruktur, nicht Teil dieses Git-Repos, aber projektbezogen
+genug für einen SESSION.md-Eintrag hier.
+
+Vor der Umsetzung per Plan-Mode geprüft, statt direkt draufloszubauen:
+`blarks.de` läuft framework-frei (PHP/HTML/CSS auf Apache, kein Build-
+Schritt, eigenes `CLAUDE.md` im Webroot dokumentiert das), `.htaccess`
+liefert existierende Verzeichnisse direkt aus (kein Rewrite nötig für
+eine neue statische Seite), globale `style.css` definiert die
+Design-Sprache (dunkler Hintergrund, Neongrün/Cyan-Akzente, Tahoma,
+vorhandene Glow-Utility-Klassen `.glow`/`.schatten`).
+
+Umsetzung:
+
+- `/srv/www/blarks.de/radio/index.html` — einzelne statische Datei
+  (kein PHP, keine dynamischen Daten), nutzt die globale `/style.css`
+  plus einen kleinen eingebetteten `<style>`-Block für Hero-Layout und
+  GitHub-Button. Reuse bestehender Utility-Klassen (`glow`, `schatten`)
+  statt neuer Duplikate.
+- Hero-Bild: Kopie von `pics/keinsabbelradio.webp` aus diesem Repo (das
+  Banner aus dem README) — kein Hotlinking zu GitHub für ein einzelnes
+  kleines Bild, aber der GitHub-Button bleibt der einzige Download-Weg
+  für die eigentliche Software (explizite Nutzervorgabe: kein
+  APK/Software-Hosting auf blarks.de).
+- Kurzbeschreibung für die Landingpage umformuliert statt aus der
+  README kopiert (kürzer, ohne die technischen Detailabschnitte).
+- Sidebar-Link in `/srv/www/blarks.de/index.php` ergänzt (auf
+  Nutzerwunsch direkt über "Jero Rock'd!" platziert) — vorher
+  Diff-Vorschau gegen die frisch heruntergeladene Datei geprüft, damit
+  garantiert nur diese eine Zeile geändert wird, keine Kollision mit
+  parallelen Änderungen an der zentralen Homepage.
+- Neuer Abschnitt "## KeinSabbelRadio (Landingpage)" im zentralen
+  `/srv/www/blarks.de/CLAUDE.md`, analog zu den bestehenden
+  Pressefräse-/Reiseziele-Abschnitten dort.
+
+Bewusst NICHT gemacht (Nutzervorgabe "Rest kommt später manuell dazu"):
+kein Eintrag in `sitemap.xml`, keine weiteren Sektionen/Live-Status auf
+der Seite selbst, kein eigenes Unterprojekt-`SESSION.md` in `radio/`
+(dafür zu klein — der neue CLAUDE.md-Abschnitt genügt als
+Dokumentations-Einstiegspunkt). Der Webroot ist selbst ein Git-Repo
+(`.git` in `/srv/www/blarks.de/`) — nicht committet, weil `blarks.de`s
+eigenes `CLAUDE.md` keine Commit-Disziplin dafür vorschreibt und nicht
+danach gefragt wurde.
+
+### Verifiziert
+
+`curl -I https://blarks.de/radio/` → `200`, `curl -I
+https://blarks.de/radio/keinsabbelradio.webp` → `200`. Rohes HTML der
+ausgelieferten Seite mit der hochgeladenen Datei verglichen (identisch).
+Sidebar-Link live auf `https://blarks.de/` bestätigt (`curl` + grep nach
+dem neuen `<li>`). `index.php`-Upload per Diff gegen den unmittelbar
+zuvor heruntergeladenen Stand abgesichert (keine ungewollte
+Nebenänderung).
+
+## 2026-08-09 — Projekt-Umbenennung KeinSabbelRadio → RadioSabbelNich
+
+Auslöser: finaler Namenswechsel, Nutzerauftrag mit explizitem Vorlauf-Plan
+(vor jeder Änderung Fundstellen-Inventar + OK abwarten, siehe Konversation).
+Vor der Umsetzung drei parallele Explore-Agenten auf Docker/Python-Seite,
+Android-App und `pics/`-Assets angesetzt, um alle 8 Schreibweisen-Varianten
+(`RadioZapper`/`radiozapper`/`RADIOZAPPER`/`radio_zapper`,
+`KeinSabbelRadio`/`keinsabbelradio`/`KEINSABBELRADIO`/`kein_sabbel_radio`)
+vollständig zu erfassen, bevor irgendetwas angefasst wurde. Zwei
+Design-Entscheidungen vorab mit dem Nutzer geklärt: Android-Package
+`com.radiozapper.mvp` bleibt technisch unverändert (wie schon beim vorigen
+Rename bewusst so gehandhabt, siehe Eintrag weiter oben), und das
+Launcher-Icon (abstraktes Vektor-Icon ohne Bezug zum alten Namen) bleibt
+unverändert — nur Banner/Logo wird ersetzt.
+
+Umsetzung (Mapping durchgehend `KeinSabbelRadio`→`RadioSabbelNich`,
+`keinsabbelradio`→`radiosabbelnich`, `RadioZapper`/`radiozapper` analog wo
+noch vorhanden):
+
+- **Docker/Python-Seite**: `keinsabbelradio.py`→`radiosabbelnich.py`,
+  `run_keinsabbelradio.sh`/`check-keinsabbelradio.sh`→
+  `run_radiosabbelnich.sh`/`check-radiosabbelnich.sh` (inkl. des
+  Container-Namens-Vergleichs darin), `docker-compose.yml`
+  (Service-Key/`container_name`/Icecast-Hostname
+  `icecast-keinsabbelradio`→`icecast-radiosabbelnich`, Mount
+  `/keinsabbelradio.mp3`→`/radiosabbelnich.mp3`), Logger-Name und
+  Default-Logpfad in `logging_setup.py`, `User-Agent`-Header
+  (`station_import.py` + `webui.py`, beide Stellen zusammen),
+  PWA-`manifest.json`/Service-Worker-`CACHE_NAME`
+  (`keinsabbelradio-shell-v1`→`radiosabbelnich-shell-v1`, bustet den
+  alten PWA-Cache gleich mit), sämtliche `<title>`/Meta-Tags und
+  Kommentare/Docstrings in `webui.py` und den übrigen `.py`-Modulen,
+  `CLAUDE.md`.
+- **Android-App**: `KeinSabbelRadioApplication.kt`→
+  `RadioSabbelNichApplication.kt` (Klasse umbenannt, Package
+  `com.radiozapper.mvp` unverändert), `Theme.KeinSabbelRadioMvp`→
+  `Theme.RadioSabbelNichMvp`, `strings.xml`-`app_name`,
+  `settings.gradle.kts`-Projektname, `USER_AGENT`-Konstante in
+  `StationImporter.kt`, Update-Server-URL und lokaler APK-Cache-Dateiname
+  in `UpdateManager.kt` (`.../update_keinsabbelradio`→
+  `.../update_radiosabbelnich`, `keinsabbelradio.apk`→
+  `radiosabbelnich.apk`), `.gitignore`-Ignore-Muster,
+  `KeinSabbelRadio_Android_Fahrplan.md`→
+  `RadioSabbelNich_Android_Fahrplan.md`, `android-app/README.md` +
+  `android-app/CLAUDE.md`.
+- **Bild-Assets**: aus dem vom Nutzer bereitgestellten
+  `pics/radiosabbelnich.png` (1536×1024, neues Motiv: Röhrenradio +
+  Blitze + "RADIO SABBELNICH! — Zappt weg. Hört Musik." + durchgestrichene
+  Moderation/Nachrichten/Reklame/Jingles-Icons) per `cwebp -q 85` ein
+  194-KB-WebP erzeugt (`pics/radiosabbelnich.webp`, ersetzt
+  `pics/keinsabbelradio.webp`, vergleichbare Zielgröße wie das alte
+  Banner). Dieselbe Datei nach
+  `android-app/app/src/main/res/drawable-nodpi/banner.webp` kopiert
+  (Dateiname bleibt dort `banner.webp`, nur Inhalt getauscht). Favicon neu
+  erzeugt: quadratischer Ausschnitt des Radio-Icons aus dem neuen Motiv,
+  auf 16/32/48px skaliert, als `pics/favicon.ico` zusammengefasst.
+- **README.md**: Banner-Tag, H1, Anchor-Slug, alle Fließtext- und
+  Snippet-Vorkommen (DE+EN-Sektion). Die persönliche
+  "Namensänderung"-Notiz ganz oben inhaltlich um den zweiten Sprung
+  ergänzt (RadioZapper → KeinSabbelRadio → RadioSabbelNich) statt nur
+  mechanisch ersetzt — die alten Namen bleiben dort bewusst als Historie
+  stehen.
+- **`VERSION`**: `v1.1.6` → `v1.1.7` (PATCH-Bump nach bestehender
+  Konvention, kein Nutzervorgabe für MINOR/MAJOR).
+
+Bewusst NICHT gemacht:
+
+- Frühere `SESSION.md`-Einträge NICHT rückwirkend editiert (append-only-
+  Konvention, wie beim vorigen Rename) — nur die Titelzeile hier oben
+  wurde angepasst.
+- **Kein Docker-Rebuild/-Neustart** des laufenden Deployments — nur
+  Datei-Änderungen im Repo, Verifikation lief über `docker compose
+  config` (Syntax-Check ohne Neustart) und `python3 -c "import webui"`.
+- **Kein Android-Gradle-Build und kein APK-Upload** nach `blarks.de` —
+  laut `CLAUDE.md` nach jeder inhaltlichen App-Änderung eigentlich
+  Pflicht, aber ein echter Build + Upload auf einen externen Server
+  braucht ein separates OK. Die alte lokale Kompatibilitätskopie
+  `android-app/keinsabbelradio.apk` (gitignored, 46 MB) wurde beim
+  `git add -A` sichtbar, weil die `.gitignore`-Muster jetzt auf
+  `radiosabbelnich*.apk` zeigen — statt sie erneut zu ignorieren, wurde
+  die veraltete Datei gelöscht (reiner Build-Rest, entsteht beim
+  nächsten echten Build ohnehin neu). `android-app/version.json`
+  (ebenfalls gitignored) bleibt bis dahin mit altem Inhalt liegen.
+- **Serverseitige Umzüge außerhalb dieses Repos** nicht angefasst:
+  `/srv/www/blarks.de/update_keinsabbelradio/` (Android-Update-Ablage)
+  und die Landingpage `/srv/www/blarks.de/radio/` (nutzt aktuell noch
+  `pics/keinsabbelradio.webp` als Hero-Bild, siehe Eintrag "Fortsetzung
+  7" weiter oben) müssten beide separat (SSH/manuell) nachgezogen werden.
+- GitHub-Repo-Name unangetastet (explizite Nutzervorgabe).
+- Android-Package `com.radiozapper.mvp` und Launcher-Icon unangetastet
+  (siehe Design-Entscheidungen oben).
+
+### Verifiziert
+
+Repo-weiter `grep` (alle 6 relevanten Schreibweisen, außerhalb von
+`SESSION.md`-Historie und generierten Artefakten wie `__pycache__/`,
+`app/build/`, `.gradle/`): einzige verbleibende Treffer sind die zwei
+Zeilen der bewusst historischen "Namensänderung"-Notiz in `README.md`
+selbst. `docker compose config` läuft fehlerfrei durch, zeigt
+`container_name: radiosabbelnich`/`icecast-radiosabbelnich`,
+`ICECAST_MOUNT: /radiosabbelnich.mp3` und die korrekt zusammengesetzte
+`ICECAST_URL`. `python3 -c "import webui"` importiert ohne Fehler (nur
+erwartete Warnungen wegen der Host/Container-Pfad-Trennung bei
+lokalem Aufruf ohne Docker-Build) — die beim Modul-Import laufende
+`_check_i18n_coverage()`-Prüfung wäre bei einem kaputten `data-i18n`-Key
+sofort mit einer Exception abgebrochen, ist es nicht.

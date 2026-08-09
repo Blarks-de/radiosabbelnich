@@ -31,7 +31,7 @@ import kotlin.math.sqrt
  * echte "Landmarken"-Ereignisse (Onsets, markante Töne). Damit sank die
  * Fehlerquote im selben Test auf 1 von 351 Paaren. Dieser Fix ist
  * PFLICHT-Ausgangspunkt für diese Kotlin-Umsetzung, keine Kür - siehe
- * `KeinSabbelRadio_Android_Fahrplan.md` Phase 4 und `../SESSION.md`,
+ * `RadioSabbelNich_Android_Fahrplan.md` Phase 4 und `../SESSION.md`,
  * "Fingerprint-Algorithmus überarbeitet".
  */
 object Fingerprint {

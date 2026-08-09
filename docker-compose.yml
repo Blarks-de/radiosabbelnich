@@ -1,4 +1,4 @@
-# Icecast + KeinSabbelRadio Stack für Dockfish.
+# Icecast + RadioSabbelNich Stack für Dockfish.
 #
 # Setup:
 #   1. .env.example nach .env kopieren, Passwörter eintragen
@@ -10,7 +10,7 @@
 services:
   icecast:
     image: perl19/icecast2
-    container_name: icecast-keinsabbelradio
+    container_name: icecast-radiosabbelnich
     restart: unless-stopped
     # Nötig, damit Icecast beim Start das TLS-Zertifikat lesen kann (unten,
     # 0600/root, wie von `tailscale cert` erzeugt) -- das Image läuft per
@@ -112,20 +112,20 @@ services:
         fi
         exec icecast2 -c icecast.xml
 
-  keinsabbelradio:
+  radiosabbelnich:
     build: .
-    container_name: keinsabbelradio
+    container_name: radiosabbelnich
     restart: unless-stopped
     depends_on:
       - icecast
     environment:
       # zusammengesetzt aus den .env-Werten, kein Klartext-Passwort hier im File
-      - ICECAST_URL=icecast://source:${ICECAST_SOURCE_PASSWORD}@icecast-keinsabbelradio:8000/keinsabbelradio.mp3
+      - ICECAST_URL=icecast://source:${ICECAST_SOURCE_PASSWORD}@icecast-radiosabbelnich:8000/radiosabbelnich.mp3
       # für die Hörer-Abfrage im Web-Interface (webui.py -> Icecast Admin-API)
-      - ICECAST_ADMIN_URL=http://icecast-keinsabbelradio:8000
+      - ICECAST_ADMIN_URL=http://icecast-radiosabbelnich:8000
       - ICECAST_ADMIN_USER=${ICECAST_ADMIN_USER}
       - ICECAST_ADMIN_PASSWORD=${ICECAST_ADMIN_PASSWORD}
-      - ICECAST_MOUNT=/keinsabbelradio.mp3
+      - ICECAST_MOUNT=/radiosabbelnich.mp3
       # damit das Web-Interface einen Player einbetten kann, der vom
       # Browser aus direkt auf den öffentlichen Icecast-Port zeigt
       - ICECAST_PUBLIC_PORT=${ICECAST_PORT:-8000}
@@ -139,7 +139,7 @@ services:
       - ICECAST_PUBLIC_SSL_PORT=${ICECAST_SSL_PORT:-8443}
       # Container-interne, feste Pfade (siehe Volumes unten) -- der
       # Dockerfile-Entrypoint reicht sie als --tls-cert-file/--tls-key-file
-      # an keinsabbelradio.py durch. Ob sie tatsächlich genutzt werden,
+      # an radiosabbelnich.py durch. Ob sie tatsächlich genutzt werden,
       # entscheidet "tls_enabled" in settings.json (per /config), nicht
       # allein ihre Anwesenheit hier.
       - TLS_CERT_PATH=/app/certs/cert.pem
