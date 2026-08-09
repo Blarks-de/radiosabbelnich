@@ -4984,3 +4984,41 @@ erwartete Warnungen wegen der Host/Container-Pfad-Trennung bei
 lokalem Aufruf ohne Docker-Build) — die beim Modul-Import laufende
 `_check_i18n_coverage()`-Prüfung wäre bei einem kaputten `data-i18n`-Key
 sofort mit einer Exception abgebrochen, ist es nicht.
+
+## 2026-08-09 (Fortsetzung) — Commit gepusht + neuer Android-Update-Pfad auf blarks.de
+
+Auslöser: Nutzer wollte den Rename-Commit (`be1ee20`) sowohl zum primären
+Server (`origin`, `dockfish.icefish-ghost.ts.net`) als auch zum
+GitHub-Mirror (`github`, bleibt laut Vorgabe unter dem alten Namen
+`Blarks-de/radiozapper`) gepusht haben, UND den serverseitigen
+Android-Update-Pfad passend zum neuen `DEFAULT_UPDATE_BASE_URL` in
+`UpdateManager.kt` einrichten — mit der expliziten Vorgabe, die alte
+Ablage NICHT zu löschen: bereits installierte Alt-APKs haben den alten
+Pfad fest einkompiliert und würden sonst keine Updates mehr finden.
+
+Umsetzung: `git push origin main` + `git push github main` (beide
+erfolgreich, `97200b8..be1ee20`). Per SSH (`strato`-Alias, siehe
+`~/.ssh/config`) `/srv/www/blarks.de/update_radiosabbelnich/` neu
+angelegt, Owner/Gruppe/Rechte 1:1 von `update_keinsabbelradio/`
+übernommen (`blarks:www-data`, `2775` inkl. Setgid-Bit, damit neu
+hochgeladene Dateien automatisch der richtigen Gruppe gehören).
+`update_keinsabbelradio/` selbst nicht angefasst.
+
+Bewusst NICHT gemacht: kein Android-Build, keine APK in den neuen Pfad
+hochgeladen — das Verzeichnis ist aktuell leer und wird erst beim
+nächsten tatsächlichen Build befüllt (Runbook in `android-app/CLAUDE.md`
+zeigt inzwischen auf den neuen Pfad). Bis dahin liefert
+`update_keinsabbelradio/` unverändert die letzte KeinSabbelRadio-Build
+weiter aus — bereits installierte Apps finden dort weiterhin Updates,
+bis eine künftige Build sie auf den neuen Pfad umstellt. Landingpage
+`/srv/www/blarks.de/radio/` (nutzt noch das alte Banner, siehe Eintrag
+"Fortsetzung 7" oben) ebenfalls nicht angefasst — nicht Teil dieses
+Auftrags.
+
+### Verifiziert
+
+`curl -sI https://blarks.de/update_radiosabbelnich/` → `403` (Verzeichnis
+existiert, Listing serverweit gesperrt wie beim alten Pfad auch — keine
+Datei drin, kein Fehler). `curl -sI
+https://blarks.de/update_keinsabbelradio/version.json` → weiterhin `200`,
+alter Pfad unverändert erreichbar.

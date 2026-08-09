@@ -1417,3 +1417,17 @@ keine Treffer mehr für `KeinSabbelRadio`/`keinsabbelradio` mehr; einzige
 verbleibenden `radiozapper`-Treffer sind die bewusst unangetastete
 Package-Deklaration/-Imports (`com.radiozapper.mvp`, 24 Dateien) und ein
 `adb`-Befehl in `README.md`, der exakt diesen Package-Namen referenziert.
+
+## 2026-08-09 (Fortsetzung) — Serverseitiger Update-Pfad update_radiosabbelnich angelegt
+
+Volle Begründung in `../SESSION.md` (Eintrag "Commit gepusht + neuer
+Android-Update-Pfad auf blarks.de"), hier nur die App-relevante
+Kurzfassung: `/srv/www/blarks.de/update_radiosabbelnich/` existiert jetzt
+serverseitig passend zum bereits umgestellten
+`DEFAULT_UPDATE_BASE_URL` in `UpdateManager.kt`, aber noch leer — der
+alte Pfad `update_keinsabbelradio/` bleibt auf Nutzerwunsch weiter
+bestehen, damit schon installierte Alt-Builds (die den alten Pfad fest
+einkompiliert haben) weiterhin Updates finden, bis sie über eine künftige
+Build auf den neuen Pfad wechseln. Kein Build in diesem Schritt — der
+neue Pfad wird erst beim nächsten tatsächlichen `./gradlew
+assembleDebug` + Upload-Runbook (siehe `CLAUDE.md`) befüllt.
