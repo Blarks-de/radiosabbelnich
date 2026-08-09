@@ -1431,3 +1431,17 @@ einkompiliert haben) weiterhin Updates finden, bis sie über eine künftige
 Build auf den neuen Pfad wechseln. Kein Build in diesem Schritt — der
 neue Pfad wird erst beim nächsten tatsächlichen `./gradlew
 assembleDebug` + Upload-Runbook (siehe `CLAUDE.md`) befüllt.
+
+## 2026-08-09 (Fortsetzung 2) — Brücken-Build durchgeführt, beide Update-Pfade befüllt
+
+Volle Begründung/Verifikation in `../SESSION.md` (Eintrag
+"Android-Brücken-Build + Landingpage nachgezogen"), hier die
+App-relevante Kurzfassung: `./gradlew assembleDebug` erfolgreich
+(`versionName=0.1.0`, App-Label per `aapt dump badging` bestätigt als
+"RadioSabbelNich MVP"), dieselbe zeitgestempelte APK +
+`version.json` sowohl nach `update_radiosabbelnich/` als auch nach
+`update_keinsabbelradio/` hochgeladen (Brücken-Build für bereits
+installierte Alt-Versionen, siehe voriger Eintrag). Smoke-Test auf dem
+lokalen Emulator (`test_device`): Install + Start ohne Absturz, `pidof`
+bestätigt laufenden Prozess. Kein tiefergehender Funktionstest, da reiner
+Namens-Rebrand ohne Logikänderung.

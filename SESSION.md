@@ -5022,3 +5022,56 @@ existiert, Listing serverweit gesperrt wie beim alten Pfad auch — keine
 Datei drin, kein Fehler). `curl -sI
 https://blarks.de/update_keinsabbelradio/version.json` → weiterhin `200`,
 alter Pfad unverändert erreichbar.
+
+## 2026-08-09 (Fortsetzung 2) — Android-Brücken-Build + Landingpage nachgezogen ("aktualisier alles")
+
+Auslöser: die beiden im vorigen Eintrag offen gelassenen Punkte (echter
+Android-Build für den neuen Update-Pfad, Landingpage) sollten auf
+expliziten Nutzerwunsch jetzt auch erledigt werden.
+
+**Android-Build**: `./gradlew assembleDebug` (BUILD SUCCESSFUL, 22s).
+Lokale Kopien nach Runbook (`radiosabbelnich.apk`,
+`radiosabbelnich-20260809-113527.apk`, `version.json`), dann
+zeitgestempelte APK + `version.json` per `scp` in **beide**
+Update-Verzeichnisse hochgeladen — `update_radiosabbelnich/` (regulärer
+neuer Pfad) UND `update_keinsabbelradio/` (Brücken-Build): bereits
+installierte Alt-Apps haben den alten `DEFAULT_UPDATE_BASE_URL`
+einkompiliert und würden sonst nie erfahren, dass es diese Build (mit dem
+neuen Pfad als Default) überhaupt gibt. Ab dieser installierten Version
+zeigen alle künftigen Update-Checks auf `update_radiosabbelnich/`. Lokale
+Zeitstempel-Kopie danach wieder gelöscht (Server ist Quelle der Wahrheit,
+wie im Runbook vorgesehen).
+
+**Landingpage `blarks.de/radio/`**: Dateien vor dem Bearbeiten
+heruntergeladen, lokal per Diff geprüft (nur die erwarteten
+KeinSabbelRadio→RadioSabbelNich-Zeilen geändert), dann hochgeladen und
+per erneutem Diff gegen den frisch heruntergeladenen Live-Stand
+abgesichert (identisch, keine ungewollte Nebenänderung/Race mit
+paralleler Bearbeitung). Betroffen: `index.html` (Title, Meta-Description,
+OG-Tags, Bild-Referenz, H1, Fließtext), Sidebar-Link "KeinSabbelRadio" →
+"RadioSabbelNich" in `index.php`, Abschnitt "## KeinSabbelRadio
+(Landingpage)" → "## RadioSabbelNich (Landingpage)" in `CLAUDE.md`
+(inkl. Dateistruktur-Beispiel). Hero-Bild `radiosabbelnich.webp` (Kopie
+von `pics/radiosabbelnich.webp` aus diesem Repo) hochgeladen, die
+verwaiste alte `keinsabbelradio.webp` auf dem Server gelöscht (per
+Git-Historie von `pics/keinsabbelradio.webp` wiederherstellbar, falls
+doch nötig).
+
+Bewusst NICHT gemacht: kein vollständiger Emulator-Funktionstest über den
+reinen Start hinaus (reiner Rename ohne Logikänderung, dafür reicht ein
+Smoke-Test); GitHub-Link auf der Landingpage zeigt weiterhin auf
+`github.com/Blarks-de/radiozapper` (Repo-Name bleibt unangetastet, siehe
+oben).
+
+### Verifiziert
+
+`adb install -r radiosabbelnich.apk` → `Success`, `aapt dump badging`
+zeigt `application-label='RadioSabbelNich MVP'`, `am start` + `pidof`
+bestätigen fehlerfreien Start (kein Fataler Absturz in `logcat`) auf dem
+lokalen Emulator (`test_device`, API 34). `curl` bestätigt beide
+Update-Pfade liefern identisches, neues `version.json`
+(`buildTime: 2026-08-09 11:35`). Landingpage: `curl -sI
+https://blarks.de/radio/` → `200`, `<title>RadioSabbelNich –
+blarks.de</title>` im ausgelieferten HTML, Sidebar-Link auf
+`https://blarks.de/` zeigt "RadioSabbelNich", neues Hero-Bild unter
+`https://blarks.de/radio/radiosabbelnich.webp` → `200`.
