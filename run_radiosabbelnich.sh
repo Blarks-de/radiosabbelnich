@@ -25,6 +25,8 @@ draw_bar() {
   printf "]%b" "$NC"
 }
 
+cd "$(dirname "$0")"
+
 echo "🔍 System-Check vor dem Start"
 echo
 
@@ -54,10 +56,63 @@ else
 fi
 
 echo
-echo "🚀 Starte RadioSabbelNich..."
+
+# --- MP3-Ordner (Nachrichten-Pause) ---
+# Bewusst NICHT ".env" selbst parsen (per "source" o.ä.): eine Shell und
+# Docker Compose interpretieren z.B. Backslashes in Werten UNTERSCHIEDLICH
+# (Shell entfernt "\'" beim Sourcen zu "'", Compose lässt den Backslash
+# wörtlich stehen) -- ein per Shell "korrekt" gelesener Pfad kann also genau
+# der kaputte Pfad sein, den Docker gleich als Mount-Quelle verwendet und an
+# dem "docker compose up" dann mit einem kryptischen "invalid argument"
+# scheitert (live erlebt: NEWS_MP3_FOLDER=.../80\'s/ in .env). Deshalb fragen
+# wir Compose selbst nach dem aufgelösten Wert -- das ist garantiert exakt
+# das, was gleich als Bind-Mount-Quelle verwendet wird.
+echo "📻 MP3-Ordner (Nachrichten-Pause)"
+
+if ! compose_config_json=$(docker compose config --format json 2>/dev/null); then
+    echo -e "${RED}❌ 'docker compose config' schlägt fehl -- Fehler in docker-compose.yml oder .env:${NC}"
+    docker compose config --format json
+    exit 1
+fi
+
+news_folder_host=$(printf '%s' "$compose_config_json" | python3 -c '
+import json, sys
+try:
+    cfg = json.load(sys.stdin)
+    print(cfg["services"]["radiosabbelnich"]["environment"].get("NEWS_MP3_FOLDER_HOST", ""))
+except Exception:
+    print("")
+' 2>/dev/null)
+
+if [ -z "$news_folder_host" ]; then
+    echo -e "${YELLOW}⚠️  NEWS_MP3_FOLDER konnte nicht ermittelt werden -- Check übersprungen.${NC}"
+elif [ "$news_folder_host" = "./data/news_mp3" ]; then
+    echo -e "${YELLOW}⚠️  NEWS_MP3_FOLDER nicht gesetzt (Default './data/news_mp3') -- Nachrichten-Pause bleibt inaktiv, bis dort MP3s liegen oder ein eigener Pfad in .env eingetragen ist.${NC}"
+elif [ ! -d "$news_folder_host" ]; then
+    echo -e "${RED}❌ NEWS_MP3_FOLDER='$news_folder_host' existiert nicht.${NC}"
+    stripped="${news_folder_host//\\/}"
+    if [ "$stripped" != "$news_folder_host" ] && [ -d "$stripped" ]; then
+        echo -e "   ${YELLOW}→ Ohne Backslash existiert der Ordner ('$stripped') -- .env enthält vermutlich ein wörtliches '\\', das Docker Compose (anders als eine Shell) NICHT als Escapezeichen entfernt. In .env korrigieren zu: NEWS_MP3_FOLDER=$stripped${NC}"
+    else
+        echo -e "   ${YELLOW}→ NEWS_MP3_FOLDER in .env prüfen (Tippfehler? SMB-Mount nicht eingehängt?).${NC}"
+    fi
+    echo -e "${RED}Abgebrochen -- Docker würde sonst versuchen, diesen Pfad als leeres Verzeichnis anzulegen.${NC}"
+    exit 1
+elif [ ! -r "$news_folder_host" ]; then
+    echo -e "${RED}❌ NEWS_MP3_FOLDER='$news_folder_host' ist nicht lesbar -- Dateirechte prüfen.${NC}"
+    exit 1
+else
+    mp3_count=$(find "$news_folder_host" -maxdepth 1 -iname '*.mp3' 2>/dev/null | wc -l)
+    if [ "$mp3_count" -eq 0 ]; then
+        echo -e "${YELLOW}⚠️  NEWS_MP3_FOLDER='$news_folder_host' existiert, enthält aber keine MP3-Dateien.${NC}"
+    else
+        echo -e "${GREEN}✅ NEWS_MP3_FOLDER='$news_folder_host' ($mp3_count MP3-Datei(en) gefunden).${NC}"
+    fi
+fi
 echo
 
-cd "$(dirname "$0")"
+echo "🚀 Starte RadioSabbelNich..."
+echo
 
 docker compose up -d --build
 

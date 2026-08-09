@@ -5075,3 +5075,98 @@ https://blarks.de/radio/` → `200`, `<title>RadioSabbelNich –
 blarks.de</title>` im ausgelieferten HTML, Sidebar-Link auf
 `https://blarks.de/` zeigt "RadioSabbelNich", neues Hero-Bild unter
 `https://blarks.de/radio/radiosabbelnich.webp` → `200`.
+
+## 2026-08-09 — NEWS_MP3_FOLDER-Backslash-Bug: Preflight-Checks gegen Docker
+Compose statt gegen die Shell validieren
+
+**Auslöser**: `./run_radiosabbelnich.sh` scheiterte beim Start mit `Error
+response from daemon: error while creating mount source path
+'/mnt/eimer/data/Audio/Musik/80\'s': mkdir ...: invalid argument`.
+Ursache: `.env` enthielt `NEWS_MP3_FOLDER=/mnt/eimer/data/Audio/Musik/80\'s/`
+-- ein Backslash, den der Nutzer vermutlich in Analogie zur Shell als
+Escapezeichen fürs Apostroph gemeint hatte. Docker Compose interpretiert
+Backslashes in unquoted `.env`-Werten aber NICHT als Escapezeichen -- der
+Backslash landet wörtlich im Pfad, den Docker dann als (nicht
+existierenden) Mount-Quellordner anzulegen versucht.
+
+### Umsetzung
+
+- `.env` korrigiert: `NEWS_MP3_FOLDER="/mnt/eimer/data/Audio/Musik/80's/"`
+  -- in doppelte Anführungszeichen gesetzt statt den Backslash nur zu
+  entfernen. Ohne Anführungszeichen bricht nämlich `source .env` in
+  `check-radiosabbelnich.sh` an genau dieser Stelle (unquotes Apostroph
+  öffnet für Bash ein nie geschlossenes Quote, Skript scheitert mit
+  "Dateiende beim Suchen nach »'« erreicht") -- doppelte Anführungszeichen
+  sind für beide Parser (Docker Compose UND Bash) sauber.
+- **`run_radiosabbelnich.sh`**: neuer `NEWS_MP3_FOLDER`-Check (existierte
+  dort bisher gar nicht, nur in `check-radiosabbelnich.sh`) direkt vor
+  `docker compose up -d --build`. Bricht bei fehlendem/unlesbarem Ordner
+  mit `exit 1` ab, BEVOR Docker den kryptischen Mount-Fehler wirft. Bei 0
+  gefundenen MP3s nur `warn` (Feature ist optional), bei Erfolg Anzahl
+  gefundener MP3-Dateien.
+- **`check-radiosabbelnich.sh`**: bestehender `NEWS_MP3_FOLDER`-Check
+  (Abschnitt 4) umgestellt -- er hätte diesen konkreten Bug NICHT gefangen:
+  er las `$NEWS_MP3_FOLDER` aus einem zuvor per `source .env` (mit `set -a`
+  exportiert) gesourceten Wert, und Bash entfernt beim Sourcen `\'` zu `'`
+  -- der Check hätte fälschlich einen existierenden, bereinigten Pfad
+  gesehen, während `docker compose up` den ROHEN Wert mit Backslash
+  verwendet und scheitert.
+- **Grundsatzfix in beiden Skripten**: statt `.env` selbst zu parsen, fragen
+  beide jetzt `docker compose config --format json` (geparst per
+  eingebettetem `python3 -c` statt `jq`, da `jq` keine bestehende
+  Abhängigkeit des Projekts ist, `python3` dagegen schon) nach dem
+  tatsächlich aufgelösten `NEWS_MP3_FOLDER_HOST`-Wert für den
+  `radiosabbelnich`-Service -- das ist garantiert exakt der Wert, den
+  Docker gleich als Bind-Mount-Quelle verwendet, unabhängig davon, wie
+  Docker Compose seine `.env`-Syntax im Detail handhabt. Erkennt dadurch
+  jede Diskrepanz zwischen "sieht für eine Shell okay aus" und "das nimmt
+  Docker tatsächlich", nicht nur den konkret aufgetretenen Backslash-Fall.
+  Zusätzlich: existiert der aufgelöste Pfad nicht, aber derselbe Pfad OHNE
+  Backslashes schon, wird das als konkreter Korrekturvorschlag ausgegeben
+  (`→ Ohne Backslash existiert der Ordner (...) -- in .env korrigieren
+  zu: ...`).
+- **`check-radiosabbelnich.sh`s `.env`-Abschnitt (3) verliert `set -a`**:
+  war die eigentliche Ursache, warum der bestehende Check den Bug verdeckt
+  hatte -- `set -a` exportiert gesourcete Variablen in die Umgebung, und
+  Docker Compose bevorzugt echte Umgebungsvariablen gegenüber `.env`-Werten
+  beim späteren `docker compose config`-Aufruf **im selben Skript-Prozess**.
+  Ohne `set -a` bleiben die für die Pflichtfelder-Prüfung (Abschnitt 3)
+  benötigten Variablen normale (nicht exportierte) Shell-Variablen -- für
+  `${!var}`-Zugriffe im selben Skript reicht das, an Subprozesse wie
+  `docker compose config` sickert nichts mehr durch.
+- `env.example`: Kommentar bei `NEWS_MP3_FOLDER` ergänzt (Anführungszeichen
+  bei Sonderzeichen, kein Backslash zum Escapen).
+- `README.md`: Setup-Abschnitt um den neuen `run_radiosabbelnich.sh`-Check
+  und die Docker-Compose-vs-Shell-Begründung ergänzt.
+
+### Bewusst NICHT gemacht
+
+- Keine allgemeine `.env`-Validierung für ALLE Variablen auf
+  Backslash-artige Fallstricke -- nur `NEWS_MP3_FOLDER` ist bisher
+  betroffen (Pfad mit Sonderzeichen), die übrigen Werte (Passwörter,
+  Hostnamen, Ports) sind in der Praxis unkritisch dafür. Der
+  Grundsatzfix (gegen `docker compose config` statt gegen `.env`/Bash
+  prüfen) deckt aber grundsätzlich jede `.env`-Variable ab, die künftig
+  denselben Weg bekäme.
+- `jq` nicht als neue Abhängigkeit eingeführt, obwohl auf diesem Host
+  vorhanden -- `python3` ist über die ohnehin komplett Python-basierte
+  Codebase eine sicherere Annahme für jeden Host, auf dem dieses Projekt
+  läuft.
+
+### Verifiziert
+
+- `bash -n` für beide Skripte -- ohne Fehler.
+- Live gegen den echten Bug reproduziert: `.env` testweise wieder auf den
+  kaputten Backslash-Wert gesetzt, beide Skripte in frischen Prozessen
+  (`bash ./check-radiosabbelnich.sh`, `bash run_radiosabbelnich.sh` ohne
+  das abschließende `docker compose up`) liefern jetzt `❌ ... existiert
+  nicht` samt Backslash-Korrekturvorschlag und `exit 1` -- vorher hätte
+  `check-radiosabbelnich.sh` fälschlich `✅` gemeldet (siehe oben).
+  Danach `.env` wieder auf den korrigierten Wert zurückgesetzt: beide
+  Skripte melden `✅ NEWS_MP3_FOLDER='/mnt/eimer/data/Audio/Musik/80's/'
+  (234 MP3-Datei(en) gefunden)`, Exit-Code 0.
+- Der eigentliche laufende Produktivcontainer wurde für diese Tests NICHT
+  neu gestartet (`docker compose up` aus den Testläufen entfernt) --
+  einmaliger echter `./run_radiosabbelnich.sh`-Lauf mit der korrigierten
+  `.env` (vor diesem Preflight-Umbau) lief bereits erfolgreich durch,
+  beide Container liefen danach `Up`.

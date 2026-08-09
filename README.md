@@ -565,9 +565,19 @@ und ob `WEBUI_PORT`/`ICECAST_PORT`/`ICECAST_SSL_PORT` frei sind — läuft
 bereits RadioSabbelNich selbst auf diesen Ports, gilt das als ok; blockiert
 stattdessen ein anderer Docker-Container den Port, schlägt das Skript
 eine freie Alternative zum Eintragen in `.env` vor. Reine Diagnose (Exit-
-Code 1 bei Problemen), startet selbst nichts. Danach `./run_radiosabbelnich.sh`
-zum eigentlichen Start (macht denselben RAM/HD/Internet-Check nochmal,
-dann `docker compose up -d --build`).
+Code 1 bei Problemen), startet selbst nichts. Danach `./run_radiosabbelnich.sh` zum eigentlichen Start (macht denselben
+RAM/HD/Internet-Check nochmal, prüft den `NEWS_MP3_FOLDER`-Ordner erneut
+und bricht bei einem kaputten/fehlenden Pfad **vor** `docker compose up`
+mit einer klaren Diagnose ab, statt Docker den rohen, oft kryptischen
+Mount-Fehler werfen zu lassen).
+
+Beide Skripte fragen für den `NEWS_MP3_FOLDER`-Check bewusst
+`docker compose config` statt `.env` selbst zu parsen: eine Shell und
+Docker Compose interpretieren z.B. Backslashes in `.env`-Werten
+unterschiedlich (siehe `NEWS_MP3_FOLDER` in `env.example`) — ein per Shell
+"korrekt" gelesener Pfad kann also genau der kaputte Pfad sein, den Docker
+gleich als Mount-Quelle verwendet. `docker compose config` liefert
+garantiert den Wert, den Docker tatsächlich benutzt.
 
 Das `touch` ist Pflicht, nicht Kosmetik: `fingerprints.db` hängt in
 `docker-compose.yml` als einzelne Datei im Container. Fehlt sie auf dem

@@ -114,10 +114,16 @@ echo "📄 .env"
 if [ ! -f .env ]; then
     fail ".env nicht gefunden -- mit 'cp env.example .env' anlegen und Passwörter/Hostname eintragen."
 else
-    set -a
+    # Bewusst OHNE "set -a": ge-source-te (und damit von der Shell,
+    # abweichend von Docker Compose, ggf. anders interpretierte -- siehe
+    # MP3-Ordner-Check unten) Werte dürfen NICHT als echte Umgebungsvariablen
+    # exportiert werden. Sonst würde der spätere "docker compose config"-
+    # Aufruf im selben Skript-Prozess exakt diese (falsch entschärften) Werte
+    # sehen statt der rohen .env-Datei -- Vorrang von Shell-Env vor .env ist
+    # Docker Compose selbst so definiert. Live erlebt: verdeckte genau den
+    # NEWS_MP3_FOLDER-Backslash-Bug, den dieser Check eigentlich finden soll.
     # shellcheck disable=SC1091
     source .env
-    set +a
 
     missing=()
     for var in ICECAST_ADMIN_USER ICECAST_ADMIN_PASSWORD ICECAST_SOURCE_PASSWORD \
@@ -151,25 +157,53 @@ echo
 : "${WEBUI_PORT:=5000}"
 : "${ICECAST_PORT:=8000}"
 : "${ICECAST_SSL_PORT:=8443}"
-: "${NEWS_MP3_FOLDER:=./data/news_mp3}"
 
 # ---------------------------------------------------------------------
 # 4. MP3-Ordner für die Nachrichten-Pause: eingetragen und nutzbar?
 # ---------------------------------------------------------------------
 echo "📻 MP3-Ordner (Nachrichten-Pause)"
 
-if [ "$NEWS_MP3_FOLDER" = "./data/news_mp3" ]; then
-    warn "NEWS_MP3_FOLDER nicht gesetzt (Default './data/news_mp3') -- Feature bleibt inaktiv, bis dort MP3s liegen oder ein eigener Pfad in .env eingetragen ist. Kein Fehler, das Feature ist optional."
-elif [ ! -d "$NEWS_MP3_FOLDER" ]; then
-    fail "NEWS_MP3_FOLDER='$NEWS_MP3_FOLDER' existiert nicht (Tippfehler? SMB-Mount nicht eingehängt?)."
-elif [ ! -r "$NEWS_MP3_FOLDER" ]; then
-    fail "NEWS_MP3_FOLDER='$NEWS_MP3_FOLDER' ist nicht lesbar -- Dateirechte prüfen."
+# Bewusst NICHT das oben ge-source-te $NEWS_MP3_FOLDER verwenden: eine Shell
+# und Docker Compose interpretieren z.B. Backslashes in .env-Werten
+# UNTERSCHIEDLICH (Shell entfernt "\'" beim Sourcen zu "'", Compose lässt den
+# Backslash wörtlich stehen). Ein per Shell "korrekt" gelesener Pfad kann
+# also genau der kaputte Pfad sein, den Docker gleich als Mount-Quelle
+# verwendet -- live erlebt: NEWS_MP3_FOLDER=.../80\'s/ in .env, "source .env"
+# ergab fälschlich einen existierenden Pfad ohne Backslash, "docker compose
+# up" scheiterte trotzdem mit "invalid argument". Deshalb hier denselben Weg
+# wie Compose selbst gehen und den aufgelösten Wert abfragen.
+if ! compose_config_json=$(docker compose config --format json 2>/dev/null); then
+    fail "'docker compose config' schlägt fehl -- Fehler in docker-compose.yml oder .env."
+    news_folder_host=""
 else
-    mp3_count=$(find "$NEWS_MP3_FOLDER" -maxdepth 1 -iname '*.mp3' 2>/dev/null | wc -l)
+    news_folder_host=$(printf '%s' "$compose_config_json" | python3 -c '
+import json, sys
+try:
+    cfg = json.load(sys.stdin)
+    print(cfg["services"]["radiosabbelnich"]["environment"].get("NEWS_MP3_FOLDER_HOST", ""))
+except Exception:
+    print("")
+' 2>/dev/null)
+fi
+
+if [ -z "$news_folder_host" ]; then
+    : # bereits oben als fail() gemeldet (oder python3/compose-Ausgabe leer)
+elif [ "$news_folder_host" = "./data/news_mp3" ]; then
+    warn "NEWS_MP3_FOLDER nicht gesetzt (Default './data/news_mp3') -- Feature bleibt inaktiv, bis dort MP3s liegen oder ein eigener Pfad in .env eingetragen ist. Kein Fehler, das Feature ist optional."
+elif [ ! -d "$news_folder_host" ]; then
+    fail "NEWS_MP3_FOLDER='$news_folder_host' existiert nicht (Tippfehler? SMB-Mount nicht eingehängt?)."
+    stripped="${news_folder_host//\\/}"
+    if [ "$stripped" != "$news_folder_host" ] && [ -d "$stripped" ]; then
+        echo -e "   ${YELLOW}→ Ohne Backslash existiert der Ordner ('$stripped') -- .env enthält vermutlich ein wörtliches '\\', das Docker Compose (anders als eine Shell) NICHT als Escapezeichen entfernt. In .env korrigieren zu: NEWS_MP3_FOLDER=$stripped${NC}"
+    fi
+elif [ ! -r "$news_folder_host" ]; then
+    fail "NEWS_MP3_FOLDER='$news_folder_host' ist nicht lesbar -- Dateirechte prüfen."
+else
+    mp3_count=$(find "$news_folder_host" -maxdepth 1 -iname '*.mp3' 2>/dev/null | wc -l)
     if [ "$mp3_count" -eq 0 ]; then
-        warn "NEWS_MP3_FOLDER='$NEWS_MP3_FOLDER' existiert, enthält aber keine MP3-Dateien."
+        warn "NEWS_MP3_FOLDER='$news_folder_host' existiert, enthält aber keine MP3-Dateien."
     else
-        ok "NEWS_MP3_FOLDER='$NEWS_MP3_FOLDER' ($mp3_count MP3-Datei(en) gefunden)."
+        ok "NEWS_MP3_FOLDER='$news_folder_host' ($mp3_count MP3-Datei(en) gefunden)."
     fi
 fi
 echo
