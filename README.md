@@ -691,8 +691,8 @@ scannen, taggen und nach Kategorien abspielbar machen.
 - Phase 1: Scan der Musiksammlung (ID3/Vorbis-Metadaten via mutagen) →
   SQLite-DB (Artist, Album, Titel, Genre, Jahr, Dateipfad, eingebettetes
   Cover falls vorhanden)
-  - Quelle: Fileserver 192.168.5.101, per SMB auf Dockfish gemountet
-    unter `/mnt/eimer/data`
+  - Quelle: Fileserver 192.168.1.10, per SMB auf SERVER gemountet
+    unter `/mnt/server/data`
   - Scan wird manuell getriggert (kein Cronjob)
 - Phase 2: Query-Layer (CLI/kleine API, angelehnt an Beets' Query-Syntax),
   Anbindung an den Player als Alternative zum Icecast-Stream
