@@ -679,6 +679,37 @@ auf die Konsole, `--log-file ""` schaltet die Datei ab.
   der Pause schaltet deshalb zum ersten Sender der Liste statt zum
   eigentlichen Nachbarn des pausierten Senders.
 
+## Zukünftige Features
+
+### Eigene Musik-Library & Kategorisierung (geplant)
+
+Optionaler Modus als Ergänzung zum Stream-Switching: lokale Musiksammlung
+scannen, taggen und nach Kategorien abspielbar machen.
+
+- Umschaltbar per Toggle: Radio-Modus (Stream-Switching, STT/VAD aktiv)
+  vs. Library-Modus (eigene Musik, STT/VAD komplett deaktiviert)
+- Phase 1: Scan der Musiksammlung (ID3/Vorbis-Metadaten via mutagen) →
+  SQLite-DB (Artist, Album, Titel, Genre, Jahr, Dateipfad, eingebettetes
+  Cover falls vorhanden)
+  - Quelle: Fileserver 192.168.5.101, per SMB auf Dockfish gemountet
+    unter `/mnt/eimer/data`
+  - Scan wird manuell getriggert (kein Cronjob)
+- Phase 2: Query-Layer (CLI/kleine API, angelehnt an Beets' Query-Syntax),
+  Anbindung an den Player als Alternative zum Icecast-Stream
+- Phase 3 (optional, später): Audio-Features (BPM, Energy via librosa)
+  für Smart-Playlists, Duplikat-Erkennung, kleines Web-UI zum Browsen
+- Enrichment (späterer Baustein, getrennt vom Scan): fehlende
+  Cover/Lyrics nachträglich über externe Quellen (z.B.
+  MusicBrainz/Cover Art Archive, lrclib.net) ergänzen, langfristiges
+  Ziel: alle Tracks mit Cover + Lyrics + Kategorie-Markierung
+- Ideenliste (ganz langfristig, unklar ob umgesetzt): eigener
+  KI-"Moderator" für Zwischenansagen zu externen Ereignissen (z.B.
+  Termine, eingetroffene Mails, Klingel-Events)
+
+Tech-Stack: Python, mutagen, SQLite, ggf. FastAPI für Query-API.
+Referenz: Beets (Library-Manager) als Inspiration für
+Datenmodell/Query-Sprache, kein 1:1-Einsatz.
+
 ---
 
 <a id="radiosabbelnich-english-version"></a>
@@ -1333,3 +1364,34 @@ accidentally start the container in the right mode beforehand.
   virtual ID, not its position in the rotation — a click during the
   break therefore switches to the first station in the list instead of
   the actual neighbor of the paused station.
+
+## Future features
+
+### Own music library & categorization (planned)
+
+Optional mode alongside stream switching: scan a local music collection,
+tag it, and make it playable by category.
+
+- Switchable via toggle: radio mode (stream switching, STT/VAD active)
+  vs. library mode (own music, STT/VAD completely disabled)
+- Phase 1: scan the music collection (ID3/Vorbis metadata via mutagen)
+  → SQLite DB (artist, album, title, genre, year, file path, embedded
+  cover if present)
+  - Source: file server 192.168.5.101, SMB-mounted on Dockfish under
+    `/mnt/eimer/data`
+  - Scan is triggered manually (no cron job)
+- Phase 2: query layer (CLI/small API, modeled on Beets' query syntax),
+  hooked into the player as an alternative to the Icecast stream
+- Phase 3 (optional, later): audio features (BPM, energy via librosa)
+  for smart playlists, duplicate detection, small web UI for browsing
+- Enrichment (later building block, separate from the scan): fill in
+  missing covers/lyrics afterwards from external sources (e.g.
+  MusicBrainz/Cover Art Archive, lrclib.net), long-term goal: every
+  track with cover + lyrics + category tag
+- Idea list (very long-term, unclear if it'll ever be built): a custom
+  AI "moderator" for announcements about external events (e.g.
+  appointments, incoming mail, doorbell events)
+
+Tech stack: Python, mutagen, SQLite, possibly FastAPI for the query API.
+Reference: Beets (library manager) as inspiration for the data
+model/query language, not a 1:1 adoption.

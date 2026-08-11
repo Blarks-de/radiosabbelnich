@@ -5170,3 +5170,35 @@ existierenden) Mount-Quellordner anzulegen versucht.
   einmaliger echter `./run_radiosabbelnich.sh`-Lauf mit der korrigierten
   `.env` (vor diesem Preflight-Umbau) lief bereits erfolgreich durch,
   beide Container liefen danach `Up`.
+
+## 2026-08-11 — README: Roadmap-Abschnitt für geplante Musik-Library ergänzt
+
+**Auslöser**: Nutzer wollte eine Feature-Idee (eigene Musik-Library als
+Ergänzung zum Stream-Switching) dokumentieren, bevor überhaupt Code dazu
+existiert -- reine Doku-Aufgabe, explizit ohne Implementierung.
+
+### Umsetzung
+
+- `README.md`: neuer Abschnitt "Zukünftige Features" (DE, nach "Bekannte
+  Einschränkungen") bzw. "Future features" (EN, nach "Known limitations")
+  -- kein bestehender Roadmap-Abschnitt vorhanden, der einzige Treffer für
+  "roadmap" war ein Nebensatz im Einleitungstext, keine echte Sektion.
+  Beschreibt den geplanten Library-Modus (Toggle Radio/Library, STT/VAD
+  in der Library aus) samt dreiphasigem Plan (Scan via mutagen → SQLite,
+  Query-Layer angelehnt an Beets, optionale Audio-Features/Smart-
+  Playlists) und einem separaten Enrichment-Baustein (Cover/Lyrics
+  nachträglich ergänzen). Reine Ideensammlung, nichts davon ist
+  Bestandteil von `CLAUDE.md`s Architektur-Kapitel, weil noch nichts
+  umgesetzt ist.
+- `VERSION`: v1.1.8 -> v1.1.9.
+
+### Bewusst NICHT gemacht
+
+- Kein Code, kein neues Modul, kein Scan-Skript -- ausdrücklich nur die
+  Dokumentation der Idee, wie vom Nutzer verlangt.
+
+### Verifiziert
+
+- Manuell gegenlesen: DE- und EN-Abschnitt inhaltlich deckungsgleich,
+  Platzierung passt zum bestehenden Bekannte-Einschränkungen/Known-
+  limitations-Muster am Ende beider Sprachversionen.
