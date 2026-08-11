@@ -5202,3 +5202,304 @@ existiert -- reine Doku-Aufgabe, explizit ohne Implementierung.
 - Manuell gegenlesen: DE- und EN-Abschnitt inhaltlich deckungsgleich,
   Platzierung passt zum bestehenden Bekannte-Einschränkungen/Known-
   limitations-Muster am Ende beider Sprachversionen.
+
+## 2026-08-11 — Musiksammlung-Grundgerüst: Radio/Musik-Modus-Umschalter, neue /musik-Seite, Breadcrumb-Ordnerauswahl
+
+**Auslöser**: Erster Umsetzungsschritt der in `a8f3bfd` skizzierten
+Musik-Library-Roadmap (Scan/ID3/SQLite folgen später) — Nutzer wollte
+zuerst das Grundgerüst: ein persistenter Radio/Musiksammlung-Modus-
+Umschalter (STT/VAD im Musik-Modus komplett aus, nicht nur pausiert),
+eine neue `/musik`-Seite mit minimalem Play/Stop/Zurück/Nächster-Player
+über lokale MP3s, und eine gemeinsame Breadcrumb-Ordner-Browser-
+Komponente für die Pfadauswahl — explizit sowohl für den neuen
+Musiksammlung-Root als auch fürs bestehende (bisher freitext-basierte)
+News-Break-MP3-Feld, als zwei unabhängig gespeicherte Config-Werte.
+Plan vorab mit dem Nutzer abgestimmt (zwei Nachträge während der
+Planungsphase: getrennte Config-Keys für den gemeinsamen Breadcrumb-
+Baustein, und der Modus-Umschalter als eigenständige, persistierte
+Anforderung).
+
+### Umsetzung
+
+- **Neue Module** (reine Domänenlogik, kein Bezug zu
+  `StreamSource`/`SwitcherState`, analog zu `news_break.py`):
+  - `music_library.py`: `list_tracks(folder)` — sortierte `.mp3`-Dateien
+    eines Ordners, nicht rekursiv, Toleranz-Muster wie
+    `news_break.pick_random_mp3()` (leere Liste + Log-Warnung statt
+    Exception).
+  - `folder_browse.py`: `list_subfolders(root, rel_path)` — Breadcrumb-
+    Auflistung der unmittelbaren Unterordner, mit `realpath()`+Prefix-
+    Check gegen Verzeichnis-Traversal (`root` ist eine feste Docker-
+    Mount-Grenze, siehe unten). Gemeinsamer Baustein für News-Break UND
+    Musiksammlung — kennt selbst keinen der beiden Config-Keys, das
+    entscheidet nur der Aufrufer in `webui.py` (`_BROWSE_ROOTS`).
+- **`settings_store.py`**: neue Top-Level-Felder `current_mode`
+  (`"radio"`/`"music"`, Enum-validiert) und `music_library.path`
+  (Container-Pfad, gleiches Muster wie `news_break.mp3_folder`) samt
+  Migration in `_read_raw()`/`_defaults_copy()` und `update()`-Parametern
+  `current_mode`/`music_library_path`.
+- **`webui.py`**:
+  - `SwitcherState`: `request_mode_change()`/`pop_mode_change_request()`/
+    `set_mode()`/`mode` (request/pop wie beim manuellen Senderwechsel —
+    nur der Hauptloop darf `source` anfassen), `request_music_play/stop/
+    skip()` + zugehörige `pop_*`, `set_music_status()`/`music_status`,
+    und `music_library_path` (bewusst NICHT gecacht, frisch von der
+    Platte wie `GET /api/config/stations` — der Musik-Tick im Hauptloop
+    läuft unabhängig vom `pop_reload_request()`-Zweig).
+  - Neue Endpunkte: `GET /api/browse-folder?target=news_break|
+    music_library&path=...`, `POST /api/mode`, `POST /api/music/
+    play|stop|next|prev`. `_build_status()` liefert jetzt `mode`/`music`/
+    `music_library_path`, `now_playing` zeigt im Musik-Modus den
+    Dateinamen (analog zum News-Break-Override).
+  - Neue Seite `/musik` (`_MUSIC_PAGE_HTML`, eigenes Template wie
+    `_PAGE_HTML`/`_CONFIG_PAGE_HTML`): Banner/Version-Tag, Modus-Toggle,
+    volle-Breite-Banner "🎵 Musik Sammlung", Root-Pfad-Box (read-only,
+    Link zu `/config`), sechs Kategorie-Platzhalter-Buttons (80er/Queen/
+    Oldies/Metal/Klassik/Pavarotti — reine UI-Deko, kein Backend-
+    Mapping), großer Play/Stop-Kreisbutton, Zurück/Nächster (wiederver-
+    wendet die bestehende `.zap-nav`-Optik), Track-Statuszeile. Poll
+    über dieselbe `/api/status`+`/api/status/wait`-Infrastruktur wie die
+    Player-Seite.
+  - `_PAGE_HTML`: Modus-Toggle direkt unter der Versionszeile (identisches
+    Markup wie auf `/musik`); im Musik-Modus zeigt `#current` einen
+    festen Hinweistext statt Senderdaten, Sender-Buttons/-Liste werden
+    `disabled`, Bullshitometer/STT-Balken bekommen die bereits
+    vorhandene `.paused`-Klasse. Neuer Link "🎵 Musiksammlung" neben dem
+    Config-Link.
+  - `_CONFIG_PAGE_HTML`: News-Break-Freitextfeld durch die Breadcrumb-
+    Komponente ersetzt (`target=news_break`), neue Sektion "🎵
+    Musiksammlung" mit derselben Komponente (`target=music_library`) +
+    eigenem Formular/Speichern-Button. Gemeinsame JS-Funktionen
+    `browseFolder()`/`initFolderBrowser()` — der beim Laden gesetzte
+    GESPEICHERTE Wert wird NICHT durch die anfängliche Root-Anzeige
+    überschrieben (`updateSelection=false` beim initialen Render), sonst
+    hätte ein "Speichern"-Klick ohne vorheriges Durchklicken den Ordner
+    stillschweigend auf den Root zurückgesetzt.
+- **`radiosabbelnich.py`**: Modus-Fork ganz oben im `while True:` — request/
+  pop-Übergang (`source.stop()`+Prebuffer leeren beim Wechsel zu Musik,
+  frisches Verbinden zum letzten Sender beim Rückweg zu Radio, jeweils
+  `settings_store.update(current_mode=...)` VOR `state.set_mode()`),
+  danach entweder ein kompakter Musik-Tick (Play/Stop/Skip-Requests,
+  Track-Ende → zyklisch nächster, `write_audio()` direkt ohne Playout-
+  Deque/Klassifikation) oder — unverändert — der bisherige Radio-Zweig.
+  Zusatzfall beim Programmstart: `current_mode` kann direkt aus
+  `settings.json` schon `"music"` sein, obwohl der Hauptloop oben
+  IMMER erst als Radio hochfährt (`source.start()`/`sync_prebuffer()`
+  passieren unbedingt) — einmaliger Cleanup-Block direkt nach dem Lesen
+  von `state.mode` macht das rückgängig (Quelle stoppen, Puffer leeren),
+  statt den Radio-Start selbst bedingt zu machen. Neues CLI-Argument
+  `--music-library-folder-host` (Host-Pfad-Anzeige, analog zu
+  `--news-mp3-folder-host`).
+- **`i18n.py`**: alle neuen UI-Texte (Modus-Toggle, Musiksammlung-Seite,
+  Breadcrumb-Komponente, Config-Sektion) auf Deutsch UND Englisch;
+  `cfg_news_break_hint` an die neue Breadcrumb-Bedienung angepasst.
+- **Docker/Env**: `MUSIC_LIBRARY_FOLDER` in `env.example` (Default
+  `./data/music_library`, gleiches Muster wie `NEWS_MP3_FOLDER`),
+  `:ro`-Mount + `MUSIC_LIBRARY_FOLDER_HOST`-Passthrough in
+  `docker-compose.yml`, `--music-library-folder-host`-Flag im
+  Dockerfile-`ENTRYPOINT`, `COPY music_library.py .`/`COPY
+  folder_browse.py .`, `data/music_library/` zu `.gitignore` (gleiches
+  Muster wie `data/news_mp3/` — Docker legt den Bind-Mount-Quellordner
+  bei Bedarf selbst an).
+
+### Bewusst NICHT gemacht
+
+- Keine Kategorie-Zuordnung der Platzhalter-Buttons (80er/Queen/...) —
+  echtes Mapping kommt erst mit dem ID3/SQLite-Scan (spätere Phase,
+  siehe README-Roadmap).
+- Kein rekursives Scannen für die Track-Liste, nur eine Ebene (wie in
+  der Aufgabenbeschreibung gefordert) — Unterordner-Navigation dafür
+  ist Sache der (späteren) DB-Scan-Phase, nicht dieses Prototyps.
+- Nur `.mp3` als unterstütztes Format (Konsistenz mit News-Break und der
+  "MP3-Root"-Aufgabenbeschreibung).
+- Kein Playout-Delay im Musik-Modus — es gibt nichts zu erkennen/
+  verzögern, `write_audio()` schreibt direkt.
+- Kein Zusammenspiel Musik-Modus ↔ Nachrichten-Pause über den reinen
+  Boot-Fall hinaus: während des Musik-Modus läuft die News-Break-Slot-
+  Prüfung gar nicht (siehe Modus-Fork), ein Wechsel zurück zu Radio
+  reconnected einfach normal, eine evtl. gerade "fällige" Nachrichten-
+  Pause wird dabei nicht nachgeholt — bewusste Grenze, kein Bug.
+- Preflight-Skripte (`check-radiosabbelnich.sh`/`run_radiosabbelnich.sh`)
+  NICHT um eine `MUSIC_LIBRARY_FOLDER`-Prüfung analog zur bestehenden
+  `NEWS_MP3_FOLDER`-Prüfung ergänzt — aus Zeitgründen für diesen
+  Durchgang zurückgestellt, das Feature funktioniert auch ohne (der
+  Ordner ist optional, ein leerer/fehlender liefert beim Play-Klick
+  einfach keine Tracks).
+
+### Verifiziert
+
+Test-Setup nach dem in `CLAUDE.md` dokumentierten Muster: alle `*.py`
+(inkl. der beiden neuen Module) in ein Temp-Verzeichnis kopiert, eigene
+`settings.json` (`music_library.path` auf einen Test-Ordner mit drei
+per `ffmpeg` erzeugten 2-Sekunden-Test-MP3s gesetzt) und Default-
+`stations.json` (echte Sender: 1LIVE/Radio Bob/SWR3), gegen einen
+separaten Icecast-Mount (`test.mp3`, selber laufender Icecast-Container,
+`--webui-port 5099 --no-fingerprint`) gestartet — der Produktivcontainer
+(`docker compose ps` vorher/nachher geprüft: durchgehend `Up`, nie
+angefasst) blieb unberührt.
+
+- Radio-Start: `GET /api/status` zeigt echten Titel von 1LIVE
+  (`now_playing` per ICY-Metadaten) — Bestandsverhalten unverändert.
+- `POST /api/mode {"mode":"music"}` → Log: "🎵 Wechsel in Musiksammlung-
+  Modus (Radio pausiert)."; `POST /api/music/play` → `music.active=true,
+  file=track_a.mp3, index=0, total=3`, `now_playing="🎵 track_a.mp3"`.
+- Track-Ende (2s-Testdateien) → automatisch `track_b.mp3` (Log
+  bestätigt kein Eingreifen nötig). `POST /api/music/next` →
+  `track_c.mp3`; `POST /api/music/prev` → zurück zu `track_b.mp3`
+  (zyklische Playlist bestätigt). `POST /api/music/stop` →
+  `music.active=false`.
+- `POST /api/mode {"mode":"radio"}` → reconnected zu 1LIVE (`current_
+  name=1LIVE`, echte ICY-Metadaten wieder da), Log: "📻 Wechsel in
+  Radio-Modus: spiele 1LIVE."; `settings.json` zeigt `current_mode:
+  "radio"` (Persistenz bestätigt).
+- Neustart-Test: Modus vor dem Kill auf `"music"` gesetzt, Prozess
+  gekillt und mit identischer `settings.json` neu gestartet → Log:
+  "🎵 Start im Musiksammlung-Modus (persistiert) — Radio-Verbindung
+  wieder getrennt.", `GET /api/status` liefert sofort `mode=music`
+  (Boot-Cleanup-Fall bestätigt, kein Radio-Rest-Prozess hängen
+  geblieben).
+- `GET /api/browse-folder?target=music_library` liefert korrektes JSON
+  (`breadcrumb`/`folders`/`absolute_path`); `target=bogus` → HTTP 400.
+  Traversal-Schutz separat gegen ein echtes Test-Verzeichnis geprüft
+  (`folder_browse.list_subfolders(root, '../../etc')` fällt auf den
+  Root zurück, loggt eine Warnung, verlässt `root` nicht).
+- `GET /`, `/musik`, `/config` liefern alle HTTP 200, `/musik` enthält
+  die erwarteten IDs (`music_heading`/`mode-toggle`/`btn-play-stop`).
+  `i18n._check_i18n_coverage()` lief beim Modul-Import für alle drei
+  Templates fehlerfrei durch (kein fehlender Key).
+- `docker compose config` gegen die geänderte `docker-compose.yml`
+  lief fehlerfrei durch, der neue Mount (`.../data/music_library` →
+  `/app/music_library:ro`) erscheint korrekt im aufgelösten Config.
+- Bestehendes Verhalten stichprobenartig gegengeprüft: News-Break-
+  Settings-Speichern (`news_break_mp3_folder` über den Body-Parameter,
+  wie es jetzt die Breadcrumb-Komponente tut) funktioniert weiterhin
+  unverändert.
+
+## 2026-08-11 — radiosabbelnich.sh: Wrapper für start/stop/restart/status
+
+**Auslöser**: Nutzer wollte ein drittes Skript neben `check-` und
+`run_radiosabbelnich.sh`, das den laufenden Betrieb kapselt (nicht nur
+den Erststart) — `start`/`stop`/`restart`/`status`, Status als Default
+(häufigster Aufruf), Statusanzeige optisch angelehnt an
+`check-radiosabbelnich.sh` (farbige ✅/⚠️/❌, RAM/HD-Balken).
+
+### Umsetzung
+
+- Neues `radiosabbelnich.sh` (ausführbar), Subcommand-Dispatch über
+  `${1:-status}`:
+  - `start` ruft `exec ./run_radiosabbelnich.sh` auf, statt dessen
+    Preflight-Checks (System-Ressourcen, `NEWS_MP3_FOLDER`-Validierung
+    via `docker compose config`) hier zu duplizieren.
+  - `stop` macht bewusst `docker compose stop`, nicht `down` — hält
+    Container/Netzwerk bestehen, ein nachfolgendes `start` kommt ohne
+    Neuanlegen wieder hoch, kein Vorteil von `down` für einen reinen
+    Stop-Befehl.
+  - `restart` ist einfach `stop` gefolgt von `start` (eigene Funktionen
+    wiederverwendet statt `docker compose restart`, damit ein Restart
+    dieselben Preflight-Checks wie ein normaler Start durchläuft).
+  - `status` (Default): `docker compose ps --format json` (JSON-Lines,
+    kein Array — pro Zeile geparst) für den Container-Zustand,
+    `docker compose config --format json` für die tatsächlich
+    aufgelösten Ports (gleicher Grund wie in den anderen beiden
+    Skripten: Shell/Compose interpretieren `.env`-Werte nicht immer
+    gleich), ein `curl` gegen `/api/status` fürs Web-Interface (inkl.
+    Live-Anzeige von Sender/Track — Radio- ODER Musiksammlung-Modus,
+    siehe der Modus-Umschalter von weiter oben in dieser Datei — sowie
+    Hörerzahl) und einen simplen `status.xsl`-Abruf für Icecast, dazu
+    dieselben RAM/HD-Balken wie in `check-`/`run_radiosabbelnich.sh`
+    (bewusst dupliziert statt gemeinsame Datei, wie dort begründet).
+- `README.md` (DE+EN): neue Zeile in der Datei-Tabelle, ein Absatz im
+  Setup-Abschnitt, der auf `radiosabbelnich.sh` für den laufenden
+  Betrieb verweist (statt `docker compose`-Befehle direkt zu nennen).
+
+### Bewusst NICHT gemacht
+
+- `stop`/`restart` NICHT live gegen den echten Produktivcontainer
+  getestet — würde den tatsächlich laufenden Stream unterbrechen. Nur
+  `status` (rein lesend) wurde live verifiziert, `stop`/`docker compose
+  stop` und `start`/`run_radiosabbelnich.sh` sind beides bereits an
+  anderer Stelle erprobte Bausteine (siehe deren eigene SESSION.md-
+  Einträge), hier nur neu zusammengesteckt.
+- Kein systemd-Service/keine Autostart-Integration — reiner
+  interaktiver Komfort-Wrapper, wie angefragt.
+
+### Verifiziert
+
+- `bash -n radiosabbelnich.sh` — ohne Fehler.
+- `./radiosabbelnich.sh status` (= `./radiosabbelnich.sh` ohne
+  Argument) live gegen den laufenden Produktivstack ausgeführt: zeigte
+  korrekt beide Container als `✅ Up 35 hours`, erkannte
+  `tls_enabled=true` aus `data/settings.json` und wechselte automatisch
+  auf `https` fürs Web-Interface (ein reiner `http`-Versuch scheiterte
+  zunächst live mit "Empty reply from server" — Bug gefunden und
+  gefixt, bevor das Skript fertig war), zeigte den echten aktuell
+  laufenden Sender ("RADIO BOB! Blues") samt ICY-Metadaten und
+  Hörerzahl.
+- Zweiter Live-Bug gefunden und gefixt: eingebettetes Python (3.11 auf
+  diesem Host) akzeptiert kein `\"` innerhalb eines f-string-Ausdrucks
+  (das ist erst ab Python 3.12 erlaubt) — `m.get(\"file\")` durch
+  `m.get('file')` ersetzt.
+- `./radiosabbelnich.sh --help` und ein unbekannter Befehl (`bogus`)
+  liefern die erwartete Verwendungs-Meldung, letzteres mit Exit-Code 1.
+
+## 2026-08-11 — Bugfix: Modus-Toggle "Musiksammlung" oben auf der Player-Seite ohne sichtbare Wirkung + UI-Aufräumen (Zahnrad statt Text-Links)
+
+**Auslöser**: Nutzer meldete, der Modus-Umschalter oben auf der
+Player-Seite ("🎵 Musiksammlung"-Button) tue nichts, während der
+separate Link am Seitenende (`→ /musik`) funktioniere. Zusätzlich
+gewünscht: den Musiksammlung-Link am Seitenende entfernen, den
+"⚙ Sender verwalten"-Link am Seitenende durch ein Zahnradsymbol oben
+rechts ersetzen.
+
+### Root Cause
+
+Kein JS-Fehler — der obere Button rief tatsächlich korrekt
+`POST /api/mode` auf und der Hauptloop schaltete den Modus auch
+wirklich um (Radio pausierte). Nur: die Musiksammlung-Steuerung
+(Play/Stop/Zurück/Nächster) existiert ausschließlich auf `/musik`,
+NICHT auf der Player-Seite selbst — nach dem Klick blieb man also auf
+`/`, der Sender pausierte unsichtbar im Hintergrund, und ohne jede
+Bedienmöglichkeit für den neuen Modus wirkte das wie "Button tut
+nichts". Der separate Link unten funktionierte nur deshalb "besser",
+weil er zur richtigen Seite navigierte (aber den Modus selbst gar
+nicht umschaltete).
+
+### Umsetzung
+
+- `setMode(mode, redirectTo)` (beide Templates, `_PAGE_HTML` UND
+  `_MUSIC_PAGE_HTML`) um einen optionalen `redirectTo`-Parameter
+  erweitert: nach erfolgreichem `POST /api/mode` `location.href`
+  setzen statt nur zu pollen, wenn eine Zielseite angegeben ist.
+  - Player-Seite: `mode-music-btn` → `setMode('music', '/musik')`.
+    `mode-radio-btn` bleibt ohne Redirect (ist schon die Radio-Seite).
+  - Musiksammlung-Seite: `mode-radio-btn` → `setMode('radio', '/')`.
+    `mode-music-btn` bleibt ohne Redirect (ist schon die Musik-Seite).
+  - Symmetrisches Ergebnis: welcher der beiden Toggle-Buttons auch
+    geklickt wird, man landet danach immer auf der Seite mit den
+    passenden Bedienelementen für den neuen Modus.
+- Player-Seite (`_PAGE_HTML`): beide Links am Seitenende entfernt
+  (`⚙ Sender verwalten`, `🎵 Musiksammlung` → `/musik` — letzterer ist
+  jetzt redundant zum reparierten oberen Toggle-Button). Stattdessen
+  neues `<a class="gear-link">` (⚙), `position: fixed; top/right`,
+  kreisförmig mit halbtransparentem Hintergrund, IMMER sichtbar oben
+  rechts (auch beim Scrollen) — führt weiterhin zu `/config`. Tote
+  `a.config-link`-CSS-Regel (nur noch auf der Musiksammlung-Seite in
+  Gebrauch) aus `_PAGE_HTML` entfernt.
+- `i18n.py`: `idx_music_link` (nur vom entfernten Link benutzt)
+  aufgeräumt.
+- `README.md` (DE+EN): "## Web-Interface"-Bullet-Liste um das Zahnrad-
+  Symbol und die "springt automatisch zur richtigen Seite"-Eigenschaft
+  des Modus-Umschalters ergänzt.
+
+### Verifiziert
+
+- `python3 -c "import webui"` — `_check_i18n_coverage()` lief für alle
+  drei Templates fehlerfrei durch (kein toter/fehlender Key mehr).
+- Testinstanz (gleiches Temp-Verzeichnis-Muster wie beim Musiksammlung-
+  Grundgerüst, separater Icecast-Test-Mount, Produktivcontainer nicht
+  angefasst) gestartet, `curl` gegen `/`, `/musik`, `/config`: Zahnrad-
+  Link vorhanden, beide alten Seitenende-Links weg,
+  `mode-music-btn`-Handler auf der Player-Seite ruft jetzt
+  `setMode('music', '/musik')` auf (per `grep` im ausgelieferten HTML
+  bestätigt), `mode-radio-btn` auf der Musiksammlung-Seite entsprechend
+  `setMode('radio', '/')`. Alle drei Seiten liefern weiterhin HTTP 200.

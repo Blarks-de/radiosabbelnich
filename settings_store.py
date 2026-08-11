@@ -46,6 +46,17 @@ DEFAULTS = {
     # Einmal über /config geändert, gewinnt danach immer der hier
     # gespeicherte Wert, exakt wie bei allen anderen Feldern hier.
     "language": i18n.DEFAULT_LANGUAGE,
+    # Radio (Stream-Switching, STT/VAD aktiv) vs. Musiksammlung (lokale
+    # Dateien, STT/VAD komplett deaktiviert) -- siehe radiosabbelnich.py
+    # main()-Loop, Modus-Fork ganz oben. Persistiert, damit der Modus einen
+    # Container-Neustart übersteht (Nutzer-Vorgabe).
+    "current_mode": "radio",
+    "music_library": {
+        # Container-interner Pfad, gleiches Muster wie news_break.mp3_folder
+        # unten -- siehe docker-compose.yml (MUSIC_LIBRARY_FOLDER-Bind-Mount)
+        # und README. NICHT der Host-Pfad. Default = Mount-Root selbst.
+        "path": "/app/music_library",
+    },
     "news_break": {
         "enabled": False,
         # Container-interner Pfad — siehe docker-compose.yml
@@ -100,6 +111,7 @@ LIMITS = {
 
 STT_ENGINES = {"vosk", "whisper"}
 STT_COMBINE_MODES = {"and", "or"}
+CURRENT_MODES = {"radio", "music"}
 
 _lock = threading.Lock()
 
@@ -118,6 +130,7 @@ def _defaults_copy() -> dict:
     verschachtelte dicts -- deshalb hier deepcopy() statt eines weiteren
     Handkopie-Levels."""
     return {**DEFAULTS, "news_break": dict(DEFAULTS["news_break"]),
+            "music_library": dict(DEFAULTS["music_library"]),
             "stt_filter": copy.deepcopy(DEFAULTS["stt_filter"])}
 
 
@@ -169,6 +182,14 @@ def _read_raw() -> dict:
             merged["news_break"].update(
                 {kk: vv for kk, vv in v.items() if kk in DEFAULTS["news_break"]}
             )
+        elif k == "music_library" and isinstance(v, dict):
+            # Gleiches Muster wie "news_break" direkt oben: ein
+            # settings.json von vor diesem Feature funktioniert dadurch
+            # unverändert weiter (fehlt der Block komplett, bleibt der
+            # Default-Root aus _defaults_copy() stehen).
+            merged["music_library"].update(
+                {kk: vv for kk, vv in v.items() if kk in DEFAULTS["music_library"]}
+            )
         elif k == "stt_filter" and isinstance(v, dict):
             # Gleiches Muster wie "news_break" direkt oben: ein
             # settings.json von vor diesem Feature funktioniert dadurch
@@ -195,6 +216,7 @@ def load() -> dict:
 
 def update(prebuffer_seconds=None, prebuffer_count=None, import_url=None,
            stream_url=None, tls_enabled=None, language=None,
+           current_mode=None, music_library_path=None,
            news_break_enabled=None, news_break_mp3_folder=None,
            news_break_window_minutes=None, news_break_enabled_hours=UNSET,
            stt_filter_enabled=None, stt_filter_engine=None,
@@ -222,6 +244,15 @@ def update(prebuffer_seconds=None, prebuffer_count=None, import_url=None,
     geprüft — das ist typischerweise ein SMB-Mount, der beim Speichern der
     Einstellung noch nicht verfügbar sein kann. Die eigentliche Prüfung
     passiert erst zur Laufzeit in news_break.pick_random_mp3().
+
+    music_library_path aus demselben Grund ebenfalls ungeprüft -- die
+    eigentliche Prüfung passiert in music_library.list_tracks() beim
+    nächsten Play-Klick. current_mode wird vom Hauptloop selbst gesetzt,
+    NACHDEM der tatsächliche Übergang (Sender/Track stoppen, neu
+    verbinden) abgeschlossen ist -- siehe radiosabbelnich.py main(), nicht
+    direkt vom Toggle-Klick im Webserver-Thread (player-kritischer
+    Zustand, gleiches request/pop-Prinzip wie beim manuellen Senderwechsel,
+    siehe CLAUDE.md).
 
     stt_filter_whisper_model_size wird aus demselben Grund NICHT auf
     Existenz geprüft — die eigentliche Prüfung (Modell ladbar?) passiert
@@ -270,6 +301,13 @@ def update(prebuffer_seconds=None, prebuffer_count=None, import_url=None,
             if language not in i18n.LANGUAGES:
                 raise ValueError(f"language muss eine von {sorted(i18n.LANGUAGES)} sein.")
             data["language"] = language
+        if current_mode is not None:
+            current_mode = str(current_mode).strip().lower()
+            if current_mode not in CURRENT_MODES:
+                raise ValueError(f"current_mode muss eine von {sorted(CURRENT_MODES)} sein.")
+            data["current_mode"] = current_mode
+        if music_library_path is not None:
+            data["music_library"]["path"] = str(music_library_path).strip()
 
         nb = data["news_break"]
         if news_break_enabled is not None:

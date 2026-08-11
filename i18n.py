@@ -97,6 +97,29 @@ STRINGS = {
     "idx_switched_back_to": {"de": " — zurück zu {name}", "en": " — back to {name}"},
     "idx_zap_switching": {"de": "🗣️ Wird umgeschaltet …", "en": "🗣️ Switching …"},
     "idx_filter_switching": {"de": "Sabbelfilter wird umgeschaltet …", "en": "Toggling chatter filter …"},
+    "idx_music_mode_active": {"de": "🎵 Musiksammlung aktiv — Radio pausiert",
+                               "en": "🎵 Music library active — radio paused"},
+    "idx_music_mode_short": {"de": "🎵 Musik", "en": "🎵 Music"},
+
+    # ---- gemeinsam: Radio/Musiksammlung-Modus-Umschalter (Player- UND
+    # Musiksammlung-Seite, siehe CLAUDE.md Modus-Fork) ----
+    "mode_radio_btn": {"de": "📻 Radio", "en": "📻 Radio"},
+    "mode_music_btn": {"de": "🎵 Musiksammlung", "en": "🎵 Music library"},
+    "idx_mode_switching": {"de": "Modus wird gewechselt …", "en": "Switching mode …"},
+
+    # ---- Musiksammlung-Seite (_MUSIC_PAGE_HTML) ----
+    "music_heading": {"de": "🎵 Musik Sammlung", "en": "🎵 Music Library"},
+    "music_root_label": {"de": "MP3-Root-Ordner:", "en": "MP3 root folder:"},
+    "music_root_change_link": {"de": "Ordner unter /config ändern →", "en": "Change folder under /config →"},
+    "music_play_title": {"de": "Play", "en": "Play"},
+    "music_stop_title": {"de": "Stop", "en": "Stop"},
+    "music_prev_title": {"de": "Vorheriger Track", "en": "Previous track"},
+    "music_next_title": {"de": "Nächster Track", "en": "Next track"},
+    "music_now_playing": {"de": "🎵 {file} ({index}/{total})", "en": "🎵 {file} ({index}/{total})"},
+    "music_idle": {"de": "Bereit — auf ▶ tippen zum Abspielen.", "en": "Ready — tap ▶ to play."},
+    "music_switch_hint": {"de": "Erst oben auf 🎵 Musiksammlung wechseln.",
+                           "en": "Switch to 🎵 Music library above first."},
+    "music_back_link": {"de": "zurück zum Radio-Player", "en": "back to the radio player"},
 
     # ---- Config-Seite (_CONFIG_PAGE_HTML) ----
     "cfg_back_link": {"de": "← zurück zum Player", "en": "← back to player"},
@@ -105,17 +128,18 @@ STRINGS = {
     "cfg_news_break_heading": {"de": "📰 Nachrichten-Pause", "en": "📰 News break"},
     "cfg_news_break_hint": {
         "de": ('Spielt zur vollen/halben Stunde statt eines Radiosenders '
-               'eine zufällige lokale MP3 ab. Der MP3-Ordner unten ist ein '
-               '<strong>Container-interner Pfad</strong> — der eigentliche Host-Ordner '
+               'eine zufällige lokale MP3 ab. Der Ordner unten liegt unter einem '
+               '<strong>Container-internen Pfad</strong> — der eigentliche Host-Ordner '
                '(z.B. ein SMB-Mount) wird über <code>NEWS_MP3_FOLDER</code> in '
                '<code>.env</code> nach <code>/app/news_mp3</code> gemountet und braucht '
-               'dafür einen Neustart des Containers, kein Feld hier.'),
+               'dafür einen Neustart des Containers. Darunter kannst du per Klick den '
+               'gewünschten Unterordner auswählen.'),
         "en": ('Plays a random local MP3 instead of a radio station on the hour/'
-               'half hour. The MP3 folder below is a '
+               'half hour. The folder below lives under a '
                '<strong>container-internal path</strong> — the actual host folder '
                '(e.g. an SMB mount) is mounted via <code>NEWS_MP3_FOLDER</code> in '
                '<code>.env</code> to <code>/app/news_mp3</code> and needs a restart '
-               'of the container for that, not a field here.'),
+               'of the container for that. Click below to pick the subfolder you want.'),
     },
     "cfg_active_label": {"de": "aktiv", "en": "enabled"},
     "cfg_nb_folder_label": {"de": "MP3-Ordner (Container-Pfad)", "en": "MP3 folder (container path)"},
@@ -124,6 +148,24 @@ STRINGS = {
                                     "en": "only active during certain hours"},
     "cfg_nb_hour_start_label": {"de": "von Stunde", "en": "from hour"},
     "cfg_nb_hour_end_label": {"de": "bis Stunde", "en": "to hour"},
+
+    "cfg_music_library_heading": {"de": "🎵 Musiksammlung", "en": "🎵 Music library"},
+    "cfg_music_library_hint": {
+        "de": ("Root-Ordner für den Musiksammlung-Modus (Play/Stop auf der /musik-Seite) "
+               "— Container-interner Pfad, gemountet über MUSIC_LIBRARY_FOLDER in .env."),
+        "en": ("Root folder for the music library mode (play/stop on the /musik page) "
+               "— container-internal path, mounted via MUSIC_LIBRARY_FOLDER in .env."),
+    },
+    "cfg_music_library_folder_label": {"de": "Musik-Ordner (Container-Pfad)",
+                                        "en": "Music folder (container path)"},
+    "cfg_music_library_saved": {"de": "🎵 Musiksammlung-Einstellungen gespeichert.",
+                                 "en": "🎵 Music library settings saved."},
+
+    # ---- gemeinsam: Breadcrumb-Ordner-Browser (News-Break UND
+    # Musiksammlung, siehe folder_browse.py/CLAUDE.md) ----
+    "cfg_folder_selected": {"de": "Ausgewählt: {path}", "en": "Selected: {path}"},
+    "cfg_folder_error": {"de": "⚠ Nicht lesbar: {msg}", "en": "⚠ Not readable: {msg}"},
+    "cfg_folder_empty": {"de": "(keine Unterordner)", "en": "(no subfolders)"},
 
     "cfg_new_station_heading": {"de": "Neuer Sender", "en": "New station"},
     "cfg_add_name_placeholder": {"de": "Name", "en": "Name"},

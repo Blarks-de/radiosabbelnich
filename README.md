@@ -149,10 +149,11 @@ Senderliste auf der Config-Seite (`/config`) oder direkt per API:
 ```
 
 - **`enabled`** — Feature an/aus.
-- **`mp3_folder`** — Container-interner Pfad (nicht der Host-Pfad!), im
-  Formular normalerweise unverändert auf `/app/news_mp3` lassen. Der
-  eigentliche Host-Ordner wird über `NEWS_MP3_FOLDER` in `.env` von außen
-  reingemountet (siehe `docker-compose.yml`), typischerweise ein
+- **`mp3_folder`** — Container-interner Pfad (nicht der Host-Pfad!), auf
+  der Config-Seite über eine Breadcrumb-Ordnerauswahl gesetzt (durch die
+  Unterordner von `/app/news_mp3` klicken statt den Pfad einzutippen).
+  Der eigentliche Host-Ordner wird über `NEWS_MP3_FOLDER` in `.env` von
+  außen reingemountet (siehe `docker-compose.yml`), typischerweise ein
   SMB-Mount — dafür braucht es einen Container-Neustart, kein Feld auf der
   Config-Seite. Ordner fehlt/ist leer/nicht lesbar → Feature wird für
   dieses Zeitfenster einfach übersprungen, mit Logeintrag, kein Fehler.
@@ -182,6 +183,36 @@ Automatik, wie überall sonst in RadioSabbelNich auch). Während der Pause
 pausiert auch die automatische Sprache-Erkennung (VAD/Heuristik/
 Fingerprint) — die MP3 selbst enthält u.U. Sprache, das soll nicht als
 "Moderation" auf dem eigentlichen Sender fehlgedeutet werden.
+
+## Musiksammlung-Modus (Grundgerüst)
+
+Erster Umsetzungsschritt der unten unter "Zukünftige Features"
+beschriebenen Musik-Library-Idee: ein **eigenständiger, persistierter
+Modus** neben dem normalen Radio-Betrieb — oben auf der Player- UND der
+Musiksammlung-Seite per gut sichtbarem Umschalter ("📻 Radio" / "🎵
+Musiksammlung") wechselbar. Im Musiksammlung-Modus ist die komplette
+automatische Erkennung (VAD/Heuristik/STT/Fingerprint) aus, nicht nur
+pausiert — es läuft ausschließlich lokale Musik, nichts wird analysiert.
+Der Modus übersteht einen Container-Neustart (in `settings.json`
+gespeichert).
+
+Auf der neuen Seite `/musik`:
+
+- Ein read-only angezeigter Root-Ordner (Container-Pfad, unter `/config`
+  einstellbar — siehe unten).
+- Sechs Kategorie-Buttons (80er/Queen/Oldies/Metal/Klassik/Pavarotti) —
+  aktuell reine Platzhalter ohne Funktion, echte Kategorisierung kommt
+  erst mit dem Musik-Scan (Phase 1 der Roadmap unten).
+- Ein großer Play/Stop-Button und Zurück/Nächster — spielt die MP3s im
+  konfigurierten Ordner **nicht rekursiv**, alphabetisch, endlos im
+  Kreis, bis Stop gedrückt wird.
+
+Der Root-Ordner wird — wie der News-Break-MP3-Ordner — auf der
+Config-Seite gesetzt, per **Breadcrumb-Ordnerauswahl**: durch die
+Unterordner des über `MUSIC_LIBRARY_FOLDER` (`.env`, gleiches Muster wie
+`NEWS_MP3_FOLDER`) gemounteten Verzeichnisses klicken, statt einen Pfad
+einzutippen. Beide Felder (News-Break-Ordner, Musiksammlung-Root) nutzen
+dieselbe Komponente, speichern aber unabhängig voneinander.
 
 ## STT-Sprachfilter
 
@@ -381,6 +412,12 @@ Erreichbar unter `http://<host>:5000/`:
 - Unter dem Banner-Bild steht klein die aktuell laufende Version
   (`VERSION` im Repo-Root, siehe Versionspflege in `CLAUDE.md`) — auf der
   Player- und der Config-Seite.
+- **⚙ oben rechts** (fest positioniert, bleibt beim Scrollen sichtbar) —
+  führt zur Config-Seite (`/config`).
+- **📻 Radio / 🎵 Musiksammlung** — Modus-Umschalter oben auf der Player-
+  und der Musiksammlung-Seite (siehe eigener Abschnitt weiter oben). Ein
+  Klick auf den jeweils anderen Modus schaltet um UND springt auf die
+  passende Seite (dort liegen die zugehörigen Bedienelemente).
 - **Aktueller Sender + "Jetzt läuft"** — Titel/Interpret, falls der
   Sender ICY-Metadaten oder eine bekannte Alternativ-Quelle liefert
 - **Eingebetteter Player** — direkt im Browser mithören, ohne extra
@@ -521,6 +558,8 @@ eigenem Update-Server statt Play Store).
 | `webui.py` | Eingebettetes Web-Interface (Player-Seite + Config-Seite) |
 | `logging_setup.py` | Zentrale Logging-Konfiguration (Konsole + rotierende Logdatei) |
 | `news_break.py` | Nachrichten-Pause: Zeitfenster-Logik + zufällige MP3-Auswahl |
+| `music_library.py` | Musiksammlung-Modus: Dateien eines Ordners auflisten (nicht rekursiv) |
+| `folder_browse.py` | Gemeinsame Breadcrumb-Ordnerauswahl (News-Break-Pfad + Musiksammlung-Root) |
 | `stt_filter.py` | STT-Sprachfilter: Vosk/Whisper-Engines, austauschbar, Zusatzsignal für die Switch-Entscheidung |
 | `i18n.py` | Übersetzungstabelle fürs Web-Interface (Deutsch/Englisch, siehe "Sprache des Web-Interfaces") |
 | `web/qrcode.js` | Vendorte QR-Code-Bibliothek (MIT, kazuhikoarase/qrcode-generator) fürs "📱 QR-Code"-Popup |
@@ -534,9 +573,11 @@ eigenem Update-Server statt Play Store).
 | `data/fingerprints.db`, `data/fingerprint_clips/` | Fingerprint-Datenbank + gelernte Clip-Mitschnitte |
 | `data/logs/` | Rotierende Logdatei (siehe "Logging" unten) |
 | `data/news_mp3/`, `data/vosk-model-de/`, `data/whisper_cache/` | Standard-Mountziele für `NEWS_MP3_FOLDER`/`VOSK_MODEL_FOLDER`/faster-whisper-Cache (überschreibbar in `.env`) |
+| `data/music_library/` | Standard-Mountziel für `MUSIC_LIBRARY_FOLDER` (überschreibbar in `.env`) |
 | `docker-compose.yml` | Icecast + RadioSabbelNich als zwei Services |
 | `check-radiosabbelnich.sh` | Preflight-Check vor dem (ersten) Start: Docker, RAM/HD/Internet, `.env`, MP3-Ordner, Ports |
 | `run_radiosabbelnich.sh` | Start-Skript: RAM/HD/Internet-Check + `docker compose up -d --build` |
+| `radiosabbelnich.sh` | Wrapper für den laufenden Betrieb: `start`/`stop`/`restart`/`status` (Default), Statusanzeige im Stil von `check-radiosabbelnich.sh` |
 
 RadioSabbelNich und das Web-Interface laufen im selben Prozess (Web-Server
 als Hintergrund-Thread) — kein separater Service, keine IPC nötig, nur
@@ -587,6 +628,13 @@ dann nicht öffnen und der Container landet in einer Neustartschleife.
 
 Danach `stations.json` nach Belieben anpassen — entweder direkt in der
 Datei oder bequemer über `http://<host>:5000/config`.
+
+Für den laufenden Betrieb danach reicht `./radiosabbelnich.sh` (ohne
+Argument = `status`, sonst `start`/`stop`/`restart`) statt sich
+`docker compose`-Befehle zu merken — `status` zeigt Container-Zustand,
+Port-Erreichbarkeit, RAM/HD (im selben Anzeige-Stil wie
+`check-radiosabbelnich.sh`) sowie den aktuell laufenden Sender/Track
+und die Hörerzahl, sofern das Web-Interface erreichbar ist.
 
 ### Wichtige `.env`-Variablen
 
@@ -686,9 +734,13 @@ auf die Konsole, `--log-file ""` schaltet die Datei ab.
 Optionaler Modus als Ergänzung zum Stream-Switching: lokale Musiksammlung
 scannen, taggen und nach Kategorien abspielbar machen.
 
-- Umschaltbar per Toggle: Radio-Modus (Stream-Switching, STT/VAD aktiv)
-  vs. Library-Modus (eigene Musik, STT/VAD komplett deaktiviert)
-- Phase 1: Scan der Musiksammlung (ID3/Vorbis-Metadaten via mutagen) →
+- ✅ **Umschaltbar per Toggle** (Radio-Modus vs. Musiksammlung-Modus,
+  STT/VAD im Musik-Modus komplett aus) **und ein minimaler Player**
+  (Play/Stop/Zurück/Nächster über einen konfigurierbaren Ordner, nicht
+  rekursiv, keine Kategorisierung) sind umgesetzt — siehe
+  "Musiksammlung-Modus (Grundgerüst)" weiter oben. Die Kategorie-Buttons
+  dort sind noch reine Platzhalter, echtes Mapping kommt erst mit:
+- Phase 1 (noch offen): Scan der Musiksammlung (ID3/Vorbis-Metadaten via mutagen) →
   SQLite-DB (Artist, Album, Titel, Genre, Jahr, Dateipfad, eingebettetes
   Cover falls vorhanden)
   - Quelle: Fileserver 192.168.1.10, per SMB auf SERVER gemountet
@@ -852,8 +904,9 @@ on the config page (`/config`), or directly via the API:
 ```
 
 - **`enabled`** — feature on/off.
-- **`mp3_folder`** — a container-internal path (not the host path!),
-  normally leave it unchanged at `/app/news_mp3` in the form. The
+- **`mp3_folder`** — a container-internal path (not the host path!), set
+  on the config page via a breadcrumb folder picker (click through the
+  subfolders of `/app/news_mp3` instead of typing the path). The
   actual host folder is mounted in from outside via `NEWS_MP3_FOLDER`
   in `.env` (see `docker-compose.yml`), typically an SMB mount — that
   needs a container restart, not a field on the config page. Folder
@@ -886,6 +939,35 @@ everywhere else in RadioSabbelNich). During the break, automatic speech
 detection (VAD/heuristic/fingerprint) is also paused — the MP3 itself
 may well contain speech, and that shouldn't be misread as "presenting"
 on the actual station.
+
+## Music library mode (foundation)
+
+First implementation step of the music library idea described further
+below under "Future features": a **standalone, persisted mode**
+alongside normal radio operation — switchable on both the player and
+the music library page via a clearly visible toggle ("📻 Radio" / "🎵
+Music library"). In music library mode, all automatic detection
+(VAD/heuristic/STT/fingerprint) is off, not just paused — only local
+music plays, nothing gets analyzed. The mode survives a container
+restart (stored in `settings.json`).
+
+On the new `/musik` page:
+
+- A read-only root folder display (container path, set under `/config`
+  — see below).
+- Six category buttons (80s/Queen/Oldies/Metal/Classical/Pavarotti) —
+  currently pure placeholders with no function; real categorization
+  arrives with the music scan (roadmap phase 1 below).
+- A big play/stop button plus back/next — plays the MP3s in the
+  configured folder **non-recursively**, alphabetically, looping
+  forever until stop is pressed.
+
+The root folder is set on the config page, just like the news break MP3
+folder, via a **breadcrumb folder picker**: click through the
+subfolders of the directory mounted via `MUSIC_LIBRARY_FOLDER` (`.env`,
+same pattern as `NEWS_MP3_FOLDER`) instead of typing a path. Both
+fields (news break folder, music library root) use the same component
+but save independently of each other.
 
 ## STT speech filter
 
@@ -1075,6 +1157,12 @@ Reachable at `http://<host>:5000/`:
 - The currently deployed version is shown in small text below the
   banner image (`VERSION` at the repo root, see version tracking in
   `CLAUDE.md`) — on both the player and config page.
+- **⚙ top right** (fixed position, stays visible while scrolling) —
+  leads to the config page (`/config`).
+- **📻 Radio / 🎵 Music library** — mode toggle at the top of the player
+  and music library page (see the dedicated section further up).
+  Clicking the other mode switches to it AND jumps to the matching
+  page (that's where the corresponding controls live).
 - **Current station + "now playing"** — title/artist, if the station
   provides ICY metadata or a known alternative source
 - **Embedded player** — listen right in the browser, no extra
@@ -1213,6 +1301,8 @@ update server rather than the Play Store).
 | `webui.py` | Embedded web interface (player page + config page) |
 | `logging_setup.py` | Central logging config (console + rotating log file) |
 | `news_break.py` | News break: time-window logic + random MP3 selection |
+| `music_library.py` | Music library mode: list a folder's files (non-recursive) |
+| `folder_browse.py` | Shared breadcrumb folder picker (news break path + music library root) |
 | `stt_filter.py` | STT speech filter: interchangeable Vosk/Whisper engines, additional signal for the switch decision |
 | `i18n.py` | Translation table for the web interface (German/English, see "Web interface language") |
 | `web/qrcode.js` | Vendored QR code library (MIT, kazuhikoarase/qrcode-generator) for the "📱 QR code" popup |
@@ -1226,9 +1316,11 @@ update server rather than the Play Store).
 | `data/fingerprints.db`, `data/fingerprint_clips/` | Fingerprint database + learned clip recordings |
 | `data/logs/` | Rotating log file (see "Logging" below) |
 | `data/news_mp3/`, `data/vosk-model-de/`, `data/whisper_cache/` | Default mount targets for `NEWS_MP3_FOLDER`/`VOSK_MODEL_FOLDER`/the faster-whisper cache (overridable in `.env`) |
+| `data/music_library/` | Default mount target for `MUSIC_LIBRARY_FOLDER` (overridable in `.env`) |
 | `docker-compose.yml` | Icecast + RadioSabbelNich as two services |
 | `check-radiosabbelnich.sh` | Preflight check before the (first) start: Docker, RAM/disk/internet, `.env`, MP3 folder, ports |
 | `run_radiosabbelnich.sh` | Start script: RAM/disk/internet check + `docker compose up -d --build` |
+| `radiosabbelnich.sh` | Wrapper for day-to-day operation: `start`/`stop`/`restart`/`status` (default), status display in the same style as `check-radiosabbelnich.sh` |
 
 RadioSabbelNich and the web interface run in the same process (web server
 as a background thread) — no separate service, no IPC needed, just
@@ -1270,6 +1362,13 @@ SQLite then can't open it and the container ends up in a restart loop.
 
 Afterwards, adjust `stations.json` as you like — either directly in
 the file or more conveniently via `http://<host>:5000/config`.
+
+For day-to-day operation afterwards, `./radiosabbelnich.sh` (no
+argument = `status`, otherwise `start`/`stop`/`restart`) saves you from
+remembering `docker compose` commands — `status` shows container state,
+port reachability, RAM/disk (in the same display style as
+`check-radiosabbelnich.sh`), plus the currently playing station/track
+and listener count, if the web interface is reachable.
 
 ### Important `.env` variables
 
@@ -1372,9 +1471,13 @@ accidentally start the container in the right mode beforehand.
 Optional mode alongside stream switching: scan a local music collection,
 tag it, and make it playable by category.
 
-- Switchable via toggle: radio mode (stream switching, STT/VAD active)
-  vs. library mode (own music, STT/VAD completely disabled)
-- Phase 1: scan the music collection (ID3/Vorbis metadata via mutagen)
+- ✅ **Switchable via toggle** (radio mode vs. music library mode,
+  STT/VAD fully off in music mode) **and a minimal player** (play/stop/
+  back/next over a configurable folder, non-recursive, no
+  categorization) are implemented — see "Music library mode
+  (foundation)" further up. The category buttons there are still pure
+  placeholders; real mapping arrives with:
+- Phase 1 (still open): scan the music collection (ID3/Vorbis metadata via mutagen)
   → SQLite DB (artist, album, title, genre, year, file path, embedded
   cover if present)
   - Source: file server 192.168.5.101, SMB-mounted on Dockfish under

@@ -28,7 +28,9 @@ import xml.etree.ElementTree as ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import fingerprint
+import folder_browse
 import i18n
+import music_library
 import resource_monitor
 import settings_store
 import station_import
@@ -42,6 +44,18 @@ log = logging.getLogger("webui")
 # Prebuffering sie nie zu Gesicht bekommen. Nur SwitcherState.current_station()
 # kennt sie, um dem Web-Interface während der Pause etwas Sinnvolles zu zeigen.
 NEWS_BREAK_STATION_ID = "__news_break__"
+
+# Feste Docker-Mount-Grenzen für die Breadcrumb-Ordner-Browser-Komponente
+# (siehe folder_browse.py) -- EIN gemeinsamer Baustein, zwei unabhängig
+# gespeicherte Ziele (news_break.mp3_folder bzw. music_library.path,
+# siehe settings_store.py). Absichtlich hier als Konstante statt aus
+# settings.json abgeleitet: der Mount-Pfad selbst ist über Docker fix
+# (docker-compose.yml), nur der jeweils AUSGEWÄHLTE Unterordner darunter
+# ist konfigurierbar.
+_BROWSE_ROOTS = {
+    "news_break": "/app/news_mp3",
+    "music_library": "/app/music_library",
+}
 
 # Deckel pro Stufe (Sprache/Musik) im STT-Kalibrierungs-Wizard (siehe
 # SwitcherState.add_calibration_sample()) -- gegen unbegrenztes Wachstum,
@@ -146,6 +160,21 @@ class SwitcherState:
         self._news_break_cfg = dict(settings_store.DEFAULTS["news_break"])
         self._news_break_active = False
         self._news_break_file = None
+        # Radio/Musiksammlung-Modus (siehe radiosabbelnich.py main(),
+        # Modus-Fork ganz oben) -- request/pop wie beim manuellen
+        # Senderwechsel, weil player-kritisch (nur der Hauptloop darf
+        # `source` anfassen, siehe CLAUDE.md). _mode ist der zuletzt vom
+        # Hauptloop BESTÄTIGTE Zustand (set_mode(), nach dem echten
+        # Übergang), _mode_change_requested der noch unbearbeitete Wunsch.
+        self._mode = settings_store.DEFAULTS["current_mode"]
+        self._mode_change_requested = None
+        self._music_active = False
+        self._music_file = None
+        self._music_index = -1
+        self._music_total = 0
+        self._music_play_requested = False
+        self._music_stop_requested = False
+        self._music_skip_requested = None  # +1/-1 oder None
         self._stt_filter_cfg = dict(settings_store.DEFAULTS["stt_filter"])
         self._stt_status = {"engine": None, "available": False, "error": None}
         self._stt_language_status = {}  # lang -> Fehlertext|None, siehe set_stt_language_status()
@@ -176,6 +205,12 @@ class SwitcherState:
             self._language = settings["language"]
             self._news_break_cfg = settings["news_break"]
             self._stt_filter_cfg = settings["stt_filter"]
+            # Nur der Startwert -- danach ist der Hauptloop über set_mode()
+            # (NACH dem echten Übergang) die alleinige Quelle für _mode zur
+            # Laufzeit. reload() läuft ohnehin nur im radio-Zweig
+            # (pop_reload_request()), ein Überschreiben hier wäre während
+            # einer laufenden Musik-Session sowieso nie erreichbar.
+            self._mode = settings["current_mode"]
 
     @property
     def prebuffer_seconds(self) -> float:
@@ -587,6 +622,102 @@ class SwitcherState:
             self._filter_toggle_requested = False
             return flag
 
+    # ---- Radio/Musiksammlung-Modus (siehe CLAUDE.md, Modus-Fork in
+    # radiosabbelnich.py main()) ----
+
+    def request_mode_change(self, mode: str):
+        """Vom Mode-Toggle im Web-Interface aufgerufen. Request/pop statt
+        direktem Umschalten, weil der eigentliche Übergang `source`
+        stoppt/neu verbindet -- das darf ausschließlich der Hauptloop
+        machen (siehe CLAUDE.md, "Ein Prozess, zwei Akteure")."""
+        with self._lock:
+            self._mode_change_requested = mode
+
+    def pop_mode_change_request(self):
+        with self._lock:
+            req = self._mode_change_requested
+            self._mode_change_requested = None
+            return req
+
+    def set_mode(self, mode: str):
+        """Vom Hauptloop aufgerufen, NACHDEM der tatsächliche Übergang
+        (Sender/Track stoppen, ggf. neu verbinden) abgeschlossen ist --
+        erst ab hier zeigt das Web-Interface den neuen Modus an."""
+        with self._lock:
+            self._mode = mode
+            self._version += 1
+            self._version_cond.notify_all()
+
+    @property
+    def mode(self) -> str:
+        with self._lock:
+            return self._mode
+
+    @property
+    def music_library_path(self) -> str:
+        """Bewusst NICHT über reload()/einen Cache geführt, sondern bei
+        jedem Zugriff frisch von der Platte gelesen (wie z.B.
+        GET /api/config/stations) -- der Musik-Tick im Hauptloop läuft
+        komplett unabhängig vom pop_reload_request()-Zweig (der nur im
+        radio-Zweig geprüft wird), ein gecachter Wert würde dort also nie
+        aktualisiert, selbst nach einer Änderung über /config."""
+        return settings_store.load()["music_library"]["path"]
+
+    def request_music_play(self):
+        with self._lock:
+            self._music_play_requested = True
+
+    def pop_music_play_request(self) -> bool:
+        with self._lock:
+            flag = self._music_play_requested
+            self._music_play_requested = False
+            return flag
+
+    def request_music_stop(self):
+        with self._lock:
+            self._music_stop_requested = True
+
+    def pop_music_stop_request(self) -> bool:
+        with self._lock:
+            flag = self._music_stop_requested
+            self._music_stop_requested = False
+            return flag
+
+    def request_music_skip(self, direction: int):
+        """direction: +1 (Nächster) oder -1 (Zurück)."""
+        with self._lock:
+            self._music_skip_requested = direction
+
+    def pop_music_skip_request(self):
+        with self._lock:
+            direction = self._music_skip_requested
+            self._music_skip_requested = None
+            return direction
+
+    def set_music_status(self, active: bool, file_name: str = None,
+                          index: int = -1, total: int = 0):
+        """Vom Hauptloop nach jedem Track-Start/-Stop aufgerufen -- fürs
+        "Jetzt läuft"-Feld und den Play/Stop-Button-Zustand auf der
+        Musiksammlung-Seite (und den now_playing-Override in
+        _build_status(), analog zum News-Break-Muster)."""
+        with self._lock:
+            self._music_active = active
+            self._music_file = file_name
+            self._music_index = index
+            self._music_total = total
+            self._version += 1
+            self._version_cond.notify_all()
+
+    @property
+    def music_status(self) -> dict:
+        with self._lock:
+            return {
+                "active": self._music_active,
+                "file": self._music_file,
+                "index": self._music_index,
+                "total": self._music_total,
+            }
+
 
 class ImportState:
     """Thread-sicherer Fortschritts-/Ergebnis-Tracker für den Sender-
@@ -847,11 +978,17 @@ def _build_status(state: SwitcherState, icecast_cfg: dict) -> dict:
         icecast_cfg.get("admin_url"), icecast_cfg.get("user"),
         icecast_cfg.get("password"), icecast_cfg.get("mount"),
     )
+    music = state.music_status
     if state.news_break_active:
         # Kein Grund, hier ICY-Metadaten vom pausierten Sender abzufragen —
         # der Dateiname der laufenden MP3 ist die korrekte Antwort auf
         # "was läuft gerade", nicht dessen letzter Titel.
         now_playing = f"🎵 {state.news_break_file}" if state.news_break_file else None
+    elif state.mode == "music" and music["active"]:
+        # Gleiches Muster wie News-Break direkt oben, nur für den
+        # persistenten Musiksammlung-Modus statt eines einzelnen
+        # pausierten Radiosenders.
+        now_playing = f"🎵 {music['file']}" if music["file"] else None
     else:
         now_playing = _fetch_now_playing(current) if current else None
     return {
@@ -871,6 +1008,9 @@ def _build_status(state: SwitcherState, icecast_cfg: dict) -> dict:
         "stt_probability": state.stt_probability,
         "stt_language": state.stt_language,
         "fingerprint_activity": _fresh_fingerprint_activity(state),
+        "mode": state.mode,
+        "music": music,
+        "music_library_path": state.music_library_path,
         "version": state.version,
     }
 
@@ -982,7 +1122,6 @@ _PAGE_HTML = """<!doctype html>
   table { width: 100%; border-collapse: collapse; margin-top: .5rem; font-size: .9rem; }
   td, th { text-align: left; padding: .3rem .5rem; border-bottom: 1px solid #8884; }
   #meta { color: #888; font-size: .8rem; margin-top: 2rem; }
-  a.config-link { display: inline-block; margin-top: 1rem; font-size: .9rem; }
   img.banner { width: 100%; height: auto; display: block; border-radius: .5rem; margin-bottom: 1rem; }
   .version-tag { text-align: center; font-size: .7rem; color: #888; margin: -.6rem 0 1rem; }
   h1.sr-only {
@@ -1014,11 +1153,40 @@ _PAGE_HTML = """<!doctype html>
   }
   .filter-toggle-row button.disabled-state { border-color: #c33; color: #c33; }
   #action-msg { font-size: .85rem; margin-top: .4rem; min-height: 1.2em; color: #888; }
+  /* Radio/Musiksammlung-Modus-Umschalter -- deutlich sichtbar direkt unter
+     dem Banner/der Versionszeile, auf Player- UND Musiksammlung-Seite
+     identisch (siehe CLAUDE.md, Modus-Fork im Hauptloop). */
+  .mode-toggle { display: flex; gap: .5rem; margin-bottom: 1.2rem; }
+  .mode-toggle button {
+    flex: 1; padding: .6rem; font-size: .95rem; font-weight: 600;
+    border-radius: .5rem; border: 1px solid #999; background: none;
+    color: inherit; cursor: pointer; opacity: .55;
+  }
+  .mode-toggle button.active {
+    border-color: #1abc9c; background: #1abc9c1a; opacity: 1;
+  }
+  .mode-toggle button:disabled { cursor: default; }
+  /* Zahnrad oben rechts statt eines Text-Links am Seitenende -- fest
+     positioniert (bleibt beim Scrollen sichtbar), immer über dem Banner. */
+  a.gear-link {
+    position: fixed; top: .75rem; right: .75rem; z-index: 20;
+    width: 2.3rem; height: 2.3rem; border-radius: 50%;
+    background: #0008; color: #fff; text-decoration: none;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.3rem; box-shadow: 0 1px 4px #0006;
+  }
+  a.gear-link:active { background: #000c; }
 </style>
 </head>
 <body>
+<a class="gear-link" href="/config" title="⚙ Sender verwalten" data-i18n-title="idx_config_link"
+   aria-label="Sender verwalten" data-i18n-aria-label="idx_config_link">⚙</a>
 <img class="banner" src="/radiosabbelnich.webp" alt="RadioSabbelNich">
 <div class="version-tag">%%VERSION%%</div>
+<div class="mode-toggle">
+  <button id="mode-radio-btn" data-i18n="mode_radio_btn">📻 Radio</button>
+  <button id="mode-music-btn" data-i18n="mode_music_btn">🎵 Musiksammlung</button>
+</div>
 <h1 class="sr-only">RadioSabbelNich</h1>
 <div id="current" data-i18n="common_loading">Lade …</div>
 <div id="now-playing"></div>
@@ -1089,7 +1257,6 @@ _PAGE_HTML = """<!doctype html>
 <div id="listeners" data-i18n="common_loading">Lade …</div>
 
 <div id="meta"></div>
-<a class="config-link" href="/config" data-i18n="idx_config_link">⚙ Sender verwalten</a>
 
 <script>
 const LANG = "%%LANG%%";
@@ -1190,8 +1357,13 @@ function applyStatus(data) {
   lastVersion = data.version || 0;
   lastStatus = data;
 
-  document.getElementById('current').textContent =
-    data.current_name ? t('idx_current_playing', {name: data.current_name}) : t('idx_no_station_active');
+  const musicMode = data.mode === 'music';
+  document.getElementById('mode-radio-btn').classList.toggle('active', !musicMode);
+  document.getElementById('mode-music-btn').classList.toggle('active', musicMode);
+
+  document.getElementById('current').textContent = musicMode
+    ? t('idx_music_mode_active')
+    : (data.current_name ? t('idx_current_playing', {name: data.current_name}) : t('idx_no_station_active'));
   document.getElementById('now-playing').textContent = data.now_playing ? '🎵 ' + data.now_playing : '';
 
   const filterBtn = document.getElementById('btn-filter-toggle');
@@ -1212,7 +1384,10 @@ function applyStatus(data) {
   const bsWrap = document.getElementById('bs-meter-wrap');
   const bsFill = document.getElementById('bs-meter-fill');
   const bsPct = document.getElementById('bs-meter-pct');
-  if (data.news_break_active) {
+  if (musicMode) {
+    bsPct.textContent = t('idx_music_mode_short');
+    bsWrap.classList.add('paused');
+  } else if (data.news_break_active) {
     bsPct.textContent = t('idx_news_break');
     bsWrap.classList.add('paused');
   } else if (data.filter_enabled === false) {
@@ -1235,7 +1410,10 @@ function applyStatus(data) {
   const sttWrap = document.getElementById('stt-meter-wrap');
   const sttFill = document.getElementById('stt-meter-fill');
   const sttPct = document.getElementById('stt-meter-pct');
-  if (data.news_break_active) {
+  if (musicMode) {
+    sttPct.textContent = t('idx_music_mode_short');
+    sttWrap.classList.add('paused');
+  } else if (data.news_break_active) {
     sttPct.textContent = t('idx_news_break');
     sttWrap.classList.add('paused');
   } else if (data.filter_enabled === false) {
@@ -1316,13 +1494,13 @@ function applyStatus(data) {
     btn.textContent = s.name;
     btn.dataset.id = s.id;
     if (s.id === data.current_id) btn.classList.add('active');
-    btn.disabled = switching;
+    btn.disabled = switching || musicMode;
     btn.addEventListener('click', () => switchStation(s.id));
     li.appendChild(btn);
     list.appendChild(li);
   }
-  document.getElementById('btn-prev-station').disabled = switching || data.stations.length === 0;
-  document.getElementById('btn-next-station').disabled = switching || data.stations.length === 0;
+  document.getElementById('btn-prev-station').disabled = switching || musicMode || data.stations.length === 0;
+  document.getElementById('btn-next-station').disabled = switching || musicMode || data.stations.length === 0;
 
   const listenersEl = document.getElementById('listeners');
   if (data.listeners === null) {
@@ -1509,6 +1687,38 @@ document.getElementById('btn-filter-toggle').addEventListener('click', async () 
   }
 });
 
+// Modus-Umschalter -- der eigentliche Übergang (Sender/Track stoppen, ggf.
+// neu verbinden) läuft im Hauptloop und braucht einen Moment; die Buttons
+// spiegeln den bestätigten Zustand erst über den nächsten /api/status-
+// Poll/Long-Poll wider, kein optimistisches Umschalten hier (anders als
+// beim Senderwechsel: ein falsch angenommener Modus wäre hier deutlich
+// sichtbarer als ein falscher Sendername).
+//
+// redirectTo: die Musiksammlung-Steuerung (Play/Stop/Zurück/Nächster) lebt
+// nur auf /musik, nicht hier -- ein Wechsel dorthin ohne Weiterleitung würde
+// bloß den Radio-Sender pausieren, ohne dass auf dieser Seite irgendwo eine
+// Bedienmöglichkeit für den neuen Modus sichtbar wird (wirkte bisher wie
+// "Button ohne Funktion", siehe SESSION.md).
+async function setMode(mode, redirectTo) {
+  try {
+    await fetch('/api/mode', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({mode}),
+    });
+    if (redirectTo) {
+      location.href = redirectTo;
+      return;
+    }
+    setActionMsg(t('idx_mode_switching'));
+    setTimeout(refresh, 1200);
+  } catch (e) {
+    setActionMsg(t('common_error', {msg: e.message}));
+  }
+}
+document.getElementById('mode-radio-btn').addEventListener('click', () => setMode('radio'));
+document.getElementById('mode-music-btn').addEventListener('click', () => setMode('music', '/musik'));
+
 refresh();
 longPollLoop();
 // Sicherheitsnetz zusätzlich zum Long-Poll oben: Bullshitometer/Hörerzahlen
@@ -1527,6 +1737,239 @@ if ('serviceWorker' in navigator) {
     });
   });
 }
+</script>
+</body>
+</html>
+"""
+
+
+_MUSIC_PAGE_HTML = """<!doctype html>
+<html lang="%%LANG%%">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RadioSabbelNich — Musiksammlung</title>
+<link rel="icon" href="/favicon.ico">
+<meta name="theme-color" content="#1abc9c">
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: system-ui, -apple-system, sans-serif;
+    max-width: 640px; margin: 2rem auto; padding: 0 1rem;
+  }
+  img.banner { width: 100%; height: auto; display: block; border-radius: .5rem; margin-bottom: 1rem; }
+  .version-tag { text-align: center; font-size: .7rem; color: #888; margin: -.6rem 0 1rem; }
+  .mode-toggle { display: flex; gap: .5rem; margin-bottom: 1.2rem; }
+  .mode-toggle button {
+    flex: 1; padding: .6rem; font-size: .95rem; font-weight: 600;
+    border-radius: .5rem; border: 1px solid #999; background: none;
+    color: inherit; cursor: pointer; opacity: .55;
+  }
+  .mode-toggle button.active {
+    border-color: #1abc9c; background: #1abc9c1a; opacity: 1;
+  }
+  h1 {
+    font-size: 1.3rem; text-align: center; padding: .8rem; border-radius: .5rem;
+    background: #1abc9c1a; border: 1px solid #1abc9c;
+  }
+  #root-path-box {
+    padding: .75rem 1rem; border-radius: .5rem; background: #eee; margin-top: 1rem;
+    font-size: .85rem; word-break: break-all;
+  }
+  #root-path-box a { font-size: .8rem; }
+  @media (prefers-color-scheme: dark) { #root-path-box { background: #2a2a2a; } }
+  .category-row { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1.2rem; }
+  .category-row button {
+    flex: 1 1 28%; padding: .6rem .4rem; font-size: .85rem; border-radius: .4rem;
+    border: 1px solid #999; background: none; color: inherit; opacity: .55; cursor: default;
+  }
+  .play-stop-row { text-align: center; margin-top: 1.5rem; }
+  #btn-play-stop {
+    width: 6.5rem; height: 6.5rem; border-radius: 50%; font-size: 2.4rem;
+    border: 3px solid #1abc9c; background: #1abc9c1a; color: inherit; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  #btn-play-stop:active { background: #1abc9c33; }
+  #btn-play-stop:disabled { opacity: .4; cursor: default; }
+  .zap-nav { display: flex; gap: .6rem; margin-top: 1.2rem; }
+  .zap-nav button {
+    flex: 1; padding: 1rem .5rem; font-size: 1.1rem; font-weight: 600;
+    border-radius: .6rem; border: 1px solid #1abc9c; background: #1abc9c1a;
+    color: inherit; cursor: pointer; min-height: 3.2rem;
+  }
+  .zap-nav button:active { background: #1abc9c33; }
+  .zap-nav button:disabled { opacity: .5; cursor: default; }
+  #track-status { text-align: center; font-size: .9rem; color: #888; margin-top: 1rem; min-height: 1.2em; }
+  #action-msg { font-size: .85rem; margin-top: .4rem; min-height: 1.2em; color: #888; text-align: center; }
+  a.config-link { display: inline-block; margin-top: 1.5rem; font-size: .9rem; }
+</style>
+</head>
+<body>
+<img class="banner" src="/radiosabbelnich.webp" alt="RadioSabbelNich">
+<div class="version-tag">%%VERSION%%</div>
+<div class="mode-toggle">
+  <button id="mode-radio-btn" data-i18n="mode_radio_btn">📻 Radio</button>
+  <button id="mode-music-btn" data-i18n="mode_music_btn">🎵 Musiksammlung</button>
+</div>
+<h1 data-i18n="music_heading">🎵 Musik Sammlung</h1>
+
+<div id="root-path-box">
+  <div data-i18n="music_root_label">MP3-Root-Ordner:</div>
+  <strong id="root-path">–</strong><br>
+  <a class="config-link" href="/config" data-i18n="music_root_change_link">Ordner unter /config ändern →</a>
+</div>
+
+<!-- Kategorie-Buttons: reine UI-Platzhalter, kein Backend-Mapping. Echte
+     Kategorisierung kommt erst mit dem ID3/SQLite-Scan (spätere Phase,
+     siehe README "Zukünftige Features"). -->
+<div class="category-row">
+  <button disabled>80er</button>
+  <button disabled>Queen</button>
+  <button disabled>Oldies</button>
+  <button disabled>Metal</button>
+  <button disabled>Klassik</button>
+  <button disabled>Pavarotti</button>
+</div>
+
+<div class="play-stop-row">
+  <button id="btn-play-stop" title="Play" data-i18n-title="music_play_title">▶</button>
+</div>
+<div class="zap-nav">
+  <button id="btn-prev-track" title="Vorheriger Track" data-i18n-title="music_prev_title">⏮</button>
+  <button id="btn-next-track" title="Nächster Track" data-i18n-title="music_next_title">⏭</button>
+</div>
+<div id="track-status"></div>
+<div id="action-msg"></div>
+
+<a class="config-link" href="/">← <span data-i18n="music_back_link">zurück zum Radio-Player</span></a>
+
+<script>
+const LANG = "%%LANG%%";
+const I18N = %%I18N_JSON%%;
+function t(key, vars) {
+  let s = (I18N && I18N[key]) || key;
+  if (vars) for (const k in vars) s = s.split('{' + k + '}').join(vars[k]);
+  return s;
+}
+function applyStaticI18n() {
+  document.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = t(el.getAttribute('data-i18n')); });
+  document.querySelectorAll('[data-i18n-title]').forEach((el) => { el.title = t(el.getAttribute('data-i18n-title')); });
+}
+applyStaticI18n();
+
+let lastVersion = 0;
+let musicActive = false;
+
+function setActionMsg(text) {
+  const el = document.getElementById('action-msg');
+  el.textContent = text;
+  setTimeout(() => { if (el.textContent === text) el.textContent = ''; }, 5000);
+}
+
+async function refresh() {
+  let data;
+  try {
+    const res = await fetch('/api/status');
+    data = await res.json();
+  } catch (e) {
+    return;
+  }
+  applyStatus(data);
+}
+
+// Gleiches Long-Poll-Fast-Path-Muster wie die Player-Seite (siehe dortige
+// Begründung) -- derselbe /api/status/wait-Endpoint, kein eigener nötig.
+async function longPollLoop() {
+  for (;;) {
+    try {
+      const res = await fetch('/api/status/wait?version=' + lastVersion);
+      const data = await res.json();
+      applyStatus(data);
+    } catch (e) {
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  }
+}
+
+function applyStatus(data) {
+  lastVersion = data.version || 0;
+  const musicMode = data.mode === 'music';
+  document.getElementById('mode-radio-btn').classList.toggle('active', !musicMode);
+  document.getElementById('mode-music-btn').classList.toggle('active', musicMode);
+
+  document.getElementById('root-path').textContent = data.music_library_path || t('common_unknown');
+
+  const m = data.music || {active: false, file: null, index: -1, total: 0};
+  musicActive = !!m.active;
+
+  const playBtn = document.getElementById('btn-play-stop');
+  playBtn.textContent = musicActive ? '⏹' : '▶';
+  playBtn.title = musicActive ? t('music_stop_title') : t('music_play_title');
+  playBtn.disabled = !musicMode;
+
+  document.getElementById('btn-prev-track').disabled = !musicMode || !musicActive;
+  document.getElementById('btn-next-track').disabled = !musicMode || !musicActive;
+
+  const statusEl = document.getElementById('track-status');
+  if (!musicMode) {
+    statusEl.textContent = t('music_switch_hint');
+  } else if (musicActive && m.file) {
+    statusEl.textContent = t('music_now_playing', {file: m.file, index: m.index + 1, total: m.total});
+  } else {
+    statusEl.textContent = t('music_idle');
+  }
+}
+
+// redirectTo: die Radio-Sender-Steuerung lebt nur auf "/", nicht hier --
+// symmetrisch zum entsprechenden Wechsel auf der Player-Seite (siehe dort).
+async function setMode(mode, redirectTo) {
+  try {
+    await fetch('/api/mode', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({mode}),
+    });
+    if (redirectTo) {
+      location.href = redirectTo;
+      return;
+    }
+    setActionMsg(t('idx_mode_switching'));
+    setTimeout(refresh, 1200);
+  } catch (e) {
+    setActionMsg(t('common_error', {msg: e.message}));
+  }
+}
+document.getElementById('mode-radio-btn').addEventListener('click', () => setMode('radio', '/'));
+document.getElementById('mode-music-btn').addEventListener('click', () => setMode('music'));
+
+document.getElementById('btn-play-stop').addEventListener('click', async () => {
+  try {
+    await fetch(musicActive ? '/api/music/stop' : '/api/music/play', {method: 'POST'});
+    setTimeout(refresh, 800);
+  } catch (e) {
+    setActionMsg(t('common_error', {msg: e.message}));
+  }
+});
+document.getElementById('btn-prev-track').addEventListener('click', async () => {
+  try {
+    await fetch('/api/music/prev', {method: 'POST'});
+    setTimeout(refresh, 800);
+  } catch (e) {
+    setActionMsg(t('common_error', {msg: e.message}));
+  }
+});
+document.getElementById('btn-next-track').addEventListener('click', async () => {
+  try {
+    await fetch('/api/music/next', {method: 'POST'});
+    setTimeout(refresh, 800);
+  } catch (e) {
+    setActionMsg(t('common_error', {msg: e.message}));
+  }
+});
+
+refresh();
+longPollLoop();
+setInterval(refresh, 3000);
 </script>
 </body>
 </html>
@@ -1608,11 +2051,13 @@ _CONFIG_PAGE_HTML = """<!doctype html>
   }
   form#settings-form button { padding: .6rem; font-size: 1rem; cursor: pointer; }
   form#settings-form .hint { font-size: .8rem; color: #888; margin: 0; }
-  form#news-break-form, form#stt-form {
+  form#news-break-form, form#stt-form, form#music-library-form {
     margin-top: 1.5rem; padding: 1rem; border: 1px solid #8884; border-radius: .5rem;
     display: grid; gap: .6rem;
   }
-  form#news-break-form label, form#stt-form label { display: grid; gap: .25rem; font-size: .9rem; }
+  form#news-break-form label, form#stt-form label, form#music-library-form label {
+    display: grid; gap: .25rem; font-size: .9rem;
+  }
   form#news-break-form label.checkbox, form#stt-form label.checkbox {
     display: flex; flex-direction: row; align-items: center; gap: .4rem;
   }
@@ -1624,8 +2069,25 @@ _CONFIG_PAGE_HTML = """<!doctype html>
   }
   form#news-break-form .hours-row { display: flex; gap: .6rem; align-items: flex-end; }
   form#news-break-form .hours-row label { flex: 1; }
-  form#news-break-form button, form#stt-form button { padding: .6rem; font-size: 1rem; cursor: pointer; }
-  form#news-break-form .hint, form#stt-form .hint { font-size: .8rem; color: #888; margin: 0; }
+  form#news-break-form button, form#stt-form button, form#music-library-form button {
+    padding: .6rem; font-size: 1rem; cursor: pointer;
+  }
+  form#news-break-form .hint, form#stt-form .hint, form#music-library-form .hint {
+    font-size: .8rem; color: #888; margin: 0;
+  }
+  /* Breadcrumb-Ordner-Browser -- gemeinsamer Baustein für News-Break-MP3-
+     Pfad UND Musiksammlung-Root (siehe CLAUDE.md/folder_browse.py), zwei
+     unabhängige Einbindungen mit demselben Markup/CSS. */
+  .folder-browser {
+    border: 1px solid #8884; border-radius: .4rem; padding: .5rem; margin-top: -.2rem;
+  }
+  .folder-browser-breadcrumb { font-size: .85rem; margin-bottom: .4rem; }
+  .folder-browser-breadcrumb a { cursor: pointer; text-decoration: underline; }
+  .folder-browser-list { display: flex; flex-wrap: wrap; gap: .4rem; max-height: 8rem; overflow-y: auto; }
+  .folder-browser-list button {
+    font-size: .85rem; padding: .3rem .6rem; border-radius: .3rem; border: 1px solid #999;
+    background: none; color: inherit; cursor: pointer;
+  }
   #stt-status-line { font-size: .85rem; font-weight: 600; }
   section#stt-lang-section, section#stt-cat-lang-section {
     margin-top: 1.5rem; padding: 1rem; border: 1px solid #8884; border-radius: .5rem;
@@ -1728,17 +2190,22 @@ _CONFIG_PAGE_HTML = """<!doctype html>
 <h2 data-i18n="cfg_news_break_heading">📰 Nachrichten-Pause</h2>
 <form id="news-break-form">
   <p class="hint" data-i18n-html="cfg_news_break_hint">Spielt zur vollen/halben Stunde statt eines Radiosenders
-    eine zufällige lokale MP3 ab. Der MP3-Ordner unten ist ein
-    <strong>Container-interner Pfad</strong> — der eigentliche Host-Ordner
+    eine zufällige lokale MP3 ab. Der Ordner unten liegt unter einem
+    <strong>Container-internen Pfad</strong> — der eigentliche Host-Ordner
     (z.B. ein SMB-Mount) wird über <code>NEWS_MP3_FOLDER</code> in
     <code>.env</code> nach <code>/app/news_mp3</code> gemountet und braucht
-    dafür einen Neustart des Containers, kein Feld hier.</p>
+    dafür einen Neustart des Containers. Darunter kannst du per Klick den
+    gewünschten Unterordner auswählen.</p>
   <label class="checkbox">
     <input type="checkbox" id="nb-enabled"> <span data-i18n="cfg_active_label">aktiv</span>
   </label>
-  <label><span data-i18n="cfg_nb_folder_label">MP3-Ordner (Container-Pfad)</span>
-    <input type="text" id="nb-mp3-folder" placeholder="/app/news_mp3" required>
-  </label>
+  <label><span data-i18n="cfg_nb_folder_label">MP3-Ordner (Container-Pfad)</span></label>
+  <p class="hint" id="nb-folder-selected"></p>
+  <div class="folder-browser">
+    <div class="folder-browser-breadcrumb" id="nb-folder-breadcrumb"></div>
+    <div class="folder-browser-list" id="nb-folder-list"></div>
+  </div>
+  <input type="hidden" id="nb-folder-value" required>
   <p class="hint" id="nb-mp3-folder-host"></p>
   <label><span data-i18n="cfg_nb_window_label">Zeitfenster (Minuten)</span>
     <input type="number" id="nb-window" min="0.1" max="15" step="0.1" required>
@@ -1754,6 +2221,21 @@ _CONFIG_PAGE_HTML = """<!doctype html>
       <input type="number" id="nb-hour-end" min="0" max="24" step="1">
     </label>
   </div>
+  <button type="submit" data-i18n="common_save">Speichern</button>
+</form>
+
+<h2 data-i18n="cfg_music_library_heading">🎵 Musiksammlung</h2>
+<form id="music-library-form">
+  <p class="hint" data-i18n="cfg_music_library_hint">Root-Ordner für den Musiksammlung-Modus (Play/Stop auf der
+    /musik-Seite) — Container-interner Pfad, gemountet über MUSIC_LIBRARY_FOLDER in .env.</p>
+  <label><span data-i18n="cfg_music_library_folder_label">Musik-Ordner (Container-Pfad)</span></label>
+  <p class="hint" id="ml-folder-selected"></p>
+  <div class="folder-browser">
+    <div class="folder-browser-breadcrumb" id="ml-folder-breadcrumb"></div>
+    <div class="folder-browser-list" id="ml-folder-list"></div>
+  </div>
+  <input type="hidden" id="ml-folder-value" required>
+  <p class="hint" id="ml-folder-host"></p>
   <button type="submit" data-i18n="common_save">Speichern</button>
 </form>
 
@@ -2361,7 +2843,9 @@ async function loadSettings() {
 
     const nb = settings.news_break || {};
     document.getElementById('nb-enabled').checked = !!nb.enabled;
-    document.getElementById('nb-mp3-folder').value = nb.mp3_folder || '';
+    document.getElementById('nb-folder-value').value = nb.mp3_folder || '';
+    document.getElementById('nb-folder-selected').textContent =
+      t('cfg_folder_selected', {path: nb.mp3_folder || t('common_unknown')});
     document.getElementById('nb-mp3-folder-host').textContent =
       hostPathHint(hostPaths.news_break_mp3_folder, 'NEWS_MP3_FOLDER');
     document.getElementById('nb-window').value = nb.window_minutes;
@@ -2369,6 +2853,13 @@ async function loadSettings() {
     document.getElementById('nb-hours-enabled').checked = !!hours;
     document.getElementById('nb-hour-start').value = hours ? hours[0] : '';
     document.getElementById('nb-hour-end').value = hours ? hours[1] : '';
+
+    const ml = settings.music_library || {};
+    document.getElementById('ml-folder-value').value = ml.path || '';
+    document.getElementById('ml-folder-selected').textContent =
+      t('cfg_folder_selected', {path: ml.path || t('common_unknown')});
+    document.getElementById('ml-folder-host').textContent =
+      hostPathHint(hostPaths.music_library_path, 'MUSIC_LIBRARY_FOLDER');
 
     const stt = settings.stt_filter || {};
     document.getElementById('stt-enabled').checked = !!stt.enabled;
@@ -2467,7 +2958,7 @@ document.getElementById('language-form').addEventListener('submit', async (ev) =
 document.getElementById('news-break-form').addEventListener('submit', async (ev) => {
   ev.preventDefault();
   const news_break_enabled = document.getElementById('nb-enabled').checked;
-  const news_break_mp3_folder = document.getElementById('nb-mp3-folder').value;
+  const news_break_mp3_folder = document.getElementById('nb-folder-value').value;
   const news_break_window_minutes = parseFloat(document.getElementById('nb-window').value);
   const hoursEnabled = document.getElementById('nb-hours-enabled').checked;
   let news_break_enabled_hours = null;
@@ -2490,6 +2981,95 @@ document.getElementById('news-break-form').addEventListener('submit', async (ev)
     showMsg(t('common_error', {msg: e.message}), true);
   }
 });
+
+document.getElementById('music-library-form').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const music_library_path = document.getElementById('ml-folder-value').value;
+  try {
+    await api('/api/config/settings', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({music_library_path}),
+    });
+    showMsg(t('cfg_music_library_saved'), false);
+  } catch (e) {
+    showMsg(t('common_error', {msg: e.message}), true);
+  }
+});
+
+// Gemeinsamer Baustein für die Breadcrumb-Ordnerauswahl (siehe
+// folder_browse.py/CLAUDE.md) -- EIN Satz Funktionen, zwei unabhängige
+// Einbindungen (News-Break-MP3-Pfad, Musiksammlung-Root). Welcher der
+// beiden hidden inputs (nb-folder-value/ml-folder-value) mit dem Ergebnis
+// beschrieben wird, entscheidet nur, welches "els"-Objekt initFolderBrowser()
+// für die jeweilige Instanz zusammenstellt -- browseFolder() selbst kennt
+// keinen der beiden Config-Keys.
+async function browseFolder(target, relPath, els, updateSelection) {
+  let data;
+  try {
+    const res = await fetch('/api/browse-folder?target=' + encodeURIComponent(target) +
+                             '&path=' + encodeURIComponent(relPath));
+    data = await res.json();
+  } catch (e) {
+    els.list.textContent = t('common_error', {msg: e.message});
+    return;
+  }
+  if (updateSelection !== false) {
+    els.hiddenInput.value = data.absolute_path;
+    els.selectedHint.textContent = t('cfg_folder_selected', {path: data.absolute_path});
+  }
+  els.breadcrumb.innerHTML = '';
+  data.breadcrumb.forEach((seg, i) => {
+    if (i > 0) els.breadcrumb.appendChild(document.createTextNode(' / '));
+    const a = document.createElement('a');
+    a.href = '#';
+    a.textContent = seg.name;
+    a.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      browseFolder(target, seg.path, els, true);
+    });
+    els.breadcrumb.appendChild(a);
+  });
+  els.list.innerHTML = '';
+  if (data.error) {
+    const p = document.createElement('p');
+    p.className = 'hint';
+    p.textContent = t('cfg_folder_error', {msg: data.error});
+    els.list.appendChild(p);
+  } else if (data.folders.length === 0) {
+    const p = document.createElement('p');
+    p.className = 'hint';
+    p.textContent = t('cfg_folder_empty');
+    els.list.appendChild(p);
+  } else {
+    data.folders.forEach((name) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = '📁 ' + name;
+      btn.addEventListener('click', () => {
+        const newPath = data.path ? data.path + '/' + name : name;
+        browseFolder(target, newPath, els, true);
+      });
+      els.list.appendChild(btn);
+    });
+  }
+}
+
+function initFolderBrowser(target, prefix) {
+  const els = {
+    breadcrumb: document.getElementById(prefix + '-folder-breadcrumb'),
+    list: document.getElementById(prefix + '-folder-list'),
+    hiddenInput: document.getElementById(prefix + '-folder-value'),
+    selectedHint: document.getElementById(prefix + '-folder-selected'),
+  };
+  // updateSelection=false: nur zum Navigieren rendern, den per loadSettings()
+  // gesetzten gespeicherten Wert NICHT mit dem Root überschreiben -- sonst
+  // würde ein Klick auf "Speichern" ohne vorheriges Durchklicken den Ordner
+  // stillschweigend auf den Root zurücksetzen.
+  browseFolder(target, '', els, false);
+}
+initFolderBrowser('news_break', 'nb');
+initFolderBrowser('music_library', 'ml');
 
 document.getElementById('stt-form').addEventListener('submit', async (ev) => {
   ev.preventDefault();
@@ -2793,6 +3373,7 @@ def _render_i18n_variants(template: str, template_name: str) -> dict:
 # (Config-Seite), die vorgerechneten Varianten für BEIDE Sprachen liegen
 # aber schon bereit -- kein Neustart nötig, anders als z.B. tls_enabled.
 _PAGE_HTML_BYTES = _render_i18n_variants(_PAGE_HTML, "_PAGE_HTML")
+_MUSIC_PAGE_HTML_BYTES = _render_i18n_variants(_MUSIC_PAGE_HTML, "_MUSIC_PAGE_HTML")
 _CONFIG_PAGE_HTML_BYTES = _render_i18n_variants(_CONFIG_PAGE_HTML, "_CONFIG_PAGE_HTML")
 
 
@@ -2847,6 +3428,8 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                 self._send(_PAGE_HTML_BYTES[state.language], "text/html; charset=utf-8")
             elif self.path == "/config":
                 self._send(_CONFIG_PAGE_HTML_BYTES[state.language], "text/html; charset=utf-8")
+            elif self.path == "/musik":
+                self._send(_MUSIC_PAGE_HTML_BYTES[state.language], "text/html; charset=utf-8")
             elif self.path == "/radiosabbelnich.webp":
                 if _BANNER_BYTES is None:
                     self.send_error(404)
@@ -2929,6 +3512,7 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                 data["_host_paths"] = {
                     "news_break_mp3_folder": host_paths.get("news_mp3_folder"),
                     "stt_filter_vosk_model_path": host_paths.get("vosk_model_folder"),
+                    "music_library_path": host_paths.get("music_library_folder"),
                 }
                 # Ladezustand pro Sprache (nur für engine="vosk"
                 # aussagekräftig, siehe SttFilter.language_status()) -- für
@@ -2941,6 +3525,8 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                 self._send_json(_build_calibration_status(state))
             elif self.path == "/api/resources":
                 self._send_json(res_mon.snapshot())
+            elif self.path.startswith("/api/browse-folder"):
+                self._handle_browse_folder()
             else:
                 self.send_error(404)
 
@@ -2981,6 +3567,20 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                 self._handle_calibration_stop()
             elif self.path == "/api/config/import/start":
                 self._handle_import_start()
+            elif self.path == "/api/mode":
+                self._handle_mode_change()
+            elif self.path == "/api/music/play":
+                state.request_music_play()
+                self._send_json({"ok": True})
+            elif self.path == "/api/music/stop":
+                state.request_music_stop()
+                self._send_json({"ok": True})
+            elif self.path == "/api/music/next":
+                state.request_music_skip(1)
+                self._send_json({"ok": True})
+            elif self.path == "/api/music/prev":
+                state.request_music_skip(-1)
+                self._send_json({"ok": True})
             else:
                 self.send_error(404)
 
@@ -3014,6 +3614,7 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                     stream_url=payload.get("stream_url"),
                     tls_enabled=payload.get("tls_enabled"),
                     language=payload.get("language"),
+                    music_library_path=payload.get("music_library_path"),
                     news_break_enabled=payload.get("news_break_enabled"),
                     news_break_mp3_folder=payload.get("news_break_mp3_folder"),
                     news_break_window_minutes=payload.get("news_break_window_minutes"),
@@ -3037,6 +3638,42 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                 self._send_json({"ok": True, "settings": settings})
             except ValueError as e:
                 self._send_json({"ok": False, "error": str(e)}, status=400)
+
+        def _handle_browse_folder(self):
+            # Gemeinsamer Baustein für die Breadcrumb-Ordnerauswahl (siehe
+            # folder_browse.py) -- EIN Endpoint, "target" wählt nur die
+            # feste Mount-Grenze (_BROWSE_ROOTS), beschreibt aber selbst
+            # gar keinen Config-Wert. Welcher der beiden Config-Keys
+            # (news_break_mp3_folder/music_library_path) am Ende mit dem
+            # zurückgelieferten absolute_path gespeichert wird, entscheidet
+            # ausschließlich das Formular im Frontend, das diesen Endpoint
+            # aufgerufen hat.
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            target = (qs.get("target") or [""])[0]
+            rel_path = (qs.get("path") or [""])[0]
+            root = _BROWSE_ROOTS.get(target)
+            if root is None:
+                self._send_json({"error": f"unbekanntes target: {target!r}"}, status=400)
+                return
+            self._send_json(folder_browse.list_subfolders(root, rel_path))
+
+        def _handle_mode_change(self):
+            payload = self._read_json_body()
+            mode = payload.get("mode")
+            if mode not in settings_store.CURRENT_MODES:
+                self._send_json(
+                    {"ok": False, "error": f"mode muss eine von {sorted(settings_store.CURRENT_MODES)} sein."},
+                    status=400,
+                )
+                return
+            # Request/pop, kein direktes state.set_mode(): der tatsächliche
+            # Übergang (Sender/Track stoppen, ggf. neu verbinden) darf nur
+            # der Hauptloop machen (siehe SwitcherState.request_mode_change()-
+            # Docstring). Die Antwort bestätigt also nur "angenommen", nicht
+            # "schon umgeschaltet" -- das Frontend erkennt den echten
+            # Übergang am geänderten "mode"-Feld beim nächsten /api/status.
+            state.request_mode_change(mode)
+            self._send_json({"ok": True})
 
         def _handle_add_stt_language(self):
             # set_stt_language() ist ein Upsert (siehe settings_store.py) --

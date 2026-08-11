@@ -50,6 +50,7 @@ import numpy as np
 
 import fingerprint
 import logging_setup
+import music_library
 import news_break
 import settings_store
 import stt_filter
@@ -629,6 +630,9 @@ def main():
     parser.add_argument("--vosk-model-folder-host", default=None,
                          help="Host-Pfad von VOSK_MODEL_FOLDER (.env), analog zu "
                               "--news-mp3-folder-host.")
+    parser.add_argument("--music-library-folder-host", default=None,
+                         help="Host-Pfad von MUSIC_LIBRARY_FOLDER (.env), analog zu "
+                              "--news-mp3-folder-host.")
     args = parser.parse_args()
 
     log_path = logging_setup.setup(args.log_file, verbose=args.verbose)
@@ -729,6 +733,7 @@ def main():
         host_paths = {
             "news_mp3_folder": args.news_mp3_folder_host,
             "vosk_model_folder": args.vosk_model_folder_host,
+            "music_library_folder": args.music_library_folder_host,
         }
         httpd = webui.start_server(args.webui_port, state, icecast_cfg, args.fingerprint_db,
                                     tls_cert_file=tls_cert, tls_key_file=tls_key,
@@ -975,6 +980,51 @@ def main():
         quick_forward()
         return True
 
+    # Radio/Musiksammlung-Modus (siehe CLAUDE.md, "Modus als Fork ganz oben
+    # im Hauptloop"): KEINE Erweiterung der News-Break-Mechanik oben -- die
+    # pausiert nur einen einzelnen Sender für eine MP3 und kehrt danach
+    # automatisch zurück. Der Musik-Modus ist stattdessen ein persistenter
+    # Top-Level-Zustand, in dem sync_prebuffer()/classify()/News-Break-
+    # Slot-Prüfung/Watchdog unten schlicht nicht laufen -- deutlich
+    # einfacher, als sie durchzuflechten, und die Nutzervorgabe war
+    # "STT/VAD im Musik-Modus komplett deaktiviert", nicht nur pausiert.
+    current_mode = state.mode
+    music_folder = None       # Container-Pfad, beim Play-Klick einmal gelesen
+    music_tracks = []         # Dateinamen (Basenames), alphabetisch
+    music_index = -1          # -1 = idle, nichts läuft
+
+    if current_mode == "music":
+        # current_mode kann direkt beim Start schon "music" sein (aus
+        # settings.json persistiert, siehe settings_store.py) -- der
+        # Hauptloop ist oben (source.start()/sync_prebuffer()) aber IMMER
+        # erst als Radio hochgefahren, unabhängig vom Modus. Das hier
+        # macht das einmalig rückgängig, statt die Transition-Logik im
+        # Loop unten zu duplizieren oder den Radio-Start oben bedingt zu
+        # machen (der bleibt bewusst unverändert/unbedingt, siehe CLAUDE.md
+        # "Ein Prozess, zwei Akteure" -- ein einzelner Startpfad ist
+        # weniger fehleranfällig als zwei).
+        source.stop()
+        for pb in prebuffer.values():
+            pb.stop()
+        prebuffer.clear()
+        log.info("🎵 Start im Musiksammlung-Modus (persistiert) — Radio-Verbindung wieder getrennt.")
+
+    def start_music_track(idx: int):
+        nonlocal music_index
+        path = os.path.join(music_folder, music_tracks[idx])
+        source.start(path, realtime=True)  # realtime=True PFLICHT, siehe oben
+        music_index = idx
+        state.set_music_status(True, music_tracks[idx], idx, len(music_tracks))
+        log.info("🎵 Spiele: %s (%d/%d)", music_tracks[idx], idx + 1, len(music_tracks))
+
+    def stop_music_track():
+        nonlocal music_index
+        if music_index >= 0:
+            source.stop()
+            music_index = -1
+            state.set_music_status(False)
+            log.info("🎵 Musiksammlung: Wiedergabe gestoppt.")
+
     def do_switch(reason: str):
         """Springt reihum zum nächsten (aktivierten) Sender, bis Musik läuft
         (oder alle durch sind). Wird sowohl von der Heuristik als auch bei
@@ -1086,6 +1136,95 @@ def main():
 
     try:
         while True:
+            # Modus-Fork (siehe CLAUDE.md): request/pop wie beim manuellen
+            # Senderwechsel, weil der eigentliche Übergang `source` anfasst
+            # -- das darf nur der Hauptloop. Erst NACH dem echten Übergang
+            # (unten) wird current_mode/state.mode aktualisiert, nicht
+            # schon beim bloßen Request.
+            requested_mode = state.pop_mode_change_request()
+            if requested_mode and requested_mode != current_mode:
+                if requested_mode == "music":
+                    if news_break_active:
+                        # Sauber beenden, kein Resume nötig -- die ganze
+                        # Radio-Quelle wird gleich sowieso gestoppt.
+                        state.set_news_break(False)
+                        news_break_active = False
+                        news_break_served_slot = news_break.active_slot(state.news_break_cfg)
+                    source.stop()
+                    for pb in prebuffer.values():
+                        pb.stop()
+                    prebuffer.clear()
+                    reset_playout()
+                    music_tracks = []
+                    music_index = -1
+                    settings_store.update(current_mode="music")
+                    state.set_mode("music")
+                    current_mode = "music"
+                    log.info("🎵 Wechsel in Musiksammlung-Modus (Radio pausiert).")
+                else:
+                    stop_music_track()
+                    active_now = state.active_stations
+                    resume = current if current["id"] in {s["id"] for s in active_now} else (
+                        active_now[0] if active_now else None)
+                    if resume is not None:
+                        current = resume
+                        reset_playout()
+                        source.start(current["url"])
+                        quick_forward()
+                        state.set_current(current["id"])
+                        last_switch_time = time.time()
+                        speech_streak = 0
+                        speech_buffer = []
+                        fp_checked_this_run = False
+                        log.info("📻 Wechsel in Radio-Modus: spiele %s.", current["name"])
+                    else:
+                        log.error("📻 Wechsel in Radio-Modus: keine aktivierten Sender "
+                                  "konfiguriert -- Wiedergabe pausiert, bis wieder einer aktiv ist.")
+                    settings_store.update(current_mode="radio")
+                    state.set_mode("radio")
+                    current_mode = "radio"
+                continue
+
+            if current_mode == "music":
+                # Kein sync_prebuffer()/classify()/News-Break/Watchdog hier
+                # -- siehe Docstring am Kopf des Musik-Modus-Blocks oben
+                # (Definition von start_music_track()/stop_music_track()).
+                if state.pop_music_stop_request():
+                    stop_music_track()
+                    continue
+                if state.pop_music_play_request():
+                    if music_index < 0:
+                        music_folder = state.music_library_path
+                        tracks = music_library.list_tracks(music_folder)
+                        if not tracks:
+                            log.warning("🎵 Musiksammlung: keine Wiedergabe gestartet "
+                                        "(Ordner leer/nicht lesbar: %s).", music_folder)
+                        else:
+                            music_tracks = tracks
+                            start_music_track(0)
+                    continue
+                skip_dir = state.pop_music_skip_request()
+                if skip_dir and music_index >= 0 and music_tracks:
+                    start_music_track((music_index + skip_dir) % len(music_tracks))
+                    continue
+                if music_index < 0:
+                    # Idle -- niemand hat Play gedrückt, kurz schlafen statt
+                    # Busy-Loop.
+                    time.sleep(0.3)
+                    continue
+                pcm, pcm_stereo = source.read_window(WINDOW_SECONDS)
+                if pcm.size == 0:
+                    # Track zu Ende -> nächster, zyklisch (Playlist läuft
+                    # endlos weiter, bis Stop kommt).
+                    start_music_track((music_index + 1) % len(music_tracks))
+                    continue
+                # Direkt schreiben, keine Playout-Deque/Klassifikation --
+                # im Musik-Modus gibt es nichts zu erkennen/verzögern.
+                write_audio(pcm_stereo)
+                continue
+
+            # ab hier: radio-Zweig, unverändert.
+            #
             # Puffer für die nächsten Sender ab der aktuellen Position
             # aktuell halten -- billig genug, um einmal pro Schleifen-
             # durchlauf zu prüfen (kein Rebuild, falls schon passend).

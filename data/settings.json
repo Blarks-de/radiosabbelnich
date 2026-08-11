@@ -5,6 +5,10 @@
   "stream_url": "",
   "tls_enabled": true,
   "language": "de",
+  "current_mode": "radio",
+  "music_library": {
+    "path": "/app/music_library"
+  },
   "news_break": {
     "enabled": true,
     "mp3_folder": "/app/news_mp3",

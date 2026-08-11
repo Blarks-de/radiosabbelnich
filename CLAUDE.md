@@ -122,7 +122,8 @@ daneben. Kommunikation läuft **ausschließlich** über `webui.SwitcherState`:
 lock-geschützter In-Memory-Zustand, kein IPC, kein Datei-Polling.
 
 Das Muster ist durchgehend **request/pop**: der Webserver setzt ein Flag
-(`request_switch`, `request_reload`, `request_skip`, `request_filter_toggle`),
+(`request_switch`, `request_reload`, `request_skip`, `request_filter_toggle`,
+`request_mode_change`, `request_music_play`/`_stop`/`_skip`),
 der Hauptloop holt es einmal pro Durchlauf ab (`pop_*`) und führt die Aktion
 aus. Grund: nur der Hauptloop darf `source`/`current` und die Streak-
 Buchhaltung anfassen — würde der Webserver-Thread direkt umschalten, wären
@@ -318,6 +319,67 @@ der Pause nicht feuern (`current["id"]` ist ja der PAUSIERTE, nicht der
 laufende Sender), und ein manueller Klick auf genau diesen pausierten Sender
 braucht `news_break_active or manual_id != current["id"]` statt nur `!=` —
 sonst wird der Klick sonst stillschweigend verschluckt.
+
+### Radio/Musiksammlung-Modus (Grundgerüst, seit 2026-08-11)
+
+Erster Baustein der Musik-Library-Roadmap (README, "Zukünftige
+Features"): `current_mode` (`"radio"`/`"music"`, `settings_store.py`,
+request/pop wie ein manueller Senderwechsel — nur der Hauptloop darf
+`source` anfassen) ist ein **Fork ganz oben** in `main()`s `while True:`,
+NICHT eine Erweiterung der Nachrichten-Pause-Mechanik oben. Der
+Unterschied ist bewusst: die Nachrichten-Pause pausiert nur einen
+einzelnen Sender für eine MP3 und kehrt automatisch zurück, der
+Musik-Modus ist ein **persistenter** Top-Level-Zustand, in dem
+`sync_prebuffer()`/`classify()`/News-Break-Slot-Prüfung/Watchdog
+schlicht nicht laufen, bis wieder auf Radio umgeschaltet wird — genau
+das war die Anforderung ("STT/VAD im Musik-Modus komplett aus", nicht
+nur pausiert). Die beiden Zweige durchflechten zu wollen wäre deutlich
+fehleranfälliger gewesen als ein sauberer Fork mit zwei kurzen
+Übergangs-Blöcken.
+
+Der Übergang **radio → music** stoppt `source`, räumt alle
+Hintergrund-Puffer (`prebuffer`) ab und setzt `reset_playout()` — eine
+laufende Nachrichten-Pause wird dabei sauber beendet (kein Resume
+nötig, die Radio-Quelle wird ja sowieso gestoppt). Der Übergang
+**music → radio** verbindet frisch zum letzten `current`-Sender (der
+während des gesamten Musik-Modus unverändert bleibt, wie bei der
+Nachrichten-Pause auch — kein synthetisches Objekt nötig). Beide
+Richtungen persistieren `current_mode` per `settings_store.update()`
+**vor** `state.set_mode()` — die Bestätigung an die Web-UI kommt also
+erst, nachdem der Wert schon auf der Platte steht, kein Fenster für
+"UI zeigt neuen Modus, Neustart würde aber den alten wiederherstellen".
+
+Ein Sonderfall beim Programmstart: `current_mode` kann direkt aus
+`settings.json` schon `"music"` sein (Persistenz über Neustarts), aber
+der Hauptloop fährt VOR der Modus-Prüfung immer erst bedingungslos als
+Radio hoch (`source.start()`/`sync_prebuffer()` passieren am Anfang von
+`main()`, unabhängig vom Modus) — bewusst so belassen (ein einzelner
+Startpfad ist weniger fehleranfällig als zwei), stattdessen macht ein
+einmaliger Cleanup-Block direkt nach dem Lesen von `state.mode` das
+rückgängig (Quelle stoppen, Puffer leeren), falls nötig.
+
+Der Musik-Tick selbst (Play/Stop/Zurück/Nächster über
+`music_library.list_tracks()`, nicht rekursiv, zyklische Playlist)
+schreibt Audio **direkt** über `write_audio()`, nicht über
+`push_and_drain()`/die Playout-Deque — es gibt im Musik-Modus nichts zu
+erkennen, ein Delay hätte keinen Zweck (anders als beim aktuell
+laufenden RADIO-Sender, siehe Prebuffering-Abschnitt oben).
+
+**Breadcrumb-Ordnerauswahl (`folder_browse.py`)**: gemeinsamer
+Baustein für zwei unabhängig gespeicherte Config-Werte
+(`news_break.mp3_folder`, `music_library.path`) — `folder_browse.py`
+kennt selbst keinen der beiden, sondern bekommt nur einen festen Root
+(`webui._BROWSE_ROOTS`, eine Docker-Mount-Grenze) und einen relativen
+Unterpfad. Welcher Config-Key mit dem zurückgelieferten
+`absolute_path` beschrieben wird, entscheidet ausschließlich das
+Frontend-Formular, das `GET /api/browse-folder?target=...` aufgerufen
+hat. `rel_path` wird per `realpath()` + Prefix-Check gegen
+Verzeichnis-Traversal abgesichert und fällt bei einem Versuch
+(geloggt) auf den Root zurück, statt einen Fehler zu werfen — auch
+hinter dem VPN-only-Web-Interface (siehe "Kein Auth, nur hinter VPN"
+unten) ist "ein Client kann beliebige Dateisystempfade aus dem
+Container auflisten" keine akzeptable Nebenwirkung eines
+Ordner-Pickers.
 
 ### STT-Sprachfilter (stt_filter.py)
 
@@ -552,6 +614,13 @@ das `.py`-seitige/Container-interne Ziel bleibt immer flach in `/app/`.
 - `news_break.mp3_folder` in `settings.json` ist ein **Container-interner**
   Pfad (Default `/app/news_mp3`), nicht der Host-SMB-Pfad — letzterer kommt
   über `NEWS_MP3_FOLDER` in `.env` rein (Bind-Mount in `docker-compose.yml`).
+- `music_library.path` in `settings.json` folgt demselben Muster wie
+  `news_break.mp3_folder` direkt oben: Container-interner Pfad (Default
+  `/app/music_library`), Host-Seite kommt über `MUSIC_LIBRARY_FOLDER` in
+  `.env` rein. Beide Mounts sind zusätzlich die festen Roots für die
+  Breadcrumb-Ordnerauswahl (`webui._BROWSE_ROOTS`, siehe
+  `folder_browse.py` oben) — ein neuer dritter "Browse-Root" bräuchte
+  dort einen weiteren Eintrag plus einen entsprechenden Bind-Mount hier.
 
 ### TLS/HTTPS (optional, `TLS_CERT_FILE`/`TLS_KEY_FILE` in `.env`)
 
@@ -637,3 +706,16 @@ bei Wechseln zu vorgewärmten Sendern — bei einem frischen Wechsel
 der Sender bis zum nächsten warmen Wechsel ohne Delay/Vorausschau,
 bewusst in Kauf genommen statt eines gapless-Übergangs, der ohne
 Zeitdehnung nicht möglich ist.
+Der Musiksammlung-Modus (siehe Architektur-Abschnitt oben) ist bewusst
+ein Grundgerüst: die Kategorie-Buttons auf `/musik` sind reine
+UI-Platzhalter ohne Backend-Mapping (kommt erst mit dem ID3/SQLite-Scan,
+siehe README-Roadmap), es wird nicht rekursiv gescannt, nur `.mp3`
+unterstützt, und eine während des Musik-Modus eigentlich fällige
+Nachrichten-Pause wird beim Rückweg zu Radio NICHT nachgeholt (die
+News-Break-Slot-Prüfung läuft im Musik-Modus schlicht nicht mit) —
+bewusste Grenze, kein Bug. Die Preflight-Skripte
+(`check-radiosabbelnich.sh`/`run_radiosabbelnich.sh`) prüfen
+`MUSIC_LIBRARY_FOLDER` bislang NICHT wie `NEWS_MP3_FOLDER` (Existenz/
+Lesbarkeit/Dateianzahl) — aus Zeitgründen zurückgestellt, das Feature
+funktioniert auch ohne, ein leerer/fehlender Ordner liefert beim
+Play-Klick nur keine Tracks statt eines Fehlers.
