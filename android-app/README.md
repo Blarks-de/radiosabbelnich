@@ -309,6 +309,11 @@ cp radiosabbelnich.apk "$APK_NAME"
 echo "{\"buildTime\": \"$(date '+%Y-%m-%d %H:%M')\", \"apkFile\": \"$APK_NAME\"}" > version.json
 scp "$APK_NAME" version.json strato:/srv/www/blarks.de/update_radiosabbelnich/
 rm "$APK_NAME"
+# Zusaetzlich unter festem Namen hochladen -- NICHT fuer UpdateManager
+# (der liest ausschliesslich version.json/apkFile, siehe unten), sondern
+# als stabiles Ziel fuer den QR-Code im Haupt-README, der sonst nach
+# jedem Build auf eine veraltete Zeitstempel-Datei zeigen wuerde.
+scp radiosabbelnich.apk strato:/srv/www/blarks.de/update_radiosabbelnich/radiosabbelnich-latest.apk
 ```
 
 Der Upload versorgt den Update-Mechanismus (siehe eigener Abschnitt
@@ -829,10 +834,14 @@ cp radiosabbelnich.apk "$APK_NAME"
 echo "{\"buildTime\": \"$(date '+%Y-%m-%d %H:%M')\", \"apkFile\": \"$APK_NAME\"}" > version.json
 scp "$APK_NAME" version.json strato:/srv/www/blarks.de/update_radiosabbelnich/
 rm "$APK_NAME"
+scp radiosabbelnich.apk strato:/srv/www/blarks.de/update_radiosabbelnich/radiosabbelnich-latest.apk
 ```
 
 Aeltere Staende bleiben auf `blarks.de` liegen (kein automatisches
 Aufraeumen) - nur `version.json` bestimmt, welcher als "aktuell" gilt.
+Der letzte `scp` ist ein zusaetzlicher, fest benannter Alias nur fuer den
+QR-Code im Haupt-README (siehe dort) - `UpdateManager` selbst ignoriert
+ihn komplett.
 
 **Kein Auth** - bewusst, siehe `../CLAUDE.md`, Abschnitt "Kein Auth": eine
 App-Binary ohne Nutzerdaten oeffentlich zum Download bereitzustellen ist

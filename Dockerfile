@@ -8,28 +8,31 @@ RUN pip install --no-cache-dir numpy silero-vad-lite vosk faster-whisper psutil 
 # silero-vad-lite's .so verlangt einen ausführbaren Stack, den der Kernel
 # auf diesem Host beim dlopen() verweigert -> ohne Patch fällt die
 # Spracherkennung dauerhaft auf die Heuristik zurück. Details/Reproduktion:
-# siehe fix_silero_execstack.py.
-COPY fix_silero_execstack.py .
+# siehe python/fix_silero_execstack.py.
+COPY python/fix_silero_execstack.py .
 RUN python3 fix_silero_execstack.py && rm fix_silero_execstack.py
 
 ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
-COPY radiosabbelnich.py .
-COPY fingerprint.py .
-COPY speech_detector.py .
-COPY webui.py .
-COPY stations_store.py .
-COPY settings_store.py .
-COPY station_import.py .
-COPY logging_setup.py .
-COPY news_break.py .
-COPY music_library.py .
-COPY music_scan.py .
-COPY folder_browse.py .
-COPY stt_filter.py .
-COPY i18n.py .
-COPY resource_monitor.py .
+# Alle .py-Module liegen auf dem Host unter python/ (siehe CLAUDE.md,
+# "Host-Layout und Container-Layout") -- Container-intern bleibt trotzdem
+# alles flach in /app/, nur die COPY-Quelle (links) folgt der Host-Struktur.
+COPY python/radiosabbelnich.py .
+COPY python/fingerprint.py .
+COPY python/speech_detector.py .
+COPY python/webui.py .
+COPY python/stations_store.py .
+COPY python/settings_store.py .
+COPY python/station_import.py .
+COPY python/logging_setup.py .
+COPY python/news_break.py .
+COPY python/music_library.py .
+COPY python/music_scan.py .
+COPY python/folder_browse.py .
+COPY python/stt_filter.py .
+COPY python/i18n.py .
+COPY python/resource_monitor.py .
 COPY VERSION .
 COPY data/stations.json .
 COPY pics/radiosabbelnich.webp .

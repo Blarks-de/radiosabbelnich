@@ -5707,3 +5707,182 @@ Re-Scan einer unveränderten Sammlung schnell ist.
   und `data/music_library_covers/` korrekt vom Container angelegt.
   Log zeigt `🎵 Musik-Scan fertig: 0 Datei(en) gefunden, ...` ohne
   Fehler. Produktivdaten (`stations.json`/`settings.json`) unberührt.
+
+## 2026-08-12 — Musik-Scan mit echten MP3s gegen die Produktivinstanz verifiziert
+
+**Auslöser**: Nutzer wollte den in der vorigen Session gebauten Scan
+(`music_scan.py`) nicht nur gegen synthetische ffmpeg-Silent-MP3s,
+sondern gegen echte, real getaggte Dateien testen. `data/music_library`
+war auf dem Host bislang leer (kein `MUSIC_LIBRARY_FOLDER` in `.env`
+gesetzt, Default-Pfad nie befüllt).
+
+### Ablauf
+
+- 8 echte Queen-MP3s aus dem bereits vorhandenen, für die
+  Nachrichten-Pause gemounteten Ordner
+  (`/mnt/eimer/data/Audio/Musik/+_Blarks_Favoriten/Fav_Queen`, 54
+  Dateien insgesamt) probeweise nach `data/music_library` kopiert —
+  Rückfrage vorab, wie viele/welche (Ergebnis: eine Handvoll statt der
+  ganzen 209-MB-Sammlung).
+  - `data/music_library`/`data/music_library_covers` gehören root:root
+    (von Docker beim ersten Container-Start als Verzeichnis-Mount
+    angelegt, siehe CLAUDE.md-Docker-Abschnitt) — kein passwordloses
+    `sudo` in dieser Session verfügbar, deshalb stattdessen ein
+    kurzlebiger `docker run --rm -v ... alpine`-Container (läuft als
+    root, dadurch schreibberechtigt unabhängig von Host-Ownership) zum
+    Kopieren + `chown 1000:1000` genutzt.
+- Scan per `POST /api/library/scan` gegen die echte laufende Instanz
+  angestoßen (kein Code geändert, keine Produktivdaten
+  `stations.json`/`settings.json` betroffen).
+- Danach inkrementelles Verhalten an echten Dateien durchgespielt:
+  unveränderter Re-Scan, `touch` einer Datei (Update-Fall), Löschen
+  einer Datei (Cleanup-Fall).
+- Rückfrage am Ende: Testdateien behalten oder entfernen? Antwort:
+  entfernen — abschließender Scan geleert, DB wieder bei 0 Tracks.
+
+### Ergebnis
+
+- Erster Scan: `{"found": 8, "added": 8, "errors": 0}` — Artist/Album/
+  Titel/Genre/Jahr korrekt aus echten ID3-Tags gelesen (u.a. "Barcelona"
+  korrekt mit Artist "F.Mercury & M.Caballe" statt pauschal "Queen" —
+  bestätigt, dass pro Track gelesen wird statt z.B. Ordner-weit
+  angenommen).
+  - Keines der 8 (und keine der insgesamt 54 Dateien im Quellordner,
+    per Stichprobe mit `mutagen.id3.ID3(...).getall('APIC')` geprüft)
+    hat ein eingebettetes Cover — `cover_path=None` bei allen ist somit
+    korrektes Verhalten dieser Sammlung, keine Scan-Lücke. Der
+    Cover-Extraktionspfad selbst war schon im synthetischen Test der
+    Vorsession mit einem echten APIC-Frame verifiziert.
+  - Zweiter Scan (unverändert): `{"found": 8, "unchanged": 8}` — kein
+    erneutes mutagen-Parsing.
+  - Dritter Scan (eine Datei per `touch` "geändert", eine gelöscht):
+    `{"found": 7, "updated": 1, "unchanged": 6, "removed": 1}` — DB
+    bestätigt per direkter SQLite-Abfrage: 7 Zeilen, gelöschte Datei
+    nicht mehr enthalten.
+  - Abschluss-Scan nach Entfernen aller Testdateien: `{"removed": 7}`,
+    DB wieder bei 0 Tracks.
+
+### Bewusst NICHT gemacht
+
+- Keine Codeänderung — reiner Verifikationslauf der in der Vorsession
+  gebauten Phase-1-Funktionalität gegen reale Daten.
+- Kein Commit dieser Session (nur `data/`-Inhalte betroffen, ohnehin
+  gitignored) — VERSION unverändert.
+
+## 2026-08-12 — Projektstruktur aufgeräumt: python/-Ordner, VLC/Handy-Labels präzisiert, APK-QR-Code im README
+
+**Auslöser**: Nutzer wollte vier unabhängige Aufräum-/Doku-Punkte in einem
+Durchgang: alle `.py`-Module in einen `python/`-Unterordner verschieben,
+den bereits existierenden `radiosabbelnich.sh`-Wrapper prüfen/dokumentieren,
+zwei Button-Beschriftungen im Web-Interface präzisieren, und die
+Android-APK im README leichter zugänglich machen (QR-Code). Plan vorab
+abgestimmt, inkl. einer expliziten Rückfrage zu Punkt 4 (siehe unten).
+
+### 1. `python/`-Ordner
+
+Alle 16 `.py`-Dateien (inkl. `fix_silero_execstack.py`) per `git mv` nach
+`python/` verschoben. Recherche VOR der Umsetzung ergab: Imports
+zwischen den Modulen, `docker-compose.yml` und die drei Shell-Skripte
+(`check-radiosabbelnich.sh`/`run_radiosabbelnich.sh`/`radiosabbelnich.sh`)
+brauchten **keine** Änderung — keins davon referenziert `.py`-Pfade
+direkt (Shell-Skripte rufen nur `docker compose`/`python3 <lokal>` auf,
+Module bleiben untereinander Geschwister). Tatsächlich geändert:
+- `Dockerfile`: alle `COPY *.py .`-Quellen auf `python/*.py` umgestellt
+  (Ziel bleibt flach `/app/`, WORKDIR/ENTRYPOINT/übrige COPYs
+  unverändert — Container-Layout bleibt exakt wie vorher, siehe
+  CLAUDE.md "Host-Layout und Container-Layout").
+- `CLAUDE.md`: besagter Architektur-Absatz korrigiert (`*.py liegen am
+  Repo-Root` → `unter python/`), plus die Testanleitung
+  ("Testen ohne das laufende Deployment anzufassen").
+- `README.md` (DE+EN): Datei-Tabelle — `python/`-Präfix vor jedem
+  `.py`-Eintrag (analog zum bestehenden `data/`/`web/`/`pics/`-Muster),
+  dabei `music_scan.py`/`resource_monitor.py` nachgetragen (fehlten dort
+  bisher unabhängig von diesem Umzug).
+- Verifiziert: `docker compose up -d --build radiosabbelnich` nach dem
+  Umzug — Build lief fehlerfrei durch, Container startet sauber
+  (Vosk-Modell lädt, Web-Interface auf Port 5000/https, `/api/status`
+  liefert HTTP 200).
+
+### 2. `radiosabbelnich.sh`
+
+Bereits vorhanden (Commit `97f4488`, schon gepusht) und bereits in
+README (DE+EN) mit Beispielaufruf dokumentiert — kein Handlungsbedarf.
+Nur verifiziert, dass der Wrapper nach dem `python/`-Umzug weiter
+funktioniert (referenziert ohnehin keine `.py`-Pfade, nur `docker
+compose`).
+
+### 3. Button-Beschriftungen
+
+`python/i18n.py`: `idx_qr_vlc_label` DE/EN "VLC" → "VLC Stream";
+`idx_qr_phone_label` DE "Handy" → "Handy Fernsteuerung", EN "Phone" →
+"Phone Remote". `python/webui.py`: die beiden HTML-Fallback-Texte
+(`<span class="icon-label">`) entsprechend mitgezogen. Live gegen die
+neu gebaute Instanz per `curl` geprüft: beide Labels korrekt im
+ausgelieferten HTML UND im `I18N`-JSON-Blob. Breitenprüfung
+gedanklich/per CSS-Werten (zwei `flex:1`-Buttons in einer max.
+640px-Seite, `.65rem`-Schrift) statt Screenshot — reichlich Platz auf
+Desktop UND Mobile-Breite.
+
+### 4. Android-APK sichtbarer machen
+
+**Rückfrage nötig**: der Auftrag wollte einen `raw.githubusercontent.com`/
+GitHub-Release-Link, das kollidiert aber mit einer bestehenden, bewusst
+getroffenen Entscheidung — die APK ist per `.gitignore`
+("Build-Artefakt, nicht versioniert") explizit vom Repo ausgeschlossen,
+Vertrieb läuft über `blarks.de/update_radiosabbelnich/` mit
+ZEITGESTEMPELTEM Dateinamen (ändert sich bei jedem Android-Build, kein
+stabiler Link). Nutzer hat die empfohlene Option gewählt: stabilen Alias
+auf blarks.de ergänzen, statt die APK doch ins Git-Repo zu committen
+oder einen Link zu verwenden, der nach dem nächsten Build bricht.
+- `android-app/README.md` (beide Vorkommen des Bauen-und-Verteilen-Blocks)
+  + `android-app/CLAUDE.md`: dritten `scp`-Schritt ergänzt, der die
+  bereits lokal kopierte `radiosabbelnich.apk` zusätzlich unter dem
+  FESTEN Namen `radiosabbelnich-latest.apk` hochlädt — rein für den
+  README-QR-Code, `UpdateManager` (liest ausschließlich
+  `version.json`/`apkFile`) bekommt davon nichts mit, keine Kollision
+  mit dessen Logik.
+- Root-`CLAUDE.md`s Android-Pflichtliste ("Nach jedem Android-Build")
+  um diesen dritten Schritt ergänzt.
+- Aktuelle lokale `android-app/radiosabbelnich.apk` (46 MB) direkt per
+  `scp` unter dem neuen festen Namen hochgeladen, damit der QR-Code
+  sofort funktioniert, nicht erst nach dem nächsten Build — verifiziert
+  per `curl -I` (HTTP 200, `content-type:
+  application/vnd.android.package-archive`).
+- QR-Code als SVG generiert: kurzes Node-Skript, das die bereits im
+  Repo vendorte `web/qrcode.js`-Bibliothek (dieselbe, die das
+  Web-Interface selbst für die Stream-/Handy-QR-Codes nutzt) per `eval`
+  lädt und `createSvgTag()` aufruft — kein neuer Dependency, kein
+  externer QR-Dienst. Ziel-URL
+  `https://blarks.de/update_radiosabbelnich/radiosabbelnich-latest.apk`,
+  Ablage `pics/android-apk-qr.svg`.
+- `README.md` (DE+EN): QR-Code-Bild + Hinweistext im Android-App-
+  Abschnitt ergänzt (was der Code macht, Hinweis auf "Installation aus
+  unbekannten Quellen erlauben").
+- Lokale `android-app/radiosabbelnich.apk` selbst unverändert gelassen
+  (liegt bereits direkt unter `android-app/`, kein tief verschachtelter
+  Pfad — erfüllte die "leicht auffindbar"-Anforderung schon vor diesem
+  Task).
+
+### Bewusst NICHT gemacht
+
+- Kein Commit der APK ins Git-Repo (siehe Rückfrage oben) — bewusst
+  gegen die ursprüngliche Auftragsformulierung, mit Nutzer abgestimmt.
+- Keine Änderung an `check-radiosabbelnich.sh`/`run_radiosabbelnich.sh`/
+  `radiosabbelnich.sh` — nach Prüfung nicht nötig (siehe Punkt 1/2 oben).
+
+### Verifiziert
+
+- `docker compose up -d --build radiosabbelnich` nach dem `python/`-Umzug
+  UND nach den Button-Label-Änderungen: beide Male fehlerfreier Build,
+  Container startet, Web-Interface antwortet (HTTP 200 auf
+  `/api/status`), Vosk-STT-Filter lädt normal.
+- `curl` gegen `/`: `idx_qr_vlc_label`/`idx_qr_phone_label` zeigen im
+  HTML UND im `I18N`-JSON die neuen Texte ("VLC Stream"/"Handy
+  Fernsteuerung").
+- QR-Code-SVG per `cairosvg` rasterisiert und mit `zxing-cpp`
+  zurückdekodiert: liefert exakt die erwartete URL
+  (`https://blarks.de/update_radiosabbelnich/radiosabbelnich-latest.apk`)
+  — kein kaputter/unlesbarer Code.
+- `git status`: alle 16 Verschiebungen korrekt als Rename (`R`/`RM`)
+  erkannt, keine versehentlichen Neu-Anlagen/Löschungen.
+- `VERSION`: v1.1.15 → v1.1.16.

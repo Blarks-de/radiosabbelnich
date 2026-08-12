@@ -547,23 +547,35 @@ Eigene Doku dort: [`android-app/README.md`](android-app/README.md)
 Netzwerkverbrauch durch zwei Dekodierungen, kein HLS/DASH, Verteilung per
 eigenem Update-Server statt Play Store).
 
+<img src="pics/android-apk-qr.svg" width="160" alt="QR-Code zum APK-Download">
+
+**Direkt-Download per QR-Code**: mit dem Handy scannen, um die aktuelle
+Debug-APK (`radiosabbelnich-latest.apk`) direkt herunterzuladen — der Link
+wird bei jedem Android-Build automatisch aktualisiert (siehe
+`android-app/README.md`, Abschnitt "Bauen und Testen"). Vor der
+Installation muss Android **"Installation aus unbekannten Quellen" für den
+verwendeten Browser/Dateimanager erlauben** — kein Play Store, keine
+Signaturprüfung über die Debug-Signierung hinaus (siehe oben).
+
 ## Architektur
 
 | Datei | Zweck |
 |---|---|
-| `radiosabbelnich.py` | Hauptprozess: Stream holen, klassifizieren, umschalten, Icecast-Output |
-| `speech_detector.py` | Silero-VAD-Wrapper mit Signal-Heuristik-Fallback |
-| `fingerprint.py` | Audio-Fingerprinting (Constellation-Map-Hashing) in SQLite |
-| `stations_store.py` | Laden/Speichern/CRUD der Senderliste (`stations.json`) |
-| `settings_store.py` | Laufzeit-Einstellungen (Puffer-Parameter, Import-URL, `settings.json`) |
-| `station_import.py` | M3U-Import: laden, parsen, parallel auf dauerhaften Audiofluss prüfen |
-| `webui.py` | Eingebettetes Web-Interface (Player-Seite + Config-Seite) |
-| `logging_setup.py` | Zentrale Logging-Konfiguration (Konsole + rotierende Logdatei) |
-| `news_break.py` | Nachrichten-Pause: Zeitfenster-Logik + zufällige MP3-Auswahl |
-| `music_library.py` | Musiksammlung-Modus: Dateien eines Ordners auflisten (nicht rekursiv) |
-| `folder_browse.py` | Gemeinsame Breadcrumb-Ordnerauswahl (News-Break-Pfad + Musiksammlung-Root) |
-| `stt_filter.py` | STT-Sprachfilter: Vosk/Whisper-Engines, austauschbar, Zusatzsignal für die Switch-Entscheidung |
-| `i18n.py` | Übersetzungstabelle fürs Web-Interface (Deutsch/Englisch, siehe "Sprache des Web-Interfaces") |
+| `python/radiosabbelnich.py` | Hauptprozess: Stream holen, klassifizieren, umschalten, Icecast-Output |
+| `python/speech_detector.py` | Silero-VAD-Wrapper mit Signal-Heuristik-Fallback |
+| `python/fingerprint.py` | Audio-Fingerprinting (Constellation-Map-Hashing) in SQLite |
+| `python/stations_store.py` | Laden/Speichern/CRUD der Senderliste (`stations.json`) |
+| `python/settings_store.py` | Laufzeit-Einstellungen (Puffer-Parameter, Import-URL, `settings.json`) |
+| `python/station_import.py` | M3U-Import: laden, parsen, parallel auf dauerhaften Audiofluss prüfen |
+| `python/webui.py` | Eingebettetes Web-Interface (Player-Seite + Config-Seite) |
+| `python/logging_setup.py` | Zentrale Logging-Konfiguration (Konsole + rotierende Logdatei) |
+| `python/news_break.py` | Nachrichten-Pause: Zeitfenster-Logik + zufällige MP3-Auswahl |
+| `python/music_library.py` | Musiksammlung-Modus: Dateien eines Ordners auflisten (nicht rekursiv) |
+| `python/music_scan.py` | Musik-Library-Scan (Phase 1): rekursiver ID3-Scan in eigene SQLite-DB |
+| `python/folder_browse.py` | Gemeinsame Breadcrumb-Ordnerauswahl (News-Break-Pfad + Musiksammlung-Root) |
+| `python/stt_filter.py` | STT-Sprachfilter: Vosk/Whisper-Engines, austauschbar, Zusatzsignal für die Switch-Entscheidung |
+| `python/i18n.py` | Übersetzungstabelle fürs Web-Interface (Deutsch/Englisch, siehe "Sprache des Web-Interfaces") |
+| `python/resource_monitor.py` | Ressourcen-Verbrauch (RAM/CPU/DB-Größe) fürs "💾 Ressourcen-Verbrauch" auf der Config-Seite |
 | `web/qrcode.js` | Vendorte QR-Code-Bibliothek (MIT, kazuhikoarase/qrcode-generator) fürs "📱 QR-Code"-Popup |
 | `web/manifest.json` | PWA-Manifest (Name, Icons, `display: standalone`) fürs "Zum Startbildschirm hinzufügen" |
 | `web/sw.js` | Service Worker: cached die statische Oberflächen-Hülle fürs Offline-Öffnen, kein Audio/API-Caching |
@@ -1314,23 +1326,35 @@ installation and known limitations (among them doubled network usage from
 two independent decodes, no HLS/DASH, and distribution via a self-hosted
 update server rather than the Play Store).
 
+<img src="pics/android-apk-qr.svg" width="160" alt="QR code for the APK download">
+
+**Direct download via QR code**: scan with your phone to download the
+current debug APK (`radiosabbelnich-latest.apk`) directly — the link is
+updated automatically with every Android build (see
+`android-app/README.md`, "Bauen und Testen" section). Android must be
+allowed to **"install from unknown sources" for whichever browser/file
+manager you use** before installing — no Play Store, no signature check
+beyond the debug signing (see above).
+
 ## Architecture
 
 | File | Purpose |
 |---|---|
-| `radiosabbelnich.py` | Main process: fetch stream, classify, switch, Icecast output |
-| `speech_detector.py` | Silero VAD wrapper with signal-heuristic fallback |
-| `fingerprint.py` | Audio fingerprinting (constellation-map hashing) in SQLite |
-| `stations_store.py` | Load/save/CRUD for the station list (`stations.json`) |
-| `settings_store.py` | Runtime settings (buffer parameters, import URL, `settings.json`) |
-| `station_import.py` | M3U import: download, parse, check for continuous audio in parallel |
-| `webui.py` | Embedded web interface (player page + config page) |
-| `logging_setup.py` | Central logging config (console + rotating log file) |
-| `news_break.py` | News break: time-window logic + random MP3 selection |
-| `music_library.py` | Music library mode: list a folder's files (non-recursive) |
-| `folder_browse.py` | Shared breadcrumb folder picker (news break path + music library root) |
-| `stt_filter.py` | STT speech filter: interchangeable Vosk/Whisper engines, additional signal for the switch decision |
-| `i18n.py` | Translation table for the web interface (German/English, see "Web interface language") |
+| `python/radiosabbelnich.py` | Main process: fetch stream, classify, switch, Icecast output |
+| `python/speech_detector.py` | Silero VAD wrapper with signal-heuristic fallback |
+| `python/fingerprint.py` | Audio fingerprinting (constellation-map hashing) in SQLite |
+| `python/stations_store.py` | Load/save/CRUD for the station list (`stations.json`) |
+| `python/settings_store.py` | Runtime settings (buffer parameters, import URL, `settings.json`) |
+| `python/station_import.py` | M3U import: download, parse, check for continuous audio in parallel |
+| `python/webui.py` | Embedded web interface (player page + config page) |
+| `python/logging_setup.py` | Central logging config (console + rotating log file) |
+| `python/news_break.py` | News break: time-window logic + random MP3 selection |
+| `python/music_library.py` | Music library mode: list a folder's files (non-recursive) |
+| `python/music_scan.py` | Music library scan (phase 1): recursive ID3 scan into its own SQLite DB |
+| `python/folder_browse.py` | Shared breadcrumb folder picker (news break path + music library root) |
+| `python/stt_filter.py` | STT speech filter: interchangeable Vosk/Whisper engines, additional signal for the switch decision |
+| `python/i18n.py` | Translation table for the web interface (German/English, see "Web interface language") |
+| `python/resource_monitor.py` | Resource usage (RAM/CPU/DB size) for the "💾 Resource usage" section on the config page |
 | `web/qrcode.js` | Vendored QR code library (MIT, kazuhikoarase/qrcode-generator) for the "📱 QR code" popup |
 | `web/manifest.json` | PWA manifest (name, icons, `display: standalone`) for "Add to home screen" |
 | `web/sw.js` | Service worker: caches the static UI shell for offline opening, no audio/API caching |

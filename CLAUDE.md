@@ -25,7 +25,11 @@ Seit 2026-08-07 wird es aber mitgepflegt, dafür zwei feste Regeln:
   `version.json` (`{"buildTime": "...", "apkFile": "..."}`) nach
   `blarks.de/update_radiosabbelnich/` hochladen (siehe
   `android-app/README.md`, Abschnitt "Update-Mechanismus" — sonst hält
-  die App den alten Stand weiterhin für aktuell).
+  die App den alten Stand weiterhin für aktuell). Seit 2026-08-12
+  zusätzlich unter dem festen Namen `radiosabbelnich-latest.apk`
+  hochladen (dritter `scp`, siehe `android-app/README.md`/`CLAUDE.md`) —
+  rein für den QR-Code im Haupt-README unten, `UpdateManager` selbst
+  kennt/braucht diese Datei nicht.
 - **`android-app/README.md` bei jeder inhaltlichen Änderung an der App
   nachziehen** (analog zur README-Pflicht des Docker-Projekts oben, nur
   eben für die App statt den Dienst).
@@ -93,8 +97,9 @@ Hauptloop lädt neu), Code-Änderungen brauchen einen Rebuild.
 
 ### Testen ohne das laufende Deployment anzufassen
 
-Bewährtes Muster (in SESSION.md mehrfach dokumentiert): `*.py` in ein
-Temp-Verzeichnis kopieren, dort eine eigene `stations.json`/`settings.json`
+Bewährtes Muster (in SESSION.md mehrfach dokumentiert): `python/*.py` in ein
+Temp-Verzeichnis kopieren (flach, ohne den `python/`-Unterordner), dort eine
+eigene `stations.json`/`settings.json`
 anlegen und gegen einen **separaten** Icecast-Mount streamen — der Hauptloop
 schreibt sonst in die echte Senderliste und den echten Mount.
 
@@ -639,14 +644,15 @@ treffen, nicht z.B. eine neu aufgerufene Unterseite.
 
 ## Docker-Besonderheiten
 
-Host-Layout und Container-Layout sind bewusst entkoppelt: `*.py` liegen am
-Repo-Root, alles andere ist auf dem Host in `pics/` (Bilder), `web/`
+Host-Layout und Container-Layout sind bewusst entkoppelt: `*.py` liegen auf
+dem Host unter `python/` (seit 2026-08-12, davor am Repo-Root — reines
+Aufräumen, siehe SESSION.md), alles andere ist in `pics/` (Bilder), `web/`
 (vom Webserver ausgelieferte JS/JSON-Assets: `qrcode.js`/`manifest.json`/
 `sw.js`) und `data/` (Senderliste/Settings/Fingerprint-DB/Laufzeit-Ordner)
 aufgeteilt — im Container landet trotzdem alles flach in `/app/`
 (`_load_static()`/`STATIONS_FILE`/`SETTINGS_FILE`/`FINGERPRINT_DB_FILE`/
 `FINGERPRINT_CLIPS_DIR`/`DEFAULT_LOG_FILE` sind alle `__file__`-relativ
-zum jeweiligen `.py`-Modul, das am Root bleibt). Wer eine neue Datei
+zum jeweiligen `.py`-Modul, das unter `python/` liegt). Wer eine neue Datei
 hinzufügt: nur der **Host-Pfad** (Dockerfile-`COPY`-Quelle bzw. linke
 Seite eines `docker-compose.yml`-Volume-Mounts) folgt der Ordnerstruktur,
 das `.py`-seitige/Container-interne Ziel bleibt immer flach in `/app/`.

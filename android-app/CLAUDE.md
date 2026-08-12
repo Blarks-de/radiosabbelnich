@@ -51,6 +51,9 @@ cp radiosabbelnich.apk "$APK_NAME"
 echo "{\"buildTime\": \"$(date '+%Y-%m-%d %H:%M')\", \"apkFile\": \"$APK_NAME\"}" > version.json
 scp "$APK_NAME" version.json strato:/srv/www/blarks.de/update_radiosabbelnich/
 rm "$APK_NAME"   # blarks.de ist die Quelle der Wahrheit, keine doppelte lokale Ablage
+# Fest benannter Alias NUR fuer den QR-Code im Haupt-README -- UpdateManager
+# selbst liest ausschliesslich version.json/apkFile, ignoriert diese Datei.
+scp radiosabbelnich.apk strato:/srv/www/blarks.de/update_radiosabbelnich/radiosabbelnich-latest.apk
 ```
 
 Ohne den Upload-Schritt sieht der Update-Server weiterhin den alten Stand

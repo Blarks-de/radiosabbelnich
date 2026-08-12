@@ -1262,10 +1262,10 @@ _PAGE_HTML = """<!doctype html>
 </div>
 <div id="address-row">
   <button id="btn-qr-vlc" hidden title="QR-Code für die Stream-Adresse (VLC & Co.)" data-i18n-title="idx_qr_vlc_title">
-    <span>▶️</span><span class="icon-label" data-i18n="idx_qr_vlc_label">VLC</span>
+    <span>▶️</span><span class="icon-label" data-i18n="idx_qr_vlc_label">VLC Stream</span>
   </button>
   <button id="btn-qr-phone" title="QR-Code für dieses Web-Interface (zum Öffnen auf dem Handy)" data-i18n-title="idx_qr_phone_title">
-    <span>📱</span><span class="icon-label" data-i18n="idx_qr_phone_label">Handy</span>
+    <span>📱</span><span class="icon-label" data-i18n="idx_qr_phone_label">Handy Fernsteuerung</span>
   </button>
 </div>
 <audio id="player" controls preload="none"></audio>
