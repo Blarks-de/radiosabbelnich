@@ -6185,3 +6185,204 @@ Endpoints).
 - Nach den Tests: Wiedergabe gestoppt, Modus zurück auf "radio" —
   Produktivzustand wiederhergestellt, `current_name` bestätigt normalen
   Sender-Betrieb.
+
+## 2026-08-12 — Musik-Library Phase 3 (BPM-Teil): schnell/langsam-Buttons aktiviert
+
+**Auslöser**: Nutzer wollte Phase 3 der Musik-Library-Roadmap planen und
+umsetzen — BPM-Daten für die bislang deaktivierten schnell/langsam-
+Buttons auf `/musik`. Plan vorab abgestimmt, inkl. einer Rückfrage zur
+Bibliothekswahl (aubio vs. librosa, beide vorab an echten Dateien aus
+der Sammlung des Nutzers getestet, siehe Plan-Nachricht) — Antwort:
+aubio (leichtgewichtiger zur Laufzeit, akzeptierter Compiler-im-Image-
+Tradeoff).
+
+### Umsetzung
+
+- **`music_bpm.py`** (neu): `estimate_bpm(path, duration_hint=None)` —
+  dekodiert per ffmpeg NUR einen 60s-Schnipsel (Start bei Sekunde 20,
+  oder bei 0 für kürzere Tracks) statt des kompletten Tracks, füttert
+  das Ergebnis als NumPy-Float32-Array direkt an `aubio.tempo()` (keine
+  aubio-eigene Audio-Quelle/libsndfile nötig). An echten Dateien
+  gemessen: ~0,25s pro Track inkl. Decode.
+- **`music_scan.py`**: `bpm REAL`-Spalte per Migration ergänzt (PRAGMA-
+  Check + `ALTER TABLE`, da SQLite kein "ADD COLUMN IF NOT EXISTS"
+  kennt). BPM-Schätzung läuft im selben Scan-Durchlauf wie ID3-Parsing.
+  **Wichtiger Nachtrag während der Live-Verifikation entdeckt**: die
+  Migration allein reicht nicht — unveränderte Dateien (gleiche mtime/
+  Größe) wurden schon vor der Migration als "unverändert" übersprungen
+  und wären ohne Sonderbehandlung DAUERHAFT bei `bpm=NULL` geblieben,
+  weil ihr mtime/Größe-Vergleich ja weiter "unverändert" ergibt. Dritter
+  Skip-Zweig ergänzt: unverändert + `bpm IS NULL` → nur `UPDATE ... SET
+  bpm` nachtragen (kein voller mutagen/APIC-Reparse), eigener
+  `bpm_backfilled`-Zähler im Ergebnis-Dict.
+- **`music_query.py`**: `query_by_tempo(db, "fast"|"slow")` mit festen
+  Schwellwerten `FAST_BPM_MIN=120`/`SLOW_BPM_MAX=90` (Bereich
+  dazwischen fällt bei beiden raus, gleiche bewusste Unschärfe wie beim
+  Genre-Match). `bpm` zusätzlich ins zurückgegebene Track-Dict
+  aufgenommen.
+- **`webui.py`**: `_handle_music_play()` um `q_type == "tempo"`-Zweig
+  erweitert (inkl. `ValueError` → HTTP 400 bei ungültigem Modus).
+  schnell/langsam-Buttons auf `/musik` von `disabled` auf
+  `music-query-btn` umgestellt (`data-query-type="tempo"`). Leere-
+  Ergebnisse-Meldung übersetzt bei Tempo-Queries "fast"/"slow" zurück
+  auf "schnell"/"langsam" fürs Frontend statt den internen Modus-String
+  zu zeigen. CSS aufgeräumt: die "ausgegraut/disabled"-Basisvariante der
+  Kategorie-Buttons ist seit alle sechs Buttons echte Query-Buttons sind
+  totes CSS geworden, entfernt. `music_category_unavailable_title`
+  (i18n-Key, nur vom jetzt entfernten Tooltip genutzt) aus `i18n.py`
+  entfernt.
+- **`Dockerfile`**: **zwei live aufgetretene Build-Fehler** beim
+  Einbau von aubio, beide dokumentiert und gefixt:
+  1. aubio 0.4.9 (letztes PyPI-Release, 2019) baut nicht gegen
+     aktuelles numpy (`PyUFuncGenericFunction` erwartet seit
+     numpy>=1.22 `const npy_intp*` statt `npy_intp*` in den ufunc-
+     Callback-Signaturen in `python/ext/ufuncs.c`) →
+     "incompatible pointer type"-Compile-Fehler.
+  2. `pip download --no-binary :all:` (erster Versuch, um den
+     Source-Tarball für den Patch zu holen) hängt sich in diesem
+     Image an einer isolierten Build-Umgebung auf (234s bis zum
+     Fehlschlag).
+  Fix: `curl` lädt den Tarball direkt von PyPI (umgeht `pip download`
+  komplett), `sed` patcht die zwei betroffenen Funktionssignaturen
+  (`const`-Ergänzung), `pip install --no-build-isolation` installiert
+  gegen das bereits vorhandene numpy statt eine zweite isolierte
+  Build-Umgebung aufzusetzen. Analog zu `fix_silero_execstack.py`.
+  `build-essential`+`curl` zusätzlich zu `apt-get install`.
+- **`README.md`** (DE+EN): Phase-3-Bullet der Roadmap von "optional,
+  später" auf "✅ (BPM-Teil) umgesetzt", Phase-2-Bullet zu
+  schnell/langsam aktualisiert (nicht mehr deaktiviert).
+- **`CLAUDE.md`**: neuer Abschnitt "Musik-Library-BPM (`music_bpm.py`,
+  Phase 3)" mit Bibliothekswahl-Begründung, beiden Build-Fehlern samt
+  Fix, Schnipsel-statt-Volltrack-Entscheidung, Migrations-/Backfill-
+  Logik.
+- `VERSION`: v1.1.19 → v1.1.20.
+
+### Bewusst NICHT gemacht
+
+- Energy-Analyse, Duplikat-Erkennung, Browse-Web-UI aus der
+  ursprünglichen Phase-3-Idee — Aufgabenscope war explizit nur "BPM für
+  schnell/langsam".
+- Keine Synonym-/Fuzzy-Behandlung für die Oktavfehler-Grenze (halbe/
+  doppelte Geschwindigkeit) — generisches Problem jeder Beat-Tracking-
+  Methode, keine Lösung ohne echte Musikanalyse (BPM-Bereich mit
+  Vertrauensintervall o.ä.), außerhalb des Scopes dieser Phase.
+
+### Verifiziert
+
+- Docker-Build: erster Versuch scheiterte am aubio/numpy-Compile-
+  Fehler, zweiter Versuch (mit `sed`-Patch, aber noch über `pip
+  download`) scheiterte an der isolierten Build-Umgebung, dritter
+  Versuch (curl + `--no-build-isolation`) lief durch. `docker exec
+  radiosabbelnich python3 -c "import aubio"` bestätigt: Modul lädt.
+- Schema-Migration gegen die echte, bestehende 402-Track-DB (aus
+  Phase 1/2, ohne `bpm`-Spalte) verifiziert: `PRAGMA table_info`
+  zeigte die fehlende Spalte vorher, `ALTER TABLE` lief beim nächsten
+  Scan-Start automatisch.
+- Erster Scan NACH der Migration (vor dem Backfill-Fix): bestätigte
+  live das oben beschriebene Problem (`unchanged: 402`, `bpm`
+  blieb überall `NULL`) — genau deshalb der dritte Skip-Zweig.
+- Nach dem Backfill-Fix: erneuter Scan zeigte `bpm_backfilled: 402`,
+  `unchanged: 0` (alle 402 Zeilen brauchten den Nachtrag), keine
+  Fehler. Direkte SQLite-Abfrage bestätigt: alle 402 Tracks haben
+  jetzt einen `bpm`-Wert (Bereich 79,5–206,4, Ø 127,7).
+- Live gegen die echte laufende Instanz (Modus kurz zu "music"
+  gewechselt, danach zurück zu "radio"):
+  - `schnell`-Button: 245 Treffer (von 402) — plausibel hoch wegen
+    der dokumentierten Oktavfehler-Grenze (z.B. "Dream A Little
+    Dream Of Me" mit 140,9 BPM erkannt, real eher ~70-75 BPM — ein
+    klassischer Halbierungsfehler).
+  - `langsam`-Button: 16 Treffer.
+  - Ungültiger Tempo-Modus (`{"type":"tempo","value":"bogus"}`) →
+    HTTP 400 mit Klartext-Fehlermeldung.
+- `curl` gegen `/musik`: Buttons korrekt ohne `disabled`-Attribut im
+  HTML, keine i18n-Coverage-Fehler beim Container-Start.
+- Nach den Tests: Wiedergabe gestoppt, Modus zurück auf "radio" —
+  Produktivzustand wiederhergestellt.
+
+## 2026-08-12 — Bugfix Nachrichten-Pause: laufende MP3 wird nicht mehr bei Fensterablauf hart abgebrochen
+
+**Auslöser**: Nutzer meldete, dass die Nachrichten-Pause-MP3 aktuell
+mitten in der Wiedergabe abgewürgt wird, sobald `window_minutes`
+abläuft. Gewünscht: die laufende MP3 wird immer zu Ende gespielt, der
+Rückweg zum pausierten Sender passiert erst danach — auch wenn die
+Pause dadurch länger dauert als `window_minutes`. Plan vorab
+abgestimmt, inkl. einer während der Analyse gefundenen Präzisierung
+(siehe unten), die der Nutzer bestätigt hat.
+
+### Root Cause
+
+Direkt vor `read_window()` im Hauptloop gab es einen zweiten,
+rein zeitbasierten Check (`if news_break_active and not slot:
+resume_from_news_break(...)`), der bei JEDEM Loop-Tick (~1×/s) feuerte,
+sobald `window_minutes` um war — unabhängig davon, ob gerade mitten in
+einer MP3 gelesen wurde. `news_break.active_slot()` ist eine reine
+Zeitfunktion (vergleicht `datetime.now()` gegen die Fenstergrenze, kein
+gespeicherter Zustand) — der bestehende `pcm.size==0`-Zweig (MP3 zu
+Ende) hatte dagegen schon vorher eine korrekte, weil zum späteren
+Zeitpunkt neu ausgewertete `active_slot()`-Prüfung.
+
+### Umsetzung
+
+- `radiosabbelnich.py`, Hauptloop: den Fensterablauf-Check VOR
+  `read_window()` ersatzlos entfernt. `news_break_active` ist
+  ausschließlich dann `True`, wenn `start_news_break_mp3()` bereits
+  erfolgreich eine MP3 gestartet hat (kein Zwischenzustand "aktiv,
+  aber keine MP3 geladen") — der entfernte Check hatte deshalb an
+  keiner Stelle mehr eine Aufgabe, die nicht schon der bestehende
+  `pcm.size==0`-Zweig übernimmt.
+- **Zusätzliche Präzisierung** (im Plan mit Nutzer abgestimmt): der
+  Nachlade-Check im `pcm.size==0`-Zweig prüfte bisher nur
+  `if news_break.active_slot(cfg):` (bloßer Wahrheitswert — "ist
+  IRGENDEIN Fenster gerade aktiv"). Verschärft auf
+  `news_break.active_slot(cfg) == news_break_served_slot` (Vergleich
+  auf die KONKRETE Slot-Identität, die gerade bedient wird) — sonst
+  könnte eine ungewöhnlich lange MP3-Kette, die zufällig bis ins
+  NÄCHSTE Halbe-Stunde-Fenster hineinreicht, fälschlich als "noch
+  dasselbe Fenster" durchgehen und unter falscher Slot-Identität eine
+  weitere MP3 nachladen statt korrekt zurückzuschalten.
+- `README.md` (DE+EN): Beschreibung der Nachrichten-Pause um den Hinweis
+  "MP3 wird immer zu Ende gespielt, auch über `window_minutes` hinaus"
+  ergänzt.
+- `CLAUDE.md`: neuer Absatz im Nachrichten-Pause-Abschnitt mit Root
+  Cause, Fix und der Slot-Identitäts-Präzisierung.
+- `VERSION`: v1.1.20 → v1.1.21.
+
+### Bewusst NICHT gemacht
+
+- Kein neues Settings-Feld/keine Konfigurierbarkeit dieses Verhaltens
+  — explizite Vorgabe des Nutzers, "immer zu Ende spielen" ist das
+  gewünschte Standardverhalten, nicht optional.
+- Keine Änderung an `resume_from_news_break()`, `start_news_break_mp3()`,
+  dem Eintritts-Zweig, Watchdog oder den manuellen Interrupt-Pfaden —
+  alle unberührt, wie geplant.
+
+### Verifiziert
+
+- Isolierter Testlauf (Muster wie in früheren Sessions: `python/*.py`
+  flach in ein Temp-Verzeichnis kopiert, eigene `stations.json`/
+  `settings.json`, separater Icecast-Test-Mount `newsbreaktest.mp3`,
+  Produktivcontainer nicht angefasst): eine "Radio"-Quelle über einen
+  lokalen `python -m http.server` sowie eine 6s-Test-MP3 im
+  Nachrichten-Pause-Ordner. `window_minutes` dynamisch aus der
+  aktuellen Wall-Clock-Zeit berechnet (da `active_slot()` an echte
+  Halbe-Stunde-Grenzen gebunden ist, nicht an den Testlauf-Start), so
+  dass das Fenster ca. 25s nach Programmstart abläuft.
+  - Log bestätigt: MP3s wurden alle ~6s (= Clip-Länge) nachgeladen,
+    bis 13:42:27. Die dort gestartete MP3 lief trotz zu diesem
+    Zeitpunkt bereits abgelaufenem Fenster **komplett bis 13:42:32
+    durch** (volle 6s), erst DANACH "📰 Nachrichten-Pause-MP3 zu Ende
+    — zurück zu: Teststation" — exakt das gewünschte Verhalten, klar
+    unterscheidbar vom alten Bug (der hätte binnen ~1s nach
+    Fensterablauf abgebrochen, nicht nach vollen 6s).
+  - Die Slot-Identitäts-Präzisierung selbst (Drift ins nächste
+    Halbe-Stunde-Fenster) wurde NICHT live nachgestellt (bräuchte
+    einen Testlauf über eine reale Fenstergrenze hinweg, unpraktikabel
+    kurzfristig) — per Code-Analyse verifiziert: `news_break_served_slot`
+    wird beim Eintritt in ein Fenster einmalig gesetzt und bleibt über
+    die gesamte Fensterdauer stabil, der Vergleich gegen den frisch
+    berechneten `active_slot()` ist damit strikt korrekter als der
+    vorherige bloße Wahrheitswert-Check.
+- `docker compose up -d --build radiosabbelnich`: Build und Start
+  fehlerfrei, `/api/status` liefert HTTP 200, keine Tracebacks im Log.
+- Testverzeichnis und Hintergrundprozesse (HTTP-Server, Testinstanz)
+  nach Abschluss vollständig aufgeräumt.

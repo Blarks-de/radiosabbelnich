@@ -325,6 +325,28 @@ laufende Sender), und ein manueller Klick auf genau diesen pausierten Sender
 braucht `news_break_active or manual_id != current["id"]` statt nur `!=` —
 sonst wird der Klick sonst stillschweigend verschluckt.
 
+**Fensterablauf bricht eine laufende MP3 NICHT mehr mitten in der
+Wiedergabe ab** (Bugfix, seit 2026-08-12, siehe SESSION.md) — vorher gab
+es VOR `read_window()` einen zweiten, rein zeitbasierten Check
+(`if news_break_active and not slot: resume_from_news_break(...)`), der
+bei jedem Loop-Tick (~1×/s) feuerte, sobald `window_minutes` um war,
+unabhängig davon, ob gerade mitten in einer MP3 gelesen wurde. Dieser
+Check ist ersatzlos entfernt: `news_break_active` ist AUSSCHLIESSLICH
+dann `True`, wenn `start_news_break_mp3()` bereits erfolgreich eine MP3
+gestartet hat (kein Zwischenzustand "aktiv, aber keine MP3 geladen"),
+der Übergang zurück zum pausierten Sender passiert seitdem
+ausschließlich noch im `pcm.size == 0`-Zweig (MP3 zu Ende) — eine
+laufende MP3 spielt dadurch immer bis zum natürlichen Ende, auch wenn
+das die Pause über `window_minutes` hinaus verlängert. Der dortige
+Nachlade-Check wurde bei derselben Gelegenheit von einem bloßen
+Wahrheitswert (`if news_break.active_slot(cfg): nächste MP3`) auf einen
+Slot-Identitäts-Vergleich verschärft (`active_slot(cfg) ==
+news_break_served_slot`) — sonst würde eine ungewöhnlich lange
+MP3-Kette, die zufällig bis ins NÄCHSTE Halbe-Stunde-Fenster
+hineinreicht, fälschlich als "noch dasselbe Fenster" durchgehen und
+eine weitere MP3 unter falscher Slot-Identität nachladen, statt
+korrekt zurückzuschalten.
+
 ### Radio/Musiksammlung-Modus (Grundgerüst, seit 2026-08-11)
 
 Erster Baustein der Musik-Library-Roadmap (README, "Zukünftige
@@ -503,6 +525,65 @@ Root zwischen Scan und Query-Play, zeigen die Pfade ins Leere. Kein
 Bug, sondern dieselbe implizite Annahme, die schon Phase 1 hatte (der
 Scan-Endpoint scannt ebenfalls einfach `state.music_library_path` zum
 Zeitpunkt des Scans) — ein Re-Scan nach einer Root-Änderung behebt das.
+
+### Musik-Library-BPM (`music_bpm.py`, Phase 3, seit 2026-08-12)
+
+Vierte Datei im Musik-Library-Baukasten (Player → Scan → Query → BPM),
+liefert die Datengrundlage für die zuvor deaktivierten
+schnell/langsam-Buttons: `music_query.query_by_tempo(db, "fast"|"slow")`
+mit festen Schwellwerten (`FAST_BPM_MIN=120`, `SLOW_BPM_MAX=90`, beide
+in `music_query.py`) — der Bereich dazwischen fällt bei BEIDEN raus,
+bewusst wie beim Genre-Teilstring-Match keine Musikwissenschaft,
+sondern eine grobe, nachjustierbare Konvention.
+
+**Bibliothekswahl aubio statt librosa** (Nutzer-Entscheidung nach
+Abwägung, siehe SESSION.md): librosa zieht einen sehr schweren
+Dependency-Baum (numba+llvmlite allein >100 MB, dazu scipy/scikit-learn/
+soundfile/audioread) — passt schlecht zum bisher schlanken
+Abhängigkeitsstil des Projekts (mutagen war vor aubio die einzige
+Ergänzung). aubio ist zur LAUFZEIT sehr leicht (reine C-Bibliothek,
+dünnes Python-Binding, an echten Dateien gemessen ~0,25s pro Track
+inkl. ffmpeg-Decode eines 60s-Schnipsels statt des kompletten Tracks).
+
+**aubio 0.4.9 (PyPI, letztes Release 2019) baut NICHT sauber gegen
+aktuelles numpy** — live hier aufgetreten, nicht nur theoretisch:
+`PyUFuncGenericFunction` erwartet seit numpy>=1.22 `const npy_intp*`
+statt `npy_intp*` in den ufunc-Callback-Signaturen, aubios gebündeltes
+`python/ext/ufuncs.c` wurde seit 2019 nicht angepasst →
+"incompatible pointer type"-Compile-Fehler. Dockerfile lädt den
+Source-Tarball deshalb per `curl` direkt von PyPI (bewusst NICHT über
+`pip download` — das hängt sich in diesem Image an einer isolierten
+Build-Umgebung auf, zweiter live aufgetretener Fehler beim ersten
+Versuch), patcht die zwei betroffenen Funktionssignaturen per `sed`
+(zwei `const`-Ergänzungen) und installiert danach mit
+`pip install --no-build-isolation` (nutzt das schon vorhandene numpy
+aus der vorherigen Schicht, statt eine zweite isolierte Build-Umgebung
+samt eigenem numpy-Download aufzusetzen). Analog zu
+`fix_silero_execstack.py` — Workaround für eine Toolchain-/Library-
+Versionsinkompatibilität in einer Fremdbibliothek, nicht in diesem
+Projekt. `build-essential`+`curl` bleiben dafür dauerhaft im Image
+(bewusster Größen-Tradeoff, siehe README-Roadmap).
+
+**Nur ein Schnipsel wird dekodiert**, nicht der komplette Track (Default
+60s ab Sekunde 20, oder ab 0 bei kürzeren Tracks laut mutagen-Duration)
+— reicht für eine Tempo-Schätzung, hält den Scan trotz BPM-Analyse
+praktikabel schnell.
+
+**BPM-Analyse läuft im selben Scan-Durchlauf** wie das ID3-Parsing
+(`music_scan.py`), profitiert von derselben mtime/Größe-Skip-Logik aus
+Phase 1 — kein zweiter Endpoint. Schema-Migration
+(`ALTER TABLE tracks ADD COLUMN bpm REAL`, PRAGMA-Check davor, da
+SQLite kein "ADD COLUMN IF NOT EXISTS" kennt) reicht dafür ALLEIN NICHT:
+unveränderte Dateien (gleiche mtime/Größe wie beim letzten Scan) wurden
+schon vor der Migration als "unverändert" übersprungen und hätten ohne
+Sonderbehandlung dauerhaft `bpm=NULL` behalten, weil ihr mtime/Größe-
+Vergleich ja weiterhin "unverändert" ergibt. Deshalb dritter Zweig in
+`scan_library()`: unverändert + `bpm IS NULL` → NICHT der teure volle
+mutagen/APIC-Reparse, sondern nur `UPDATE tracks SET bpm = ...` mit
+frisch geschätztem Wert (eigener `bpm_backfilled`-Zähler im
+Ergebnis-Dict, getrennt von `unchanged`). Live an der bestehenden
+402-Track-DB verifiziert: `bpm_backfilled: 402`, keine erneuten
+mutagen/Cover-Reads nötig.
 
 ### STT-Sprachfilter (stt_filter.py)
 

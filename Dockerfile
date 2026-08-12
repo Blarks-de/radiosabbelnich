@@ -1,9 +1,44 @@
 FROM python:3.12-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libgomp1 \
+# build-essential NUR wegen aubio: das PyPI-Paket liefert kein Wheel, pip
+# baut es aus dem Source-Tarball (setup.py, braucht gcc) -- bleibt danach
+# im Image (bewusster Größen-Tradeoff, siehe CLAUDE.md/SESSION.md zu
+# Phase 3 der Musik-Library-Roadmap: aubio selbst ist zur LAUFZEIT sehr
+# leichtgewichtig, ~0,25s pro Track inkl. Decode, deutlich schlanker als
+# die Alternative librosa mit ihrem numba/scipy/scikit-learn-Rattenschwanz).
+# curl NUR fürs Herunterladen des aubio-Source-Tarballs unten (bewusst
+# NICHT "pip download" dafür -- das hängt sich in diesem Image an einer
+# isolierten Build-Umgebung auf, siehe SESSION.md).
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libgomp1 build-essential curl \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir numpy silero-vad-lite vosk faster-whisper psutil mutagen
+
+# aubio 0.4.9 (letztes PyPI-Release, 2019) fürs BPM-Tempo (Phase 3 der
+# Musik-Library, siehe python/music_bpm.py) -- kein Wheel auf PyPI, UND
+# baut nicht sauber gegen aktuelles numpy: PyUFuncGenericFunction
+# erwartet seit numpy>=1.22 "const npy_intp*" statt "npy_intp*" in den
+# ufunc-Callback-Signaturen, aubios gebündeltes python/ext/ufuncs.c
+# wurde seit 2019 nicht angepasst -> "incompatible pointer type"-
+# Compile-Fehler (live hier aufgetreten, siehe SESSION.md). Patch
+# analog zu fix_silero_execstack.py (Workaround für eine Toolchain-/
+# Library-Versionsinkompatibilität in einer Fremdbibliothek, nicht in
+# diesem Projekt) -- zwei minimal-invasive sed-Ersetzungen auf den
+# direkt von PyPI geladenen Source-Tarball. --no-build-isolation bei
+# der Installation: nutzt das schon installierte numpy von oben direkt
+# statt eine zweite, isolierte Build-Umgebung samt eigenem numpy-Download
+# aufzusetzen (genau DAS hing sich mit "pip download"/Standard-Isolation
+# hier auf, siehe SESSION.md).
+RUN curl -fsSL -o /tmp/aubio.tar.gz \
+       https://files.pythonhosted.org/packages/cd/80/302d89240603e5347c7f8026c8b02c59f8dfaec66c91a743d82de7c86006/aubio-0.4.9.tar.gz \
+    && mkdir -p /tmp/aubio-src && tar xzf /tmp/aubio.tar.gz -C /tmp/aubio-src \
+    && sed -i \
+       -e 's/static void aubio_PyUFunc_d_d(char \*\*args, npy_intp \*dimensions,/static void aubio_PyUFunc_d_d(char **args, npy_intp const *dimensions,/' \
+       -e 's/static void aubio_PyUFunc_f_f_As_d_d(char \*\*args, npy_intp \*dimensions,/static void aubio_PyUFunc_f_f_As_d_d(char **args, npy_intp const *dimensions,/' \
+       -e 's/^                            npy_intp\* steps, void\* data)$/                            npy_intp const * steps, void* data)/' \
+       /tmp/aubio-src/aubio-0.4.9/python/ext/ufuncs.c \
+    && pip install --no-cache-dir --no-build-isolation /tmp/aubio-src/aubio-0.4.9 \
+    && rm -rf /tmp/aubio.tar.gz /tmp/aubio-src
 
 # silero-vad-lite's .so verlangt einen ausführbaren Stack, den der Kernel
 # auf diesem Host beim dlopen() verweigert -> ohne Patch fällt die
@@ -28,6 +63,7 @@ COPY python/station_import.py .
 COPY python/logging_setup.py .
 COPY python/news_break.py .
 COPY python/music_library.py .
+COPY python/music_bpm.py .
 COPY python/music_query.py .
 COPY python/music_scan.py .
 COPY python/folder_browse.py .

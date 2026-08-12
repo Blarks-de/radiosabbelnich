@@ -1875,17 +1875,16 @@ _MUSIC_PAGE_HTML = """<!doctype html>
     color: #888; margin-bottom: .35rem;
   }
   .category-row { display: flex; flex-wrap: wrap; gap: .5rem; }
+  /* Seit Phase 3 (music_bpm.py) sind alle sechs Kategorie-/Favoriten-
+     Buttons echte Query-Buttons (music_query.py), keine reinen
+     Platzhalter mehr -- eine "disabled/ausgegraut"-Variante gibt es in
+     dieser Reihe deshalb nicht mehr, gleiche Akzentfarbe wie Play/Stop
+     und Zurück/Nächster. */
   .category-row button {
     flex: 1 1 28%; padding: .6rem .4rem; font-size: .85rem; border-radius: .4rem;
-    border: 1px solid #999; background: none; color: inherit; opacity: .55; cursor: default;
+    border: 1px solid #1abc9c; background: #1abc9c1a; color: inherit; cursor: pointer;
   }
-  /* Query-Buttons (Phase 2, music_query.py) -- im Gegensatz zu den grau
-     ausgegrauten Platzhaltern (schnell/langsam) tatsächlich klickbar,
-     gleiche Akzentfarbe wie Play/Stop und Zurück/Nächster. */
-  .category-row button.music-query-btn {
-    opacity: 1; cursor: pointer; border-color: #1abc9c; background: #1abc9c1a;
-  }
-  .category-row button.music-query-btn:active { background: #1abc9c33; }
+  .category-row button:active { background: #1abc9c33; }
   .play-stop-row { text-align: center; margin-top: 1.5rem; }
   #btn-play-stop {
     width: 6.5rem; height: 6.5rem; border-radius: 50%; font-size: 2.4rem;
@@ -1923,16 +1922,16 @@ _MUSIC_PAGE_HTML = """<!doctype html>
 </div>
 
 <!-- Kategorie-/Favoriten-Buttons (Phase 2, music_query.py): rock/klassik
-     und Queen/Pavarotti lösen eine echte Query gegen music_library.db aus
-     (Genre- bzw. Artist-Teilstring-Match, siehe dortiger Modul-Docstring).
-     schnell/langsam bleiben disabled -- es gibt keine BPM-Daten in der DB
-     (spätere Phase, siehe README "Zukünftige Features"), eine Ableitung
-     aus dem Genre-Tag wäre geraten statt abgefragt. -->
+     Queen/Pavarotti/rock/klassik lösen eine echte Query gegen
+     music_library.db aus (Artist-/Genre-Teilstring-Match, siehe
+     music_query.py). schnell/langsam seit Phase 3 (music_bpm.py) über
+     die "bpm"-Spalte -- Schwellwerte in music_query.py
+     (FAST_BPM_MIN/SLOW_BPM_MAX). -->
 <div class="category-group">
   <div class="category-group-heading" data-i18n="music_categories_heading">Kategorien</div>
   <div class="category-row">
-    <button disabled title="Noch nicht verfügbar (benötigt BPM-Daten, spätere Phase)" data-i18n-title="music_category_unavailable_title">schnell</button>
-    <button disabled title="Noch nicht verfügbar (benötigt BPM-Daten, spätere Phase)" data-i18n-title="music_category_unavailable_title">langsam</button>
+    <button class="music-query-btn" data-query-type="tempo" data-query-value="fast">schnell</button>
+    <button class="music-query-btn" data-query-type="tempo" data-query-value="slow">langsam</button>
     <button class="music-query-btn" data-query-type="genre" data-query-value="rock">rock</button>
     <button class="music-query-btn" data-query-type="genre" data-query-value="klassik">klassik</button>
   </div>
@@ -4003,12 +4002,23 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                 tracks = music_query.query_by_artist(music_library_db_path, q_value)
             elif q_type == "genre":
                 tracks = music_query.query_by_genre(music_library_db_path, q_value)
+            elif q_type == "tempo":
+                try:
+                    tracks = music_query.query_by_tempo(music_library_db_path, q_value)
+                except ValueError as e:
+                    self._send_json({"ok": False, "error": str(e)}, status=400)
+                    return
             else:
                 self._send_json({"ok": False, "error": f"Unbekannter Query-Typ: {q_type!r}"}, status=400)
                 return
 
             if not tracks:
-                self._send_json({"ok": False, "error": f"Keine Treffer für '{q_value}'."})
+                # Bei "tempo" ist q_value "fast"/"slow" (music_query.py-
+                # interner Modus-Name) -- fürs Frontend die deutsche
+                # Button-Beschriftung zeigen, nicht den rohen Modus-String.
+                shown_value = {"fast": "schnell", "slow": "langsam"}.get(q_value, q_value) \
+                    if q_type == "tempo" else q_value
+                self._send_json({"ok": False, "error": f"Keine Treffer für '{shown_value}'."})
                 return
             state.request_music_play(tracks=tracks)
             self._send_json({"ok": True, "track_count": len(tracks)})

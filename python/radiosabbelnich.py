@@ -1421,25 +1421,38 @@ def main():
                     speech_buffer = []
                     fp_checked_this_run = False
                 continue
-            if news_break_active and not slot:
-                resume_from_news_break("Nachrichten-Pause-Fenster abgelaufen")
-                continue
+            # Bewusst KEIN "if news_break_active and not slot: resume_from_
+            # news_break()" mehr hier -- eine laufende MP3 wurde dadurch
+            # mitten in der Wiedergabe hart abgebrochen, sobald window_
+            # minutes ablief (Bug, siehe SESSION.md). news_break_active
+            # ist ausschließlich dann True, wenn start_news_break_mp3()
+            # bereits erfolgreich eine MP3 gestartet hat -- es gibt keinen
+            # Zwischenzustand "aktiv, aber keine MP3 geladen". Der Übergang
+            # zurück zum pausierten Sender passiert deshalb ausschließlich
+            # noch unten im pcm.size==0-Zweig (MP3 zu Ende), die laufende
+            # MP3 wird dadurch immer bis zum natürlichen Ende gespielt,
+            # auch wenn das die Pause über window_minutes hinaus verlängert.
 
             pcm, pcm_stereo = source.read_window(WINDOW_SECONDS)
             if pcm.size == 0:
                 if news_break_active:
-                    # Die MP3 ist zu Ende (kürzer als das Fenster) -- das ist
-                    # ein planmäßiges Ereignis, kein toter Sender. VOR dem
-                    # Watchdog abgefangen, damit der davon nichts mitbekommt
-                    # (siehe Modul-weite Konstanten oben/CLAUDE.md).
+                    # Die MP3 ist zu Ende -- das ist ein planmäßiges
+                    # Ereignis, kein toter Sender. VOR dem Watchdog
+                    # abgefangen, damit der davon nichts mitbekommt (siehe
+                    # Modul-weite Konstanten oben/CLAUDE.md).
                     #
-                    # Läuft das Zeitfenster selbst noch (window_minutes noch
-                    # nicht um)? Dann nächste zufällige MP3 nachladen statt
-                    # sofort zurückzuschalten -- ursprünglicher Bug: pro
-                    # Fenster wurde nur genau eine Datei gespielt, danach
-                    # sofort zurück zum Sender, egal wie viel vom Fenster
-                    # noch übrig war (siehe SESSION.md).
-                    if (news_break.active_slot(state.news_break_cfg)
+                    # Läuft das Zeitfenster noch UND handelt es sich noch
+                    # um DASSELBE Fenster, das gerade bedient wird (Vergleich
+                    # gegen news_break_served_slot, nicht nur "irgendein
+                    # Fenster aktiv")? Dann nächste zufällige MP3 nachladen
+                    # statt zurückzuschalten -- ursprünglicher Bug: pro
+                    # Fenster wurde nur genau eine Datei gespielt (siehe
+                    # SESSION.md). Der Slot-Vergleich (statt eines bloßen
+                    # Wahrheitswert-Checks) verhindert außerdem, dass eine
+                    # ungewöhnlich lange gelaufene MP3-Kette, die zufällig
+                    # bis ins NÄCHSTE Halbe-Stunde-Fenster hineinreicht,
+                    # fälschlich als "noch dasselbe Fenster" behandelt wird.
+                    if (news_break.active_slot(state.news_break_cfg) == news_break_served_slot
                             and start_news_break_mp3(state.news_break_cfg)):
                         log.info("📰 Nachrichten-Pause: nächste MP3 '%s'", news_break_recent_files[-1])
                         last_switch_time = time.time()

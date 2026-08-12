@@ -176,8 +176,12 @@ curl -X POST http://<host>:5000/api/config/settings \
 Ein Zeitfenster wird höchstens einmal betreten — läuft eine MP3 kürzer als
 das restliche Fenster, wird automatisch eine weitere zufällige MP3
 nachgeladen (kein Repeat direkt hintereinander, sofern der Ordner mehr als
-eine Datei enthält), bis `window_minutes` abgelaufen ist. Erst dann geht's
-automatisch zurück zum pausierten Sender. Ein manueller Sender-Wechsel
+eine Datei enthält), bis `window_minutes` abgelaufen ist. Die gerade
+laufende MP3 wird dabei **immer bis zu ihrem Ende gespielt**, auch wenn
+`window_minutes` währenddessen abläuft — die Pause dauert dadurch im
+Zweifel etwas länger als eingestellt, statt eine MP3 mittendrin
+abzuwürgen. Erst danach geht's automatisch zurück zum pausierten Sender.
+Ein manueller Sender-Wechsel
 während der Pause bricht sie sofort ab (eigene Entscheidung schlägt
 Automatik, wie überall sonst in RadioSabbelNich auch). Während der Pause
 pausiert auch die automatische Sprache-Erkennung (VAD/Heuristik/
@@ -787,17 +791,26 @@ scannen, taggen und nach Kategorien abspielbar machen.
   funktionsfähig: **Queen/Pavarotti** filtern per Artist-Teilstring,
   **rock/klassik** per Genre-Teilstring (`LIKE '%rock%'` — reine
   Freitext-Ähnlichkeit, kein exaktes Genre-Mapping, deckt sich nicht mit
-  jeder Schreibweise). **schnell/langsam bleiben bewusst deaktiviert**
-  (mit Tooltip) — dafür fehlen BPM-Daten, siehe Phase 3 unten. Ein Klick
-  löst dieselbe `POST /api/music/play`-Route wie der normale Play-Knopf
-  aus (optionaler `query`-Body statt eines zweiten Endpoints), ersetzt
-  eine laufende Wiedergabe sofort durch die Query-Ergebnisliste und
-  zeigt bei 0 Treffern eine klare Meldung statt nichts zu tun. Läuft
-  Artist/Titel bekannt (aus der DB), zeigt "Jetzt läuft" **Artist –
-  Titel** statt nur des Dateinamens — auf `/musik` UND auf der
-  Player-Seite.
-- Phase 3 (optional, später): Audio-Features (BPM, Energy via librosa)
-  für Smart-Playlists, Duplikat-Erkennung, kleines Web-UI zum Browsen
+  jeder Schreibweise). **schnell/langsam** seit Phase 3 ebenfalls aktiv
+  (BPM-Teilstring bzw. -Bereich, siehe unten). Ein Klick löst dieselbe
+  `POST /api/music/play`-Route wie der normale Play-Knopf aus
+  (optionaler `query`-Body statt eines zweiten Endpoints), ersetzt eine
+  laufende Wiedergabe sofort durch die Query-Ergebnisliste und zeigt bei
+  0 Treffern eine klare Meldung statt nichts zu tun. Läuft Artist/Titel
+  bekannt (aus der DB), zeigt "Jetzt läuft" **Artist – Titel** statt nur
+  des Dateinamens — auf `/musik` UND auf der Player-Seite.
+- ✅ **Phase 3 (BPM-Teil) umgesetzt**: BPM-Schätzung (`music_bpm.py`,
+  aubio statt librosa — deutlich leichtgewichtiger zur Laufzeit, siehe
+  CLAUDE.md für den Grund und einen nötigen Build-Patch) läuft im selben
+  Scan-Durchlauf wie das ID3-Parsing (gleiche mtime/Größe-Skip-Logik,
+  nur ein 60s-Schnipsel statt des kompletten Tracks wird dekodiert:
+  ~0,25s/Track gemessen). `schnell` (≥120 BPM) / `langsam` (≤90 BPM)
+  sind feste Schwellwerte, dazwischen fällt bei beiden raus — bekannte
+  Grenze: Oktavfehler (halbe/doppelte Geschwindigkeit) sind ein
+  generisches Problem jeder Beat-Tracking-Methode, an einer echten
+  402-Track-Sammlung gemessen fielen dadurch spürbar mehr Tracks unter
+  "schnell" als musikalisch stimmen dürfte. Energy/Duplikat-Erkennung/
+  Browse-UI aus der ursprünglichen Phase-3-Idee bleiben offen.
 - Enrichment (späterer Baustein, getrennt vom Scan): fehlende
   Cover/Lyrics nachträglich über externe Quellen (z.B.
   MusicBrainz/Cover Art Archive, lrclib.net) ergänzen, langfristiges
@@ -989,8 +1002,12 @@ curl -X POST http://<host>:5000/api/config/settings \
 A time window is served at most once — if an MP3 finishes before the
 remaining window is over, another random MP3 is automatically loaded
 (no immediate repeat, as long as the folder has more than one file)
-until `window_minutes` has elapsed. Only then does it automatically
-return to the paused station. A manual station switch during the break
+until `window_minutes` has elapsed. The MP3 currently playing is
+**always played to the end**, even if `window_minutes` runs out while
+it's playing — the break may end up running a bit longer than
+configured rather than cutting a track off mid-playback. Only after
+that does it automatically return to the paused station. A manual
+station switch during the break
 cancels it immediately (a manual decision beats automation, as
 everywhere else in RadioSabbelNich). During the break, automatic speech
 detection (VAD/heuristic/fingerprint) is also paused — the MP3 itself
@@ -1580,16 +1597,26 @@ tag it, and make it playable by category.
   mostly functional: **Queen/Pavarotti** filter by artist substring,
   **rock/klassik** by genre substring (`LIKE '%rock%'` — plain text
   similarity, not an exact genre mapping, so it won't catch every
-  spelling). **schnell/langsam stay deliberately disabled** (with a
-  tooltip) — that needs BPM data, see phase 3 below. A click reuses the
-  same `POST /api/music/play` route as the regular play button (an
-  optional `query` body instead of a second endpoint), replaces any
-  running playback immediately with the query results, and shows a
-  clear message on 0 hits instead of doing nothing. Once artist/title
-  are known (from the DB), "now playing" shows **artist – title**
-  instead of just the filename — on `/musik` AND on the player page.
-- Phase 3 (optional, later): audio features (BPM, energy via librosa)
-  for smart playlists, duplicate detection, small web UI for browsing
+  spelling). **schnell/langsam** ("fast"/"slow") are active too since
+  phase 3 (BPM substring/range, see below). A click reuses the same
+  `POST /api/music/play` route as the regular play button (an optional
+  `query` body instead of a second endpoint), replaces any running
+  playback immediately with the query results, and shows a clear
+  message on 0 hits instead of doing nothing. Once artist/title are
+  known (from the DB), "now playing" shows **artist – title** instead
+  of just the filename — on `/musik` AND on the player page.
+- ✅ **Phase 3 (BPM part) implemented**: BPM estimation (`music_bpm.py`,
+  aubio instead of librosa — much lighter at runtime, see CLAUDE.md for
+  why and for a required build patch) runs in the same scan pass as the
+  ID3 parsing (same mtime/size skip logic, only a 60s snippet gets
+  decoded instead of the whole track: ~0.25s/track measured). `schnell`
+  (≥120 BPM) / `langsam` (≤90 BPM) are fixed thresholds, anything in
+  between falls under neither — known limitation: octave errors (half/
+  double tempo) are a generic problem of any beat-tracking method;
+  measured against a real 402-track collection, noticeably more tracks
+  ended up under "fast" than would musically make sense. Energy/
+  duplicate detection/browse UI from the original phase 3 idea remain
+  open.
 - Enrichment (later building block, separate from the scan): fill in
   missing covers/lyrics afterwards from external sources (e.g.
   MusicBrainz/Cover Art Archive, lrclib.net), long-term goal: every

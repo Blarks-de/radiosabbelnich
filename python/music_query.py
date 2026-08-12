@@ -31,19 +31,26 @@ import sqlite3
 
 log = logging.getLogger("musicquery")
 
-_SELECT = "SELECT id, filepath, artist, title, album, cover_path FROM tracks"
+_SELECT = "SELECT id, filepath, artist, title, album, cover_path, bpm FROM tracks"
 _ORDER = " ORDER BY artist COLLATE NOCASE, album COLLATE NOCASE, filepath COLLATE NOCASE"
+
+# Phase 3 (music_bpm.py): Standardkonvention statt Musikwissenschaft --
+# < 90 BPM gilt als "langsam", >= 120 BPM als "schnell", der Bereich
+# dazwischen fällt bei BEIDEN Buttons raus. Gleiche bewusste Unschärfe
+# wie beim Genre-Teilstring-Match, siehe Moduldocstring.
+SLOW_BPM_MAX = 90
+FAST_BPM_MIN = 120
 
 
 def _rows_to_tracks(rows) -> list[dict]:
     tracks = []
-    for track_id, filepath, artist, title, album, cover_path in rows:
+    for track_id, filepath, artist, title, album, cover_path, bpm in rows:
         display_title = title or os.path.splitext(os.path.basename(filepath))[0]
         label = f"{artist} – {display_title}" if artist else display_title
         tracks.append({
             "id": track_id, "filepath": filepath, "artist": artist,
             "title": display_title, "album": album, "cover_path": cover_path,
-            "label": label,
+            "bpm": bpm, "label": label,
         })
     return tracks
 
@@ -77,3 +84,15 @@ def query_by_artist(db_path: str, artist_substring: str) -> list[dict]:
 
 def query_by_genre(db_path: str, genre_substring: str) -> list[dict]:
     return _query(db_path, "WHERE genre LIKE ?", (f"%{genre_substring}%",))
+
+
+def query_by_tempo(db_path: str, mode: str) -> list[dict]:
+    """mode: "fast" (>= FAST_BPM_MIN) oder "slow" (> 0 und <= SLOW_BPM_MAX).
+    Tracks ohne BPM-Wert (noch nicht/nicht erfolgreich analysiert, siehe
+    music_bpm.py) tauchen in KEINEM der beiden Modi auf -- kein Rätselraten
+    mit einem Platzhalterwert."""
+    if mode == "fast":
+        return _query(db_path, "WHERE bpm >= ?", (FAST_BPM_MIN,))
+    if mode == "slow":
+        return _query(db_path, "WHERE bpm > 0 AND bpm <= ?", (SLOW_BPM_MAX,))
+    raise ValueError(f"Unbekannter Tempo-Modus: {mode!r} (erwartet 'fast' oder 'slow')")

@@ -42,6 +42,12 @@ wird übersprungen) -- sonst würde die abschließende Aufräum-Phase
 (Zeilen zu nicht mehr gefundenen Pfaden löschen) einen bestehenden,
 gültigen DB-Eintrag für eine nur vorübergehend defekte Datei fälschlich
 als "Datei wurde gelöscht" werten und entfernen.
+
+BPM-Schätzung (Phase 3, siehe music_bpm.py) läuft im selben Durchlauf wie
+das ID3-Parsing, profitiert also von derselben mtime/Größe-Skip-Logik --
+unveränderte Tracks werden nicht neu analysiert. Ein fehlgeschlagener/
+unmöglicher BPM-Wert (music_bpm.estimate_bpm() gibt dann None zurück)
+verwirft NICHT die ganze Zeile, nur das bpm-Feld bleibt NULL.
 """
 
 import hashlib
@@ -54,6 +60,7 @@ import mutagen
 from mutagen import MutagenError
 from mutagen.id3 import ID3, ID3NoHeaderError
 
+import music_bpm
 from music_library import AUDIO_EXTENSIONS
 
 log = logging.getLogger("musicscan")
@@ -75,13 +82,23 @@ def _init_schema(conn: sqlite3.Connection):
             genre TEXT,
             year INTEGER,
             cover_path TEXT,
+            bpm REAL,
             mtime REAL NOT NULL,
             size INTEGER NOT NULL,
             scanned_at TEXT NOT NULL
         )
     """)
+    # Migration für DBs aus Phase 1/2 (vor der bpm-Spalte, siehe SESSION.md
+    # Phase 3): das CREATE TABLE IF NOT EXISTS oben greift bei einer schon
+    # bestehenden Tabelle nicht mehr -- SQLite kennt kein "ADD COLUMN IF
+    # NOT EXISTS", deshalb erst per PRAGMA prüfen, ob die Spalte fehlt.
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(tracks)")}
+    if "bpm" not in columns:
+        conn.execute("ALTER TABLE tracks ADD COLUMN bpm REAL")
+        log.info("🎵 Musik-DB-Schema migriert: Spalte 'bpm' ergänzt.")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tracks_genre ON tracks(genre)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tracks_bpm ON tracks(bpm)")
     conn.commit()
 
 
@@ -144,15 +161,16 @@ def scan_library(root: str, db_path: str = MUSIC_LIBRARY_DB_FILE,
     conn = sqlite3.connect(db_path)
     _init_schema(conn)
     existing = {
-        row[0]: {"mtime": row[1], "size": row[2], "cover_path": row[3]}
-        for row in conn.execute("SELECT filepath, mtime, size, cover_path FROM tracks")
+        row[0]: {"mtime": row[1], "size": row[2], "cover_path": row[3], "bpm": row[4]}
+        for row in conn.execute("SELECT filepath, mtime, size, cover_path, bpm FROM tracks")
     }
 
     if progress:
         progress.set_phase("scanning", total=len(all_files))
 
     found = set()
-    stats = {"found": len(all_files), "added": 0, "updated": 0, "unchanged": 0, "errors": 0}
+    stats = {"found": len(all_files), "added": 0, "updated": 0, "unchanged": 0,
+              "bpm_backfilled": 0, "errors": 0}
 
     for full_path, rel_path in all_files:
         found.add(rel_path)
@@ -166,10 +184,24 @@ def scan_library(root: str, db_path: str = MUSIC_LIBRARY_DB_FILE,
             continue
 
         prev = existing.get(rel_path)
-        if prev and prev["mtime"] == st.st_mtime and prev["size"] == st.st_size:
-            # Unverändert seit letztem Scan -- teures mutagen/APIC-Parsing
+        unchanged = prev is not None and prev["mtime"] == st.st_mtime and prev["size"] == st.st_size
+        if unchanged and prev["bpm"] is not None:
+            # Unverändert seit letztem Scan UND schon ein BPM-Wert
+            # vorhanden -- teures mutagen/APIC-Parsing UND BPM-Decode
             # überspringen (siehe Modul-Docstring).
             stats["unchanged"] += 1
+            if progress:
+                progress.increment_checked()
+            continue
+        if unchanged:
+            # Unverändert, aber bpm ist NULL -- Zeile stammt aus einer
+            # Phase-1/2-DB von VOR der bpm-Spalte (siehe _init_schema()-
+            # Migration). ID3-Tags/Cover unverändert, deshalb KEIN voller
+            # mutagen-Reparse nötig -- nur die BPM-Lücke nachtragen, ohne
+            # den Rest der Zeile anzufassen.
+            bpm = music_bpm.estimate_bpm(full_path)
+            conn.execute("UPDATE tracks SET bpm = ? WHERE filepath = ?", (bpm, rel_path))
+            stats["bpm_backfilled"] += 1
             if progress:
                 progress.increment_checked()
             continue
@@ -191,16 +223,22 @@ def scan_library(root: str, db_path: str = MUSIC_LIBRARY_DB_FILE,
                 progress.increment_checked()
             continue
 
+        # BPM-Schätzung (Phase 3) -- eigener Decode/Analyse-Schritt, aber
+        # ein Fehlschlag dort (None) verwirft NICHT die schon erfolgreich
+        # gelesenen ID3-Daten, siehe Modul-Docstring.
+        duration_hint = getattr(getattr(easy, "info", None), "length", None)
+        bpm = music_bpm.estimate_bpm(full_path, duration_hint=duration_hint)
+
         is_new = prev is None
         conn.execute("""
             INSERT INTO tracks (filepath, artist, album, title, genre, year,
-                                 cover_path, mtime, size, scanned_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                 cover_path, bpm, mtime, size, scanned_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(filepath) DO UPDATE SET
                 artist=excluded.artist, album=excluded.album, title=excluded.title,
                 genre=excluded.genre, year=excluded.year, cover_path=excluded.cover_path,
-                mtime=excluded.mtime, size=excluded.size, scanned_at=excluded.scanned_at
-        """, (rel_path, artist, album, title, genre, year, cover_path,
+                bpm=excluded.bpm, mtime=excluded.mtime, size=excluded.size, scanned_at=excluded.scanned_at
+        """, (rel_path, artist, album, title, genre, year, cover_path, bpm,
               st.st_mtime, st.st_size, time.strftime("%Y-%m-%d %H:%M:%S")))
         stats["added" if is_new else "updated"] += 1
         if progress:
@@ -224,7 +262,7 @@ def scan_library(root: str, db_path: str = MUSIC_LIBRARY_DB_FILE,
 
     stats["removed"] = len(stale)
     log.info("🎵 Musik-Scan fertig: %d Datei(en) gefunden, %d neu, %d aktualisiert, "
-             "%d unverändert, %d Fehler, %d entfernt.",
+             "%d unverändert, %d BPM nachgetragen, %d Fehler, %d entfernt.",
              stats["found"], stats["added"], stats["updated"], stats["unchanged"],
-             stats["errors"], stats["removed"])
+             stats["bpm_backfilled"], stats["errors"], stats["removed"])
     return stats
