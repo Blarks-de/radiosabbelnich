@@ -463,6 +463,53 @@ DB-Eintrag für eine nur VORÜBERGEHEND defekte Datei fälschlich als
 über `filepath` (UNIQUE-Constraint), nicht über die Track-ID — ein
 erneuter Scan überschreibt bestehende Zeilen statt Duplikate anzulegen.
 
+### Format-Erweiterung (seit 2026-08-12, siehe README-Roadmap)
+
+`AUDIO_EXTENSIONS` in `music_library.py` (geteilt mit `music_scan.py`,
+siehe oben) deckt seit diesem Umbau MP3, FLAC, OGG (Vorbis), M4A
+(MP4-Container), rohes ADTS-AAC, WAV und APE (Monkey's Audio) ab.
+Playback brauchte KEINE Änderung — `ffmpeg` in `StreamSource.start()`
+ist bereits vollständig container-/codec-agnostisch (`-i url` +
+generisches PCM-Output, kein formatspezifischer Code). Die eigentliche
+Arbeit steckt in `music_scan.py`s Metadaten-/Cover-Extraktion, an
+echten (per ffmpeg erzeugten + per mutagen getaggten) Testdateien
+verifiziert statt aus der mutagen-Doku übernommen:
+
+- FLAC/OGG/MP4 liefern über `mutagen.File(pfad, easy=True)` korrekt
+  normalisierte Keys (artist/title/album/genre/date) — hier war NUR
+  die Cover-Extraktion Mehrarbeit, weil jedes Format Cover-Bilder an
+  einem komplett anderen Ort ablegt (`_read_cover_bytes()` in
+  `music_scan.py`: FLACs `.pictures`, OGGs Base64-kodiertes
+  `metadata_block_picture`, MP4s `covr`-Atom) — dafür gibt es in
+  mutagen KEIN gemeinsames API wie für die Text-Tags.
+- **WAV wird von mutagen NICHT "easy"-gewrappt** (kein `EasyWAVE`) —
+  `WAVE(pfad).get("artist")` liefert IMMER `None`, obwohl ID3-Tags
+  durchaus vorhanden sein können (unter rohen Frame-IDs wie `TPE1`).
+  `_RawId3EasyAdapter` in `music_scan.py` liest deshalb für WAV (und
+  AAC, siehe unten) die ID3-Frames direkt und bietet dieselbe
+  `.get(key)`-Schnittstelle wie mutagens "easy"-Wrapper, damit
+  `scan_library()`s Aufrufcode unverändert bleibt.
+- **Rohes ADTS-AAC ist der überraschendste Fund, kein aus der Doku
+  ableitbares Detail**: mutagens `mutagen.File()`-Auto-Erkennung
+  erkennt eine getaggte `.aac`-Datei FÄLSCHLICH als MP3 (wegen des
+  vorhandenen ID3v2-Headers) und crasht beim MPEG-Frame-Sync
+  (`HeaderNotFoundError`) — live reproduziert, nicht nur befürchtet.
+  Die Exception ist zwar eine `MutagenError`-Unterklasse (dadurch kein
+  Absturz des gesamten Scans), aber OHNE Sonderbehandlung wäre JEDE
+  getaggte `.aac`-Datei bei JEDEM Scan als Fehler markiert und NIE
+  eingelesen worden. `_open_tags()` umgeht deshalb für `.aac` bewusst
+  die Auto-Erkennung komplett: Tags direkt über `ID3()`, Stream-Info
+  (BPM-Duration-Hint) separat über `AAC().info`.
+- **APE (Monkey's Audio) hat kein standardisiertes Cover-Feld** — nur
+  eine informelle, nicht durchgängig unterstützte Tool-Konvention ohne
+  mutagen-API dafür. Cover-Extraktion wird für APE deshalb bewusst
+  NICHT versucht (`_read_cover_bytes()` liefert direkt `(None, None)`),
+  Text-Tags laufen über den normalen "easy"-Pfad. **Nicht gegen eine
+  echte `.ape`-Datei verifiziert**: das Image-`ffmpeg` hat zwar einen
+  Monkey's-Audio-DECODER (Playback also unproblematisch), aber keinen
+  Encoder, um eine Testdatei zu erzeugen — offener Punkt, bis eine
+  echte `.ape`-Datei zum Testen verfügbar ist.
+
 ### Musik-Library-Query-Layer (`music_query.py`, Phase 2, seit 2026-08-12)
 
 Dritte Datei im Musik-Library-Dreiklang: `music_library.py` (PLAYER,
@@ -969,9 +1016,15 @@ rock/klassik/Queen/Pavarotti funktionsfähig (Genre-/Artist-Teilstring-
 Match gegen `music_library.db`), schnell/langsam bleiben bewusst
 deaktiviert (fehlende BPM-Daten, Phase 3, siehe README-Roadmap). Der
 PLAYER selbst (`music_library.py`, `list_tracks()`) bleibt weiterhin
-nicht-rekursiv und nur `.mp3`, unabhängig vom (rekursiven) Scan — beide
-Module bedienen bewusst unterschiedliche Zwecke, siehe eigener
-Abschnitt oben. Eine während des Musik-Modus eigentlich fällige
+nicht-rekursiv, unterstützt aber seit der Format-Erweiterung (siehe
+eigener Abschnitt oben) dieselben Formate wie der Scan, nicht mehr nur
+`.mp3` — beide Module bedienen weiterhin bewusst unterschiedliche
+Zwecke (ein Ordner vs. rekursiver Scan+DB), siehe eigener Abschnitt
+oben. Die APE-Unterstützung (Format-Erweiterung, siehe oben) ist mangels
+Encoder im Image NICHT gegen eine echte `.ape`-Datei verifiziert — nur
+Playback (ffmpeg-Decoder vorhanden) und die Text-Tag-Extraktion sind
+plausibilisiert, kein echter End-to-End-Test. Eine während des
+Musik-Modus eigentlich fällige
 Nachrichten-Pause wird beim Rückweg zu Radio NICHT nachgeholt (die
 News-Break-Slot-Prüfung läuft im Musik-Modus schlicht nicht mit) —
 bewusste Grenze, kein Bug. Die Preflight-/Start-Checks in

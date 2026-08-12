@@ -20,10 +20,14 @@ import os
 
 log = logging.getLogger("musiclib")
 
-# Prototyp: nur MP3 (siehe Aufgabenbeschreibung "MP3-Root"). Weitere Formate
-# sind eine spätere Erweiterung, kein Architektur-Thema -- AUDIO_EXTENSIONS
-# als Tupel statt Einzelwert lässt das ohne Signaturänderung zu.
-AUDIO_EXTENSIONS = (".mp3",)
+# Seit 2026-08-12 (Format-Erweiterung, siehe README-Roadmap) über MP3
+# hinaus: FLAC, OGG (Vorbis), M4A/AAC (MP4-Container UND rohes ADTS),
+# WAV, APE (Monkey's Audio). Playback ist dank ffmpeg format-agnostisch
+# (keine Änderung hier nötig), die eigentliche Format-Arbeit steckt im
+# Metadaten-/Cover-Extraktions-Code in music_scan.py -- siehe dessen
+# Moduldoc für die Details (mehrere Formate brauchen dort Sonderfälle,
+# "einfach mutagen.File(..., easy=True) aufrufen" reicht NICHT überall).
+AUDIO_EXTENSIONS = (".mp3", ".flac", ".ogg", ".m4a", ".aac", ".wav", ".ape")
 
 
 def list_tracks(folder: str) -> list[str]:

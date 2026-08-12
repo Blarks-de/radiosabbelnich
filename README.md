@@ -786,12 +786,24 @@ scannen, taggen und nach Kategorien abspielbar machen.
   (Play/Stop/Zurück/Nächster über einen konfigurierbaren Ordner, nicht
   rekursiv, keine Kategorisierung) sind umgesetzt — siehe
   "Musiksammlung-Modus (Grundgerüst)" weiter oben.
-- Format-Unterstützung erweitern (geplant): aktuell wird nur `.mp3`
-  unterstützt (Scan + Playback im Grundgerüst oben). Geplant: Erweiterung
-  auf gängige Formate wie FLAC, APE, OGG, M4A/AAC, WAV — mutagen
-  unterstützt Tagging dafür bereits nativ, der Aufwand liegt
-  hauptsächlich in der Dateiendungen-Filterliste beim Scan und der
-  Prüfung des Playback-Pfads.
+- ✅ **Format-Unterstützung erweitert** (seit 2026-08-12): Scan UND
+  Playback laufen jetzt über MP3 hinaus auch für FLAC, OGG (Vorbis),
+  M4A (MP4-Container), rohes ADTS-AAC, WAV und APE (Monkey's Audio,
+  nur Text-Tags — siehe unten). Playback brauchte keine Änderung
+  (ffmpeg ist bereits format-agnostisch), Metadaten/Cover-Extraktion
+  in `music_scan.py` dagegen schon: FLAC/OGG/MP4 legen Cover-Bilder an
+  komplett unterschiedlichen Stellen ab (kein gemeinsames mutagen-API
+  wie bei den Text-Tags), WAV wird von mutagen nicht "easy"-gewrappt
+  (Tags mussten über die rohen ID3-Frames gelesen werden), und
+  getaggtes rohes AAC wurde von mutagens Auto-Erkennung fälschlich als
+  MP3 erkannt und crashte beim Frame-Sync — an echten, per ffmpeg
+  erzeugten und per mutagen getaggten Testdateien gefunden und behoben,
+  nicht nur aus der Doku übernommen (siehe SESSION.md). **APE-Cover
+  werden bewusst nicht extrahiert** (kein standardisiertes Feld dafür,
+  kein mutagen-API) und die APE-Unterstützung selbst ist mangels
+  Encoder im Image **nicht gegen eine echte `.ape`-Datei verifiziert**
+  — Text-Tags sollten laut mutagen-Doku funktionieren, das steht aber
+  noch aus.
 - ✅ **Phase 1 umgesetzt**: rekursiver Scan der Musiksammlung (`music_scan.py`,
   getrennt vom Player-Modul `music_library.py`) über ID3-Metadaten
   (mutagen) → eigene SQLite-DB `music_library.db` (Artist, Album, Titel,
@@ -1612,11 +1624,22 @@ tag it, and make it playable by category.
   back/next over a configurable folder, non-recursive, no
   categorization) are implemented — see "Music library mode
   (foundation)" further up.
-- Expand format support (planned): currently only `.mp3` is supported
-  (scan + playback in the foundation above). Planned: expand to common
-  formats like FLAC, APE, OGG, M4A/AAC, WAV — mutagen already supports
-  tagging for these natively, the effort is mainly in the file
-  extension filter list at scan time and checking the playback path.
+- ✅ **Expanded format support** (since 2026-08-12): scan AND playback
+  now go beyond MP3 to FLAC, OGG (Vorbis), M4A (MP4 container), raw
+  ADTS AAC, WAV, and APE (Monkey's Audio, text tags only — see below).
+  Playback needed no changes (ffmpeg was already format-agnostic), but
+  metadata/cover extraction in `music_scan.py` did: FLAC/OGG/MP4 store
+  cover art in completely different places (no shared mutagen API like
+  for the text tags), WAV isn't "easy"-wrapped by mutagen (tags had to
+  be read via the raw ID3 frames instead), and tagged raw AAC was
+  misdetected as MP3 by mutagen's auto-detection and crashed on frame
+  sync — found and fixed against real ffmpeg-generated, mutagen-tagged
+  test files, not just assumed from the docs (see SESSION.md). **APE
+  cover art is deliberately not extracted** (no standardized field, no
+  mutagen API for it), and APE support itself is **not verified
+  against a real `.ape` file** since the image's ffmpeg has no encoder
+  to create one — text tags should work per the mutagen docs, but
+  that's still unconfirmed.
 - ✅ **Phase 1 implemented**: recursive scan of the music collection
   (`music_scan.py`, separate from the player module `music_library.py`)
   via ID3 metadata (mutagen) → its own SQLite DB `music_library.db`

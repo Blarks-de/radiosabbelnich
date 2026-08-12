@@ -6662,3 +6662,103 @@ dann nach Freigabe umgesetzt.
   das gespeicherte `"language": "de"` bleibt bewusst bestehen, der
   Nutzer sieht durch den Code-Default-Wechsel keine Verhaltensänderung,
   bis er/sie aktiv etwas anderes einstellt.
+
+## 2026-08-12 (Fortsetzung 4) — Musik-Library: Format-Erweiterung über MP3 hinaus (FLAC/OGG/M4A/AAC/WAV/APE)
+
+**Auslöser**: nächster Punkt von der README-Roadmap ("Zukünftige
+Features" → Musik-Library). Die Roadmap-Notiz dort behauptete, mutagen
+unterstütze das Tagging für alle Zielformate bereits nativ und der
+Aufwand liege nur in der Dateiendungsliste — das stimmte NUR für 3 von
+5 Formaten, siehe unten. Statt aus der mutagen-Doku zu extrapolieren,
+wurde jede Annahme mit echten, per `ffmpeg` (im Image, per
+`docker run --entrypoint bash`) erzeugten und per mutagen getaggten
+Testdateien pro Format geprüft.
+
+### Umsetzung
+
+- `music_library.py`: `AUDIO_EXTENSIONS` von `(".mp3",)` auf
+  `(".mp3", ".flac", ".ogg", ".m4a", ".aac", ".wav", ".ape")` erweitert
+  — geteilt mit `music_scan.py`, wirkt also für Player UND Scan
+  gleichzeitig.
+- `music_scan.py`: Metadaten-/Cover-Extraktion umgebaut (Details siehe
+  `CLAUDE.md`, neuer Abschnitt "Format-Erweiterung"):
+  - FLAC/OGG/MP4 liefern über `mutagen.File(pfad, easy=True)` korrekt
+    normalisierte Tag-Keys — keine Sonderbehandlung nötig. Cover-
+    Extraktion (`_read_cover_bytes()`, neu) brauchte trotzdem eigenen
+    Code pro Format (FLACs `.pictures`, OGGs Base64-`metadata_block_
+    picture`, MP4s `covr`-Atom) — dafür gibt es in mutagen kein
+    gemeinsames API.
+  - **WAV**: `easy=True` liefert bei WAV NICHT die normalisierten Keys
+    (kein `EasyWAVE` in mutagen) — `WAVE(pfad).get("artist")` ist
+    IMMER `None`, obwohl ID3-Tags durchaus vorhanden sein können.
+    Neuer `_RawId3EasyAdapter` liest die rohen ID3-Frames
+    (TPE1/TIT2/TALB/TCON/TDRC) direkt und bietet dieselbe
+    `.get(key)`-Schnittstelle wie mutagens "easy"-Wrapper.
+  - **Rohes ADTS-AAC (echter Bug gefunden, nicht nur Theorie)**:
+    mutagens `mutagen.File()`-Auto-Erkennung erkennt eine getaggte
+    `.aac`-Datei fälschlich als MP3 (wegen des ID3v2-Headers) und
+    crasht beim MPEG-Frame-Sync (`HeaderNotFoundError`) — live
+    reproduziert. Die Exception ist eine `MutagenError`-Unterklasse
+    (kein Absturz des GESAMTEN Scans dank der bestehenden
+    `except (MutagenError, OSError)`-Klammer), aber ohne
+    Sonderbehandlung wäre jede getaggte `.aac`-Datei bei JEDEM Scan
+    als Fehler markiert und nie eingelesen worden. Neues
+    `_open_tags()` umgeht deshalb für `.aac` die Auto-Erkennung
+    bewusst komplett: Tags direkt über `ID3()`, Stream-Info (für den
+    BPM-Duration-Hint) separat über `AAC().info`.
+  - **APE (Monkey's Audio)**: kein standardisiertes Cover-Feld (nur
+    eine informelle Tool-Konvention ohne mutagen-API) — Cover-
+    Extraktion wird für APE bewusst NICHT versucht, Text-Tags laufen
+    über den normalen "easy"-Pfad (unverifiziert, siehe unten).
+  - `scan_library()` selbst kaum verändert: berechnet jetzt `ext` pro
+    Datei und reicht ihn an `_open_tags()`/`_extract_cover()` durch,
+    der restliche Kontrollfluss (mtime/Größe-Skip, "Gefunden"-Set,
+    Aufräum-Phase, BPM-Backfill) ist unverändert.
+- `README.md` (DE+EN) und `CLAUDE.md`: Roadmap-Bullet bzw. neuer
+  Architektur-Abschnitt aktualisiert, inkl. der offenen APE-
+  Verifikationslücke. `CLAUDE.md`s "Bekannte offene Punkte"-Absatz zum
+  Musik-Modus korrigiert (behauptete noch fälschlich "PLAYER bleibt nur
+  `.mp3`" — direkte Folge dieser Änderung, deshalb mitgezogen statt als
+  separate Alt-Baustelle stehen gelassen).
+
+### Bewusst NICHT gemacht
+
+- **APE-Cover-Extraktion**: kein standardisiertes Feld, kein
+  mutagen-API dafür — auf Nutzerwunsch bewusst weggelassen statt
+  ungetesteten Best-Effort-Code für eine informelle Tool-Konvention zu
+  schreiben.
+- **Kein echter End-to-End-Test für APE**: das im Image enthaltene
+  `ffmpeg` hat einen Monkey's-Audio-DECODER (Playback also
+  unproblematisch, per `ffmpeg -decoders` bestätigt), aber KEINEN
+  Encoder — eine Testdatei ließ sich dadurch nicht erzeugen. Bleibt
+  offener Punkt, bis eine echte `.ape`-Datei zum Testen verfügbar ist.
+- `.opus`/`.oga`/`.aiff`/weitere von mutagen theoretisch unterstützte
+  Formate NICHT ergänzt — Scope exakt an der Roadmap-Formulierung
+  ("FLAC, APE, OGG, M4A/AAC, WAV") entlang gehalten, keine stille
+  Erweiterung darüber hinaus.
+
+### Verifiziert
+
+- Playback: identischer ffmpeg-Befehlsaufbau wie `StreamSource.start()`
+  (`-i pfad -map 0:a -f s16le ...`) direkt gegen `.flac`/`.ogg`/`.m4a`/
+  `.wav`/getaggte `.aac`-Testdateien ausgeführt — alle liefern die
+  erwartete PCM-Byte-Menge (~32000 Byte für 1s@16kHz mono), keine
+  Code-Änderung am Playback-Pfad nötig, wie erwartet.
+- `music_scan.scan_library()` gegen einen echten Test-Ordner mit 7
+  Dateien (mp3/flac/ogg/m4a/wav/getaggtes+ungetaggtes aac) ausgeführt:
+  0 Fehler, alle Text-Tags (Artist/Titel/Album/Genre/Jahr) korrekt
+  gelesen, alle 5 Cover (mp3/flac/ogg/m4a/wav) als gültige 1×1-PNG-
+  Dateien extrahiert (per `file` bestätigt). Ungetaggtes AAC fällt
+  korrekt auf den Dateinamen als Titel zurück, kein Fehler.
+- Inkrementelles Verhalten nach der Umstellung erneut geprüft:
+  unveränderter Re-Scan überspringt das teure Parsing (BPM-Backfill-
+  Pfad korrekt getriggert, da die Sinuston-Testdateien kein erkennbares
+  Tempo haben — erwartetes Verhalten der bereits bestehenden Phase-3-
+  Logik, kein neuer Bug). Löschen einer Datei + Re-Scan entfernt
+  korrekt sowohl die DB-Zeile als auch die verwaiste Cover-Datei (4
+  von 5 Covern blieben übrig, exakt wie erwartet).
+- `music_library.list_tracks()` gegen denselben Test-Ordner: listet
+  alle 6 verbleibenden unterstützten Dateien korrekt, alphabetisch
+  sortiert.
+- `docker compose build radiosabbelnich`: erfolgreich, alle Tests oben
+  liefen gegen das ECHTE gebaute Image (nicht nur den Host-Python).
