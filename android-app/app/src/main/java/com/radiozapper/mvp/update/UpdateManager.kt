@@ -16,11 +16,15 @@ import java.net.URL
 // Absichtlich NICHT hartcodiert: der Wert liegt in SharedPreferences (siehe
 // getBaseUrl()/setBaseUrl() unten), per Textfeld in der UI aenderbar, ohne
 // Rebuild - nur der DEFAULT ist fest im Code. Seit 2026-08-08 der oeffentliche
-// Server unter https://blarks.de/update_radiosabbelnich (vorher: private
-// Tailscale-Adresse eines einzelnen Hosts, siehe SESSION.md) - kein VPN mehr
-// noetig, damit koennte die APK jetzt auch tatsaechlich an andere
-// weitergegeben werden, ohne dass die den Default erst umstellen muessten.
-private const val DEFAULT_UPDATE_BASE_URL = "https://blarks.de/update_radiosabbelnich"
+// Server unter blarks.de (vorher: private Tailscale-Adresse eines einzelnen
+// Hosts, siehe SESSION.md) - kein VPN mehr noetig, damit koennte die APK
+// jetzt auch tatsaechlich an andere weitergegeben werden, ohne dass die den
+// Default erst umstellen muessten. Seit 2026-08-12 unter dem neuen Unterordner
+// https://blarks.de/radio/update (identischer Inhalt wie zuvor unter
+// /update_radiosabbelnich, siehe SESSION.md) - Geraete mit bereits
+// gespeichertem Wert im Textfeld bleiben davon unberuehrt, nur der Default
+// fuer neue/unveraenderte Installationen wechselt.
+private const val DEFAULT_UPDATE_BASE_URL = "https://blarks.de/radio/update"
 private const val PREFS_NAME = "update_prefs"
 private const val PREF_BASE_URL = "base_url"
 

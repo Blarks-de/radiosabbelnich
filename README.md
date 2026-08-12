@@ -398,18 +398,39 @@ normal weiter. Ein Absturz der Engine bei einem einzelnen Sample
 
 ## Sprache des Web-Interfaces
 
-Player- und Config-Seite gibt es auf Deutsch und Englisch. Umschaltbar
-unter `/config` → "🌐 Sprache" (wirkt spätestens eine Sekunde später,
-kein Neustart nötig — die Seite lädt nach dem Speichern automatisch
-neu). Startwert für eine frische Installation kommt aus `UI_LANGUAGE`
-in `.env` (`de` oder `en`, Default `de`) — sobald einmal über die
-Config-Seite gespeichert, gewinnt danach immer diese Einstellung,
-auch nach einem Neustart des Containers.
+Player- und Config-Seite gibt es auf Englisch (im Code eingebaute
+Basissprache) und Deutsch (externes "Sprachpaket", siehe unten).
+Umschaltbar unter `/config` → "🌐 Sprache" (wirkt spätestens eine
+Sekunde später, kein Neustart nötig — die Seite lädt nach dem
+Speichern automatisch neu). Startwert für eine frische Installation
+kommt aus `UI_LANGUAGE` in `.env` (Default `en`, leer lassen reicht
+ebenfalls) — sobald einmal über die Config-Seite gespeichert, gewinnt
+danach immer diese Einstellung, auch nach einem Neustart des
+Containers.
 
 Übersetzt sind alle Texte, die im Browser sichtbar sind (Labels,
 Buttons, Meldungen). Log-Datei und Server-seitige Fehlermeldungen
 (z.B. bei einer ungültigen Einstellung) bleiben unabhängig von dieser
 Einstellung deutsch.
+
+**Weitere Sprachen nachrüsten**: eine Sprache außer Englisch kommt aus
+einer eigenen Datei im Ordner `language/` (z.B. `language/Deutsch.lng`
+für Deutsch) — analog zu einem Windows-Sprachpaket. Format: einfaches
+`Key=Value`, eine Zeile pro Text, `#` leitet einen Kommentar ein. Zwei
+Zeilen am Dateianfang sind Pflicht:
+
+```
+#!code=de
+#!name=Deutsch
+```
+
+`code` ist der Maschinencode (taucht in `UI_LANGUAGE`/der gespeicherten
+Einstellung auf), `name` der Anzeigename im Sprachauswahl-Dropdown. Die
+Datei muss nicht vollständig sein — ein fehlender Text fällt automatisch
+auf die englische Basis zurück, kein Absturz. Eine neue `.lng`-Datei
+wirkt nach `docker compose up -d --build radiosabbelnich` (Sprachdateien
+werden wie der übrige Code beim Bauen ins Image übernommen, kein
+Bind-Mount).
 
 ## Web-Interface
 
@@ -578,7 +599,8 @@ Signaturprüfung über die Debug-Signierung hinaus (siehe oben).
 | `python/music_scan.py` | Musik-Library-Scan (Phase 1): rekursiver ID3-Scan in eigene SQLite-DB |
 | `python/folder_browse.py` | Gemeinsame Breadcrumb-Ordnerauswahl (News-Break-Pfad + Musiksammlung-Root) |
 | `python/stt_filter.py` | STT-Sprachfilter: Vosk/Whisper-Engines, austauschbar, Zusatzsignal für die Switch-Entscheidung |
-| `python/i18n.py` | Übersetzungstabelle fürs Web-Interface (Deutsch/Englisch, siehe "Sprache des Web-Interfaces") |
+| `python/i18n.py` | Basissprache Englisch fürs Web-Interface + Lader für `language/*.lng`-Sprachpakete (siehe "Sprache des Web-Interfaces") |
+| `language/*.lng` | Externe Sprachpakete (z.B. `Deutsch.lng`), Key=Value-Format |
 | `python/resource_monitor.py` | Ressourcen-Verbrauch (RAM/CPU/DB-Größe) fürs "💾 Ressourcen-Verbrauch" auf der Config-Seite |
 | `web/qrcode.js` | Vendorte QR-Code-Bibliothek (MIT, kazuhikoarase/qrcode-generator) fürs "📱 QR-Code"-Popup |
 | `web/manifest.json` | PWA-Manifest (Name, Icons, `display: standalone`) fürs "Zum Startbildschirm hinzufügen" |
@@ -674,7 +696,7 @@ Trefferzahl (schlankere Variante desselben Checks aus `check`).
 | `TLS_CERT_FILE`/`TLS_KEY_FILE` | Host-Pfade zu PEM-Dateien für HTTPS (optional, siehe unten) |
 | `ICECAST_SSL_PORT` | Host-Port für den Icecast-Stream per HTTPS (Default 8443) |
 | `VOSK_MODEL_FOLDER` | Host-Ordner mit einem entpackten deutschen Vosk-Modell für den STT-Sprachfilter (optional, siehe eigener Abschnitt) |
-| `UI_LANGUAGE` | Startsprache des Web-Interfaces, `de` oder `en` (optional, Default `de` — siehe "Sprache des Web-Interfaces") |
+| `UI_LANGUAGE` | Startsprache des Web-Interfaces: `en` (Basissprache) oder der Code eines Sprachpakets unter `language/` wie `de` (optional, Default `en` — siehe "Sprache des Web-Interfaces") |
 
 ### HTTPS/TLS (optional)
 
@@ -1212,17 +1234,37 @@ sample, not the main process.
 
 ## Web interface language
 
-The player and config pages are available in German and English.
-Switch it under `/config` → "🌐 Sprache" (takes effect within about a
-second, no restart needed — the page reloads automatically after
-saving). The starting value for a fresh install comes from
-`UI_LANGUAGE` in `.env` (`de` or `en`, default `de`) — once saved via
-the config page, that setting always wins afterwards, even after
-restarting the container.
+The player and config pages are available in English (the base
+language, built into the code) and German (an external "language
+pack", see below). Switch it under `/config` → "🌐 Sprache" (takes
+effect within about a second, no restart needed — the page reloads
+automatically after saving). The starting value for a fresh install
+comes from `UI_LANGUAGE` in `.env` (default `en`, leaving it empty
+works too) — once saved via the config page, that setting always wins
+afterwards, even after restarting the container.
 
 Everything visible in the browser is translated (labels, buttons,
 messages). The log file and server-side error messages (e.g. for an
 invalid setting) stay German regardless of this setting.
+
+**Adding more languages**: any language besides English lives in its
+own file under the `language/` folder (e.g. `language/Deutsch.lng` for
+German) — similar to a Windows language pack. Format: simple
+`Key=Value`, one line per text, `#` starts a comment. Two lines are
+required at the top of the file:
+
+```
+#!code=de
+#!name=Deutsch
+```
+
+`code` is the machine code (shows up in `UI_LANGUAGE`/the saved
+setting), `name` is the display name in the language dropdown. The
+file doesn't need to be complete — a missing text automatically falls
+back to the English base instead of crashing. A new `.lng` file takes
+effect after `docker compose up -d --build radiosabbelnich` (language
+files are baked into the image at build time like the rest of the
+code, no bind mount).
 
 ## Web interface
 
@@ -1389,7 +1431,8 @@ beyond the debug signing (see above).
 | `python/music_scan.py` | Music library scan (phase 1): recursive ID3 scan into its own SQLite DB |
 | `python/folder_browse.py` | Shared breadcrumb folder picker (news break path + music library root) |
 | `python/stt_filter.py` | STT speech filter: interchangeable Vosk/Whisper engines, additional signal for the switch decision |
-| `python/i18n.py` | Translation table for the web interface (German/English, see "Web interface language") |
+| `python/i18n.py` | English base language for the web interface + loader for `language/*.lng` language packs (see "Web interface language") |
+| `language/*.lng` | External language packs (e.g. `Deutsch.lng`), Key=Value format |
 | `python/resource_monitor.py` | Resource usage (RAM/CPU/DB size) for the "💾 Resource usage" section on the config page |
 | `web/qrcode.js` | Vendored QR code library (MIT, kazuhikoarase/qrcode-generator) for the "📱 QR code" popup |
 | `web/manifest.json` | PWA manifest (name, icons, `display: standalone`) for "Add to home screen" |
@@ -1476,7 +1519,7 @@ leaner version of the same check from `check`).
 | `TLS_CERT_FILE`/`TLS_KEY_FILE` | Host paths to PEM files for HTTPS (optional, see below) |
 | `ICECAST_SSL_PORT` | Host port for the Icecast stream over HTTPS (default 8443) |
 | `VOSK_MODEL_FOLDER` | Host folder with an unpacked German Vosk model for the STT speech filter (optional, see its own section) |
-| `UI_LANGUAGE` | Starting language of the web interface, `de` or `en` (optional, default `de` — see "Web interface language") |
+| `UI_LANGUAGE` | Starting language of the web interface: `en` (base language) or the code of a language pack under `language/` such as `de` (optional, default `en` — see "Web interface language") |
 
 ### HTTPS/TLS (optional)
 

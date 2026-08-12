@@ -1,0 +1,245 @@
+# RadioSabbelNich -- deutsche Übersetzung
+# Format: Key=Value, eine Zeile pro Eintrag, Kommentare mit '#'.
+# Fehlt ein Key hier, fällt die Oberfläche für ihn automatisch auf die
+# englische Basis zurück (siehe python/i18n.py) -- diese Datei muss also
+# nicht zwingend vollständig sein.
+#!code=de
+#!name=Deutsch
+
+# ==== Gemeinsame Texte (Player- und Config-Seite) ====
+common_save=Speichern
+common_cancel=Abbrechen
+common_edit=Bearbeiten
+common_delete=Löschen
+common_error=Fehler: {msg}
+common_loading=Lade …
+common_unknown=unbekannt
+
+# ==== Player-Seite (Startseite) ====
+idx_prev_title=Vorheriger Sender
+idx_prev_btn=⏮ Zurück
+idx_next_title=Nächster Sender
+idx_next_btn=Weiter ⏭
+idx_qr_vlc_title=QR-Code für die Stream-Adresse (VLC & Co.)
+idx_qr_vlc_label=VLC Stream
+idx_qr_phone_title=QR-Code für dieses Web-Interface (zum Öffnen auf dem Handy)
+idx_qr_phone_label=Handy Fernsteuerung
+idx_qr_modal_close_aria=Schließen
+idx_qr_modal_title=Adresse zum Scannen
+idx_qr_modal_copy_btn=📋 Adresse kopieren
+idx_zapping_error_title=Letzten fälschlich erkannten Werbe-Clip aus der Datenbank löschen
+idx_zapping_error_btn=🛑 Zapping-Fehler
+idx_gesabbel_title=Sofort weiterschalten, weil hier gerade geredet wird
+idx_gesabbel_btn=⚡ ZAPPEN!
+idx_filter_toggle_title=Automatische Sprache-Erkennung komplett pausieren/wieder anschalten
+idx_filter_disable_btn=Sabbelfilter deaktivieren
+idx_filter_enable_btn=Sabbelfilter aktivieren
+idx_bs_meter_label=🤥 Bullshitometer
+idx_stt_meter_label=🗣 STT
+idx_stt_meter_off=STT aus
+idx_fp_indicator_label=🔎 Fingerprint
+idx_fp_state_idle=⚪ Idle
+idx_fp_state_match=🔴 Treffer: {label}
+idx_fp_state_learned=🟢 Gelernt
+# --- Sender ---
+idx_stations_heading=Sender
+# --- Hörer ---
+idx_listeners_heading=Hörer
+idx_config_link=⚙ Sender verwalten
+idx_connection_lost=Verbindung zum Server verloren …
+idx_current_playing=▶ Läuft gerade: {name}
+idx_no_station_active=Kein Sender aktiv
+idx_news_break=📰 Pause
+idx_filter_off=Filter aus
+idx_listeners_unavailable=Hörer-Info nicht verfügbar.
+idx_listeners_none=Aktuell keine Hörer verbunden.
+idx_listeners_col_ip=IP
+idx_listeners_col_since=Verbunden seit
+idx_listeners_col_client=Client
+idx_meta_updated=Aktualisiert: {time}
+idx_qr_vlc_modal_title=▶️ Stream-Adresse zum Scannen (VLC & Co.)
+idx_qr_phone_modal_title=📱 Web-Interface-Adresse zum Scannen
+idx_address_copied=📋 Adresse kopiert.
+idx_copy_failed=Kopieren fehlgeschlagen: {msg}
+idx_clip_deleted=✓ Clip gelöscht
+idx_switched_back_to= — zurück zu {name}
+idx_zap_switching=🗣️ Wird umgeschaltet …
+idx_filter_switching=Sabbelfilter wird umgeschaltet …
+idx_music_mode_active=🎵 Musiksammlung aktiv — Radio pausiert
+idx_music_mode_short=🎵 Musik
+
+# ==== Radio/Musiksammlung-Modus-Umschalter ====
+mode_radio_btn=📻 Radio
+mode_music_btn=🎵 Musiksammlung
+idx_mode_switching=Modus wird gewechselt …
+
+# ==== Musiksammlung-Seite (/musik) ====
+# --- 🎵 Musik Sammlung ---
+music_heading=🎵 Musik Sammlung
+music_root_label=MP3-Root-Ordner:
+music_root_change_link=Ordner unter /config ändern →
+# --- Kategorien ---
+music_categories_heading=Kategorien
+# --- Favoriten ---
+music_favorites_heading=Favoriten
+music_query_failed=Abfrage fehlgeschlagen.
+music_play_title=Play
+music_stop_title=Stop
+music_prev_title=Vorheriger Track
+music_next_title=Nächster Track
+music_now_playing=🎵 {file} ({index}/{total})
+music_idle=Bereit — auf ▶ tippen zum Abspielen.
+music_switch_hint=Erst oben auf 🎵 Musiksammlung wechseln.
+music_back_link=zurück zum Radio-Player
+
+# ==== Config-Seite (/config) ====
+cfg_back_link=← zurück zum Player
+# --- ⚙ Sender verwalten ---
+cfg_heading=⚙ Sender verwalten
+# --- 📰 Nachrichten-Pause ---
+cfg_news_break_heading=📰 Nachrichten-Pause
+cfg_news_break_hint=Spielt zur vollen/halben Stunde statt eines Radiosenders eine zufällige lokale MP3 ab. Der Ordner unten liegt unter einem <strong>Container-internen Pfad</strong> — der eigentliche Host-Ordner (z.B. ein SMB-Mount) wird über <code>NEWS_MP3_FOLDER</code> in <code>.env</code> nach <code>/app/news_mp3</code> gemountet und braucht dafür einen Neustart des Containers. Darunter kannst du per Klick den gewünschten Unterordner auswählen.
+cfg_active_label=aktiv
+cfg_nb_folder_label=MP3-Ordner (Container-Pfad)
+cfg_nb_window_label=Zeitfenster (Minuten)
+cfg_nb_hours_enabled_label=nur zu bestimmten Stunden aktiv
+cfg_nb_hour_start_label=von Stunde
+cfg_nb_hour_end_label=bis Stunde
+# --- 🎵 Musiksammlung ---
+cfg_music_library_heading=🎵 Musiksammlung
+cfg_music_library_hint=Root-Ordner für den Musiksammlung-Modus (Play/Stop auf der /musik-Seite) — Container-interner Pfad, gemountet über MUSIC_LIBRARY_FOLDER in .env.
+cfg_music_library_folder_label=Musik-Ordner (Container-Pfad)
+cfg_music_library_saved=🎵 Musiksammlung-Einstellungen gespeichert.
+# --- Neuer Sender ---
+cfg_new_station_heading=Neuer Sender
+cfg_add_name_placeholder=Name
+cfg_add_url_placeholder=Stream-URL (https://...)
+cfg_enabled_label=aktiviert
+cfg_add_btn=Hinzufügen
+# --- 📻 Sender-Import ---
+cfg_import_heading=📻 Sender-Import
+cfg_import_hint=Lädt eine M3U-Playlist und hört bei jedem Sender ein paar Sekunden mit: übernommen wird nur, wer dabei durchgehend Audio liefert (nicht bloß beim Verbinden). Neue Sender landen <strong>deaktiviert</strong> in der Kategorie "Unsortiert" — du entscheidest per Haken, wer in die Rotation darf. Kann bei einer langen Liste einige Minuten dauern.
+cfg_import_url_label=Playlist-URL
+cfg_import_btn=Sender importieren
+# --- 🔗 Streaming-Adresse ---
+cfg_stream_heading=🔗 Streaming-Adresse
+cfg_stream_hint=Adresse, die auf der Startseite unter "Streaming via VLC" angezeigt wird (zum Eintragen in einen externen Player). Leer lassen, um sie automatisch aus der Adresse zu bilden, über die die Startseite gerade im Browser aufgerufen wird.
+cfg_stream_url_label=Stream-URL
+# --- 🔒 HTTPS ---
+cfg_tls_heading=🔒 HTTPS
+cfg_tls_hint=Verschlüsselt den Zugriff aufs Web-Interface (Player-Seite und diese Config-Seite) per TLS. Braucht ein Zertifikat unter <code>TLS_CERT_FILE</code>/<code>TLS_KEY_FILE</code> in <code>.env</code> (Host-Pfade zu PEM-Dateien, z.B. per <code>tailscale cert</code> erzeugt) — ohne die bleibt der Haken hier wirkungslos, das Web-Interface läuft dann weiter über HTTP. <strong>Wirkt erst nach einem Neustart des Containers</strong> (<code>docker compose up -d --build radiosabbelnich</code>), nicht sofort wie die meisten anderen Einstellungen hier. Der Icecast-Stream selbst bekommt unabhängig davon automatisch einen zusätzlichen HTTPS-Port, sobald dieselben Zertifikate in <code>.env</code> eingetragen sind — dafür gibt es keinen eigenen Schalter.
+cfg_tls_checkbox_label=HTTPS fürs Web-Interface aktiv
+# --- ⏱ Puffer-Einstellungen ---
+cfg_buffer_heading=⏱ Puffer-Einstellungen
+cfg_buffer_hint=Die nächsten Sender in Rotationsreihenfolge laufen im Hintergrund mit und halten Audio vor, damit Wechsel flüssig ablaufen. Mehr Sekunden/Sender = flüssiger, aber mehr Bandbreite/CPU.
+cfg_buffer_seconds_label=Sekunden pro gepuffertem Sender
+cfg_buffer_count_label=Anzahl vorausgepufferter Sender
+# --- 🗣 STT-Sprachfilter ---
+cfg_stt_heading=🗣 STT-Sprachfilter
+cfg_stt_hint=Zusätzliches Signal per Speech-to-Text: erkennt, ob gerade zusammenhängender Text in der jeweils erwarteten Sprache zu hören ist (echte Moderation) oder nicht (auch in dieser Sprache gesungene Musik zählt dann als "keine Sprache") — ergänzt VAD/Heuristik, die reinen Gesang oft fälschlich als Sprache werten. <strong>Vosk</strong> ist leichtgewichtig und Pi-tauglich, <strong>Whisper</strong> genauer, aber deutlich ressourcenhungriger. Welche Sprache für welchen Sender gilt, wird unten über die Sender-Kategorie festgelegt.
+cfg_stt_status_loading=Lade Status …
+cfg_stt_engine_label=Engine
+cfg_stt_engine_vosk_option=Vosk (leichtgewicht, Pi-tauglich)
+cfg_stt_engine_whisper_option=Whisper (genauer, ressourcenhungriger)
+cfg_stt_whisper_size_label=Whisper-Modellgröße
+cfg_stt_interval_label=Sample-Intervall (Sekunden)
+cfg_stt_combine_label=Verknüpfung mit VAD/Heuristik
+cfg_stt_combine_and_option=UND — beide müssen "Sprache" sagen (empfohlen)
+cfg_stt_combine_or_option=ODER — eines reicht
+# --- 🌐 STT-Sprachen ---
+cfg_stt_lang_heading=🌐 STT-Sprachen
+cfg_stt_lang_hint=Pro Sprache ein Vosk-Modellpfad (nur bei Engine "Vosk" relevant, jede Sprache braucht ein eigenes Modell) und eine empirisch ermittelte Konfidenz-Schwelle (siehe README). Ein bereits vorhandener Sprachcode wird beim erneuten Eintragen aktualisiert statt doppelt angelegt.
+cfg_stt_lang_col_code=Sprache
+cfg_stt_lang_col_vosk_path=Vosk-Modellpfad
+cfg_stt_lang_col_threshold=Schwelle
+cfg_stt_lang_col_status=Status
+cfg_stt_lang_code_placeholder=z.B. en
+cfg_stt_lang_add_btn=+ Sprache hinzufügen/aktualisieren
+cfg_stt_lang_status_unknown=noch nicht geladen
+cfg_stt_lang_status_ok=✅ geladen
+cfg_stt_lang_status_error=⚠ {error}
+cfg_stt_lang_saved=Sprache gespeichert.
+cfg_stt_lang_deleted=Sprache gelöscht.
+cfg_stt_lang_delete_confirm=Sprache '{code}' wirklich löschen? Kategorien, die ihr zugeordnet sind, fallen danach auf Deutsch zurück.
+# --- 🏷 Kategorie-Sprachen ---
+cfg_stt_cat_lang_heading=🏷 Kategorie-Sprachen
+cfg_stt_cat_lang_hint=Legt fest, welche der oben konfigurierten Sprachen für Sender welcher Kategorie geprüft wird. Kategorien ohne Auswahl gelten als Deutsch.
+cfg_stt_cat_lang_default=(Standard: Deutsch)
+cfg_stt_cat_lang_saved=Kategorie-Sprache gespeichert.
+# --- 🧪 Schwellwert-Kalibrierung ---
+cfg_stt_calib_heading=🧪 Schwellwert-Kalibrierung
+cfg_stt_calib_hint=Ermittelt einen Vorschlag für <code>confidence_threshold</code> einer Sprache, nach derselben Methode wie die ursprüngliche Deutsch-Kalibrierung (siehe README): erst ein paar Minuten einen Sender mit garantiert echtem Sprachtext dieser Sprache mithören lassen, dann einen Musiksender derselben Sprache. Sender dafür manuell auf der <a href="/">Player-Seite</a> auswählen — die Kalibrierung selbst schaltet nichts um. Voraussetzung: STT-Filter und Sabbelfilter oben sind aktiv. Für Vosk muss die Sprache mit Modellpfad bereits in "🌐 STT-Sprachen" angelegt sein (bei Whisper nicht nötig).
+cfg_stt_calib_start_btn=🧪 Kalibrierung starten
+cfg_stt_calib_active_label=Kalibriere:
+cfg_stt_calib_stage_speech_btn=🗣 Sprache-Stufe
+cfg_stt_calib_stage_music_btn=🎵 Musik-Stufe
+cfg_stt_calib_stop_btn=Abbrechen
+cfg_stt_calib_col_speech=🗣 Sprache-Samples
+cfg_stt_calib_col_music=🎵 Musik-Samples
+cfg_stt_calib_no_samples=noch keine Samples
+cfg_stt_calib_summary={count} Sample(s), Konfidenz min {min} / max {max} / Ø {mean}
+cfg_stt_calib_suggestion_clean=✅ Vorschlag: {threshold} (Sprache und Musik trennen sauber im gemessenen Sample)
+cfg_stt_calib_suggestion_warn=⚠ Vorschlag: {threshold} — Sprache und Musik überlappen sich im gemessenen Sample, kein sauberer Trennwert gefunden. Mehr Samples sammeln oder Sender prüfen.
+cfg_stt_calib_apply_btn=Übernehmen
+cfg_stt_calib_applied=Schwellwert übernommen.
+cfg_stt_calib_samples_summary=Letzte Samples anzeigen
+cfg_stt_calib_no_text=(kein Text erkannt)
+cfg_stt_calib_lang_required=Sprachcode darf nicht leer sein.
+# --- 🗑 Fingerprint-Datenbank ---
+cfg_fingerprint_heading=🗑 Fingerprint-Datenbank
+cfg_fingerprint_hint=Löscht alle gelernten Jingle-/Werbespot-Clips (nicht die Senderliste). Danach lernt die Erkennung wieder bei Null.
+cfg_fingerprint_clear_btn=Clip-DB leeren
+# --- 💾 Ressourcen-Verbrauch ---
+cfg_resources_heading=💾 Ressourcen-Verbrauch
+cfg_resources_hint=Aktueller Verbrauch von RadioSabbelNich selbst (nicht des Hosts), alle 5 Sekunden aktualisiert.
+cfg_resources_ram_total=RAM gesamt
+cfg_resources_ram_breakdown=davon Python / ffmpeg
+cfg_resources_cpu_total=CPU gesamt
+cfg_resources_ffmpeg_count=Laufende ffmpeg-Prozesse
+cfg_resources_fingerprint_db=Fingerprint-DB
+cfg_resources_log=Logdatei (inkl. Rotation)
+cfg_resources_whisper_cache=Whisper-Modell-Cache
+# --- 🌐 Sprache ---
+cfg_language_heading=🌐 Sprache
+cfg_language_hint=Sprache der Web-Oberfläche (Player- und Config-Seite). Wirkt sofort für neue Seitenaufrufe; diese Seite lädt nach dem Speichern automatisch neu. Startwert kommt aus <code>UI_LANGUAGE</code> in <code>.env</code>, danach gewinnt immer die hier gespeicherte Einstellung.
+cfg_language_label=Sprache der Oberfläche
+
+# ==== Breadcrumb-Ordner-Browser (News-Break und Musiksammlung) ====
+cfg_folder_selected=Ausgewählt: {path}
+cfg_folder_error=⚠ Nicht lesbar: {msg}
+cfg_folder_empty=(keine Unterordner)
+
+# ==== Config-Seite: dynamische Meldungen (JavaScript) ====
+cfg_load_stations_failed=Konnte Senderliste nicht laden: {msg}
+cfg_no_stations_in_category=Keine Sender in dieser Kategorie.
+cfg_disable_all_btn=Alle deaktivieren
+cfg_disable_all_title=Alle {count} aktivierten Sender in "{cat}" deaktivieren
+cfg_disable_all_confirm=Wirklich alle {count} aktivierten Sender in "{cat}" deaktivieren?
+cfg_disable_all_done={count} Sender in "{cat}" deaktiviert.
+cfg_saved=Gespeichert.
+cfg_field_url_placeholder=Stream-URL
+cfg_delete_confirm="{name}" wirklich löschen?
+cfg_deleted=Gelöscht.
+cfg_added=Hinzugefügt.
+cfg_load_settings_failed=Konnte Einstellungen nicht laden: {msg}
+cfg_stt_status_disabled=Status: deaktiviert.
+cfg_stt_status_active=Status: ✅ {engine} aktiv.
+cfg_stt_status_error=Status: ⚠ deaktiviert ({error}).
+cfg_stt_status_model_not_loadable=Modell nicht ladbar
+cfg_buffer_saved=Puffer-Einstellungen gespeichert.
+cfg_stream_saved=Streaming-Adresse gespeichert.
+cfg_tls_saved=HTTPS-Einstellung gespeichert — wirkt erst nach Neustart des Containers.
+cfg_news_break_saved=Nachrichten-Pause gespeichert.
+cfg_stt_saved=STT-Sprachfilter gespeichert.
+cfg_import_progress_error=Fehler beim Abfragen des Fortschritts: {msg}
+cfg_import_loading_playlist=Lade Playlist …
+cfg_import_checking=Prüfe Sender … {checked} von {total}
+cfg_import_failed=Import fehlgeschlagen: {error}
+cfg_import_result={checked} Sender geprüft, {working} liefern dauerhaft Audio, {added} neu (deaktiviert) in "Unsortiert" — zum Aktivieren Haken setzen.
+cfg_import_starting=Starte Import …
+cfg_fingerprint_clear_confirm=Wirklich ALLE gelernten Fingerprint-Clips löschen? Das kann nicht rückgängig gemacht werden.
+cfg_fingerprint_cleared={cleared} Clip(s) aus der Fingerprint-Datenbank gelöscht.
+cfg_invalid_response=Ungültige Antwort vom Server
+cfg_host_path_mounted=📁 Aktuell gemountet von Host-Pfad: {path} (ändern über {envVar} in .env + Neustart des Containers)
+cfg_host_path_unknown=Host-Pfad unbekannt (Container lief noch nicht mit dieser Anzeige -- docker compose up -d --build radiosabbelnich zeigt ihn danach an).
+cfg_language_saved=Sprache gespeichert — Seite wird neu geladen …

@@ -1445,3 +1445,146 @@ installierte Alt-Versionen, siehe voriger Eintrag). Smoke-Test auf dem
 lokalen Emulator (`test_device`): Install + Start ohne Absturz, `pidof`
 bestätigt laufenden Prozess. Kein tiefergehender Funktionstest, da reiner
 Namens-Rebrand ohne Logikänderung.
+
+## 2026-08-12 (Fortsetzung 2) — Update-Server-Pfad auf blarks.de/radio/update umgestellt
+
+**Auslöser**: Nutzer hat einen neuen Unterordner `blarks.de/radio/update`
+angelegt, der bereits denselben Inhalt wie der alte
+`blarks.de/update_radiosabbelnich` spiegelt (kein neues Server-Setup,
+reiner Zielpfad-Wechsel für den App-seitigen Update-Check).
+
+**Umsetzung**:
+- `update/UpdateManager.kt`: `DEFAULT_UPDATE_BASE_URL` von
+  `https://blarks.de/update_radiosabbelnich` auf
+  `https://blarks.de/radio/update` geändert (Zeile 23), Begründungskommentar
+  darüber entsprechend ergänzt. Einzige tatsächlich funktionale Fundstelle
+  im gesamten Projekt — `getBaseUrl()`/`setBaseUrl()` bleiben unverändert,
+  der neue Wert ist nur der Fallback für Installationen ohne eigenen
+  gespeicherten Wert im "Update-Server:"-Textfeld.
+- `pics/android-apk-qr.svg` (Haupt-README-QR-Code) neu generiert, jetzt
+  kodiert auf `https://blarks.de/radio/update/radiosabbelnich-latest.apk`
+  statt der alten `update_radiosabbelnich/...`-URL — gleiches Verfahren
+  wie beim ursprünglichen Erzeugen (vendorte `web/qrcode.js`,
+  `createSvgTag({cellSize: 5, margin: 4})`, siehe Eintrag
+  "QR-Code für Android-APK-Download" weiter oben). Kleinere Pixelgröße
+  als vorher (173px statt 193px), weil die neue URL schlicht kürzer ist
+  (57 statt 67 Zeichen) und dadurch eine kleinere QR-Version reicht —
+  kein Fehler.
+- Alle textuellen Pfad-Nennungen in `CLAUDE.md` (hier UND im
+  Docker-Projekt-Root-`CLAUDE.md`) sowie `README.md` nachgezogen: die
+  `scp`-Zielpfade im Bauen-und-Verteilen-Runbook (zwei Codeblöcke, einer
+  im "Bauen und Testen"-Abschnitt, einer im "Update-Mechanismus"-Abschnitt
+  — beide enthielten dieselben drei Befehle redundant), die
+  Default-Server-Beschreibung im Feature-Überblick sowie im
+  "Update-Mechanismus"-Abschnitt selbst. `SESSION.md` (beide, dieser
+  Eintrag ausgenommen) bewusst NICHT rückwirkend geändert — Konvention
+  laut `CLAUDE.md`, ältere Einträge bleiben als historisches Protokoll
+  stehen.
+- Neuer Build zur Verifikation UND weil ein Build ohnehin fällig war,
+  um den neuen Pfad serverseitig mit echten Daten zu befüllen (der
+  Ordner war zwar schon gespiegelt, aber ein frischer Upload bestätigt
+  den kompletten Pfad statt sich nur auf den vom Nutzer kopierten
+  Altbestand zu verlassen): `./gradlew assembleDebug` erfolgreich, lokal
+  nach `radiosabbelnich.apk` kopiert, zeitgestempelt
+  (`radiosabbelnich-20260812-173242.apk`) + `version.json`
+  (`buildTime: "2026-08-12 17:32"`) + `radiosabbelnich-latest.apk`-Alias
+  nach `strato:/srv/www/blarks.de/radio/update/` hochgeladen (dritter
+  `scp`-Schritt wie gehabt).
+
+### Bewusst NICHT gemacht
+
+- Kein Live-Test von `checkForUpdate()`/`downloadUpdate()` im Emulator
+  (anders als beim ursprünglichen Umzug auf `blarks.de` am 2026-08-08) —
+  der lokal gestartete `test_device`-Emulatorprozess lief zwar noch, gab
+  aber über `adb devices` kein Gerät mehr her (vermutlich verwaist aus
+  einer früheren Session), erneutes Hochfahren wäre für eine reine
+  Pfadänderung ohne Logikwechsel unverhältnismäßig gewesen.
+  Stattdessen serverseitig direkt per `curl -I` gegen die neuen
+  Endpunkte geprüft (siehe Verifiziert unten) — deckt exakt das ab, was
+  `UpdateManager.kt` bei `fetchRemoteVersion()`/`downloadUpdate()`
+  tatsächlich auswertet (Statuscode, `Content-Type`).
+- Alter Pfad `update_radiosabbelnich/` NICHT gelöscht — Nutzer sprach nur
+  vom Umstellen des App-seitigen Ziels, nicht vom Aufräumen des alten
+  Verzeichnisses; das bleibt eine bewusste, separate Entscheidung.
+- Bereits gespeicherte "Update-Server:"-Werte auf Geräten, die das
+  Textfeld schon einmal manuell befüllt haben, wechseln NICHT automatisch
+  mit — nur der Code-Default für neue/unveränderte Installationen ändert
+  sich. Betrifft laut Nutzer aktuell keine bekannten Geräte außer dem
+  Test-Emulator.
+
+### Verifiziert
+
+- `./gradlew assembleDebug`: `BUILD SUCCESSFUL`.
+- `curl -sI https://blarks.de/radio/update/version.json`: `HTTP/2 200`,
+  `content-type: application/json`.
+- `curl -sI https://blarks.de/radio/update/radiosabbelnich-latest.apk`:
+  `HTTP/2 200`, `content-type: application/vnd.android.package-archive`
+  (exakt der Content-Type, den `downloadUpdate()` zwingend prüft).
+- `ssh strato ls /srv/www/blarks.de/radio/update/`: enthält jetzt
+  `version.json`, `radiosabbelnich-latest.apk` und zwei zeitgestempelte
+  APKs (die vom Nutzer gespiegelte alte + die frisch hochgeladene neue).
+- QR-Code per `cairosvg` (in einer lokalen venv installiert, da
+  `zxing-cpp` diesmal nicht verfügbar war) zu PNG gerendert und mit
+  OpenCVs `QRCodeDetector` zurückdekodiert: liefert exakt
+  `https://blarks.de/radio/update/radiosabbelnich-latest.apk` — kein
+  kaputter/unlesbarer Code.
+- `grep -rn "update_radiosabbelnich"` über `android-app/` (außer
+  `SESSION.md`): nur noch die bewusst historischen Erwähnungen in den
+  neu geschriebenen Kommentaren/Absätzen übrig, keine aktive
+  Konfiguration mehr.
+
+## 2026-08-12 (Fortsetzung 3) — UI-Basissprache auf Englisch umgestellt, Deutsch via values-de/
+
+**Auslöser**: repo-weite Umstellung der Mehrsprachigkeit (siehe
+`../SESSION.md`, Eintrag "Basissprache Web-Interface auf Englisch
+umgestellt" vom selben Tag, dort die volle Begründung/den Plan) —
+Englisch soll überall Basissprache werden, weitere Sprachen sollen
+leicht nachrüstbar sein. Für Android war das vorab schon fast erledigt:
+`res/values/strings.xml` existierte, wurde aber wie eine einsprachige
+(deutsche) Datei benutzt statt als der sprachneutrale Android-Default.
+
+### Umsetzung
+
+- `res/values/strings.xml` (deutsch, 112 Keys) per `git mv` nach
+  `res/values-de/strings.xml` verschoben — Historie bleibt erhalten,
+  Inhalt unverändert.
+- Neue `res/values/strings.xml` mit englischen Übersetzungen aller 112
+  Keys angelegt (Format-Platzhalter `%1$s`/`%1$d`/`%1$.2f`/… 1:1 aus dem
+  Original übernommen). Damit ist `values/` jetzt der tatsächliche
+  Android-Sprachneutral-Default (Fallback für jede nicht explizit
+  unterstützte Geräte-Locale), `values-de/` die Override-Schicht für
+  deutschsprachige Geräte — der native Android-Ressourcenmechanismus,
+  bisher nur nicht so genutzt.
+- Bewusst KEIN eigener Lademechanismus (kein `.lng`-Äquivalent wie im
+  Docker-Projekt) — Android löst "Basissprache + leicht nachrüstbare
+  weitere Sprachen" bereits vollständig über `values-<lang>/`-Ordner,
+  ein Custom-Mechanismus wäre unidiomatische Doppelung gewesen und
+  hätte Android Studios Translation Editor nicht nutzen können.
+- `CLAUDE.md`: neuer Architektur-Abschnitt "UI-Sprache". `README.md`:
+  Feature-Bullet "Mehrsprachige UI" in "Was funktioniert" ergänzt.
+- Echter Build durchgeführt (Pflicht bei jedem Android-Build laut
+  `../CLAUDE.md`): APK lokal kopiert, zeitgestempelt + `version.json` +
+  `radiosabbelnich-latest.apk`-Alias nach `blarks.de/radio/update/`
+  hochgeladen.
+
+### Bewusst NICHT gemacht
+
+- Kein manueller In-App-Sprachumschalter — anders als das Web-Interface
+  (dort per `/config`-Dropdown umschaltbar) wählt Android automatisch
+  nach Geräte-Locale, das deckt den aktuellen Bedarf. Ein manueller
+  Umschalter wäre ein separates, größeres Feature.
+- Keine weiteren Sprachen über Deutsch/Englisch hinaus angelegt — reine
+  Umstellung der Basissprache, kein neuer Sprachinhalt.
+
+### Verifiziert
+
+- Skriptgestützter Vergleich `values/strings.xml` ↔ `values-de/
+  strings.xml`: identisches Key-Set (112/112) in identischer
+  Reihenfolge, UND identische Format-Platzhalter pro Key zwischen
+  beiden Sprachen (kein Mismatch, der sonst erst als Absturz/Leerstring
+  zur Laufzeit aufgefallen wäre).
+- `./gradlew assembleDebug`: `BUILD SUCCESSFUL`.
+- `aapt2 dump resources` am gebauten APK: `string/status_idle` zeigt
+  korrekt sowohl einen Default-Eintrag (`() "Stopped"`) als auch einen
+  `(de)`-Override (`"Gestoppt"`) — der Android-Ressourcenmechanismus
+  greift wie beabsichtigt.

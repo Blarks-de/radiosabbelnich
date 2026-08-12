@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > (separates Projekt)", für die Abgrenzung zum Docker-Dienst. Zwei feste
 > Regeln von dort gelten weiterhin unbedingt: nach jedem Build die APK
 > lokal nach `radiosabbelnich.apk` kopieren + `version.json` neu schreiben
-> UND beides zeitgestempelt nach `blarks.de/update_radiosabbelnich/`
+> UND beides zeitgestempelt nach `blarks.de/radio/update/`
 > hochladen (siehe unten), und `README.md` bei jeder inhaltlichen Änderung
 > nachziehen.
 
@@ -49,11 +49,11 @@ STAMP=$(date '+%Y%m%d-%H%M%S')
 APK_NAME="radiosabbelnich-${STAMP}.apk"
 cp radiosabbelnich.apk "$APK_NAME"
 echo "{\"buildTime\": \"$(date '+%Y-%m-%d %H:%M')\", \"apkFile\": \"$APK_NAME\"}" > version.json
-scp "$APK_NAME" version.json strato:/srv/www/blarks.de/update_radiosabbelnich/
+scp "$APK_NAME" version.json strato:/srv/www/blarks.de/radio/update/
 rm "$APK_NAME"   # blarks.de ist die Quelle der Wahrheit, keine doppelte lokale Ablage
 # Fest benannter Alias NUR fuer den QR-Code im Haupt-README -- UpdateManager
 # selbst liest ausschliesslich version.json/apkFile, ignoriert diese Datei.
-scp radiosabbelnich.apk strato:/srv/www/blarks.de/update_radiosabbelnich/radiosabbelnich-latest.apk
+scp radiosabbelnich.apk strato:/srv/www/blarks.de/radio/update/radiosabbelnich-latest.apk
 ```
 
 Ohne den Upload-Schritt sieht der Update-Server weiterhin den alten Stand
@@ -84,7 +84,7 @@ adb logcat -s PlaybackService:*   # jeder Sprache/Musik-Wechsel, Watchdog-Events
 ```
 
 Installation auf einem echten Gerät und Update-Server-Details
-(`blarks.de/update_radiosabbelnich`, statisch per Apache ausgeliefert):
+(`blarks.de/radio/update`, statisch per Apache ausgeliefert):
 siehe README-Abschnitte "Installation" und "Update-Mechanismus".
 
 ## Architektur
@@ -240,17 +240,40 @@ allerersten Start (keine `stations.json` vorhanden) wird ein fester
 3-Sender-Startbestand geschrieben, damit sich für Bestandsnutzer beim
 Update auf diese Version nichts sichtbar ändert.
 
+### UI-Sprache: `res/values/strings.xml` (Englisch) + `res/values-de/strings.xml` (Deutsch)
+
+Seit 2026-08-12 (Umstellung Basissprache, analog zum Docker-Projekt,
+siehe dessen `CLAUDE.md`-Abschnitt "Mehrsprachiges Web-Interface"):
+`res/values/strings.xml` ist der sprachneutrale Android-Default (jetzt
+Englisch), `res/values-de/strings.xml` überschreibt ihn auf
+deutschsprachigen Geräten — reiner Android-Bordmittel-Mechanismus
+(automatische Auswahl nach Geräte-Locale), **kein** eigener `.lng`-
+Lader wie im Docker-Projekt. Der native Mechanismus deckt das
+Ziel ("Basissprache Default/Fallback, weitere Sprachen leicht
+nachrüstbar") schon vollständig ab: eine neue Sprache ist einfach ein
+weiterer `values-<lang>/strings.xml`-Ordner mit denselben Keys, keine
+Custom-Logik nötig, funktioniert direkt mit Android Studios
+Translation Editor. Beide Dateien müssen bei einer neuen/geänderten UI-
+Zeichenkette synchron gehalten werden (gleiche Keys, gleiche
+Format-Platzhalter `%1$s`/`%1$d`/… — ein Mismatch fällt nicht beim
+Build auf, sondern erst als Absturz/Leerstring zur Laufzeit, siehe
+SESSION.md-Verifikation dieser Umstellung für den Abgleich-Ansatz).
+Anders als beim Web-Interface gibt es hier **keinen** manuellen
+In-App-Sprachumschalter — Android wählt automatisch nach
+Geräte-Locale, das deckt den aktuellen Bedarf.
+
 ### Update-Mechanismus (`update/UpdateManager.kt`)
 
 Kein Play Store, keine Signaturprüfung über die Debug-Signierung hinaus.
 Lädt `version.json` vom in `SharedPreferences` gespeicherten Server
 (Textfeld auf der Startseite, Default `DEFAULT_UPDATE_BASE_URL` =
-`https://blarks.de/update_radiosabbelnich`), vergleicht `buildTime` als
+`https://blarks.de/radio/update`), vergleicht `buildTime` als
 reinen String gegen `BuildConfig.BUILD_TIME` — deshalb ist der
 `version.json`-Schritt beim Bauen (siehe oben) nicht optional. Seit dem
 Umzug von der lokalen Tailscale-Adresse auf `blarks.de` (2026-08-08,
-siehe SESSION.md) bekommt jede hochgeladene APK einen eigenen,
-zeitgestempelten Dateinamen statt eines fest überschriebenen
+siehe SESSION.md; Unterordner seit 2026-08-12 `radio/update` statt
+`update_radiosabbelnich`, identischer Inhalt) bekommt jede hochgeladene
+APK einen eigenen, zeitgestempelten Dateinamen statt eines fest überschriebenen
 `radiosabbelnich.apk` — `version.json`s zweites Feld `apkFile` sagt der
 App den exakten Namen, `UpdateManager` merkt sich das Ergebnis aus
 `checkForUpdate()` intern für den nachfolgenden `downloadUpdate()`-Aufruf
@@ -259,7 +282,7 @@ APK-Download in den Cache, dann System-Installer über `FileProvider` +
 `ACTION_VIEW` (`REQUEST_INSTALL_PACKAGES`) — keine stille
 Auto-Installation. Server-seitige Gegenstelle ist keine eigene Software
 mehr, sondern der ganz normale Apache-Webserver von `blarks.de`
-(statisches Verzeichnis `/srv/www/blarks.de/update_radiosabbelnich/`,
+(statisches Verzeichnis `/srv/www/blarks.de/radio/update/`,
 Verzeichnis-Listing per vhost-Konfiguration gesperrt, `.apk`-MIME-Type
 kommt automatisch aus `/etc/mime.types`) — kein Auth, dafür jetzt
 öffentlich statt nur übers Tailscale-Netz erreichbar (bewusste
@@ -275,7 +298,7 @@ das Update, weil sich der APK-Signer geändert hat.
 
 Der Update-Mechanismus hat keinerlei Authentifizierung — seit 2026-08-08
 bewusst und explizit auf Nutzerwunsch öffentlich erreichbar unter
-`blarks.de/update_radiosabbelnich` (vorher: nur übers Tailscale-Netz,
+`blarks.de/radio/update` (vorher: nur übers Tailscale-Netz,
 siehe SESSION.md für die Abwägung). Das ist eine bewusste Ausnahme, keine
 Blaupause: anders als beim Docker-Projekt (dessen `CLAUDE.md`, "Kein
 Auth, nur hinter VPN", weiterhin uneingeschränkt gilt — dort steht ein

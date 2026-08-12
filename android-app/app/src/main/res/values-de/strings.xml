@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">RadioSabbelNich MVP</string>
+    <string name="build_time">Build: %1$s</string>
+
+    <string name="status_idle">Gestoppt</string>
+    <string name="status_connecting">Verbinde…</string>
+    <string name="status_speech">🗣 Sprache</string>
+    <string name="status_music">🎵 Musik</string>
+    <string name="status_error">⚠ Fehler</string>
+
+    <string name="btn_play">▶ Abspielen</string>
+    <string name="btn_stop">■ Stopp</string>
+
+    <string name="model_not_ready">Modell fehlt noch.</string>
+    <string name="model_downloading">Modell wird geladen: %1$d%%</string>
+    <string name="model_unpacking">Modell wird entpackt…</string>
+    <string name="model_ready">Modell bereit.</string>
+    <string name="model_error">Modell-Download fehlgeschlagen: %1$s</string>
+    <string name="btn_download_model">Modell herunterladen</string>
+
+    <string name="btn_manage_stt_languages">🌐 STT-Sprachen verwalten</string>
+    <string name="stt_model_missing">⚠ Kein Modell für „%1$s“ – Analyse pausiert.</string>
+    <string name="analyzer_error">⚠ Analyse gestoppt: %1$s (Wiedergabe läuft weiter)</string>
+    <string name="calibration_active_hint">🎚 Kalibrierung für „%1$s“ läuft – automatisches Zappen ist solange aus.</string>
+    <string name="stt_settings_title">STT-Sprachen verwalten</string>
+    <string name="stt_languages_heading">🌐 STT-Sprachen</string>
+    <string name="btn_add_language">+ Neue Sprache</string>
+    <string name="btn_delete_language">Löschen</string>
+    <string name="dialog_add_language_title">Neue Sprache</string>
+    <string name="label_language_code">Sprachcode (z.B. „en“)</string>
+    <string name="label_language_model_url">Vosk-Modell-Download-URL (.zip)</string>
+    <string name="language_action_error_empty">Sprachcode und Modell-URL dürfen nicht leer sein.</string>
+    <string name="delete_language_confirm_title">Sprache löschen?</string>
+    <string name="delete_language_confirm_message">„%1$s“ wirklich löschen? Ein bereits heruntergeladenes Modell wird dabei ebenfalls gelöscht.</string>
+    <string name="stt_categories_heading">🏷 Kategorie-Sprachen</string>
+    <string name="btn_calibrate_language">Kalibrieren</string>
+
+    <string name="calibration_title">Kalibrieren: %1$s</string>
+    <string name="calibration_hint">Spiele über die Startseite einen Sender mit dieser Sprache ab (Wechsel jederzeit möglich) und markiere unten, ob gerade Sprache oder Musik läuft. Je mehr Samples, desto besser der Vorschlag.</string>
+    <string name="calibration_ratio_label">🤥 Sprache-Wahrscheinlichkeit (roh)</string>
+    <string name="btn_calibration_level_speech">🗣 Das ist Sprache</string>
+    <string name="btn_calibration_level_music">🎵 Das ist Musik</string>
+    <string name="calibration_level_none">Markiert als: – (kein Sammeln)</string>
+    <string name="calibration_level_speech">Markiert als: Sprache</string>
+    <string name="calibration_level_music">Markiert als: Musik</string>
+    <string name="calibration_sample_counts">Sprache-Samples: %1$d · Musik-Samples: %2$d</string>
+    <string name="calibration_suggestion_none">Noch kein Vorschlag – erst Sprache UND Musik markieren und je mindestens ca. 10 Sekunden sammeln.</string>
+    <string name="calibration_suggestion_overlapping">Verteilungen überlappen sich noch – kein sauberer Vorschlag möglich. Mehr Samples sammeln oder Sender wechseln.</string>
+    <string name="calibration_suggestion">Vorschlag: Sprache ab %1$.2f, Musik bis %2$.2f</string>
+    <string name="btn_calibration_apply">Übernehmen</string>
+    <string name="btn_calibration_done">Fertig</string>
+    <string name="calibration_applied">Schwellen gespeichert.</string>
+    <string name="calibration_apply_failed">Übernehmen fehlgeschlagen.</string>
+
+    <string name="notification_channel_name">Wiedergabe</string>
+    <string name="notification_playing">Läuft: %1$s</string>
+
+    <string name="current_station_none">Kein Sender ausgewählt</string>
+
+    <string name="update_checking">Suche nach Update…</string>
+    <string name="update_up_to_date">Kein Update verfügbar (aktuell).</string>
+    <string name="update_available">Update verfügbar: %1$s</string>
+    <string name="update_downloading">Update wird geladen…</string>
+    <string name="update_ready">Update geladen — bereit zur Installation.</string>
+    <string name="update_error">Update-Check fehlgeschlagen: %1$s</string>
+    <string name="btn_check_update">🔄 Nach Update suchen</string>
+    <string name="btn_download_update">⬇ Update herunterladen</string>
+    <string name="btn_install_update">📲 Update installieren</string>
+    <string name="update_server_label">Update-Server:</string>
+    <string name="btn_save_update_server">Speichern</string>
+    <string name="update_server_saved">Update-Server gespeichert.</string>
+
+    <string name="btn_manage_stations">⚙️ Sender verwalten</string>
+    <string name="station_management_title">Sender verwalten</string>
+    <string name="btn_add_station">+ Neuer Sender</string>
+    <string name="btn_edit_station">Bearbeiten</string>
+    <string name="btn_delete_station">Löschen</string>
+    <string name="dialog_add_station_title">Neuer Sender</string>
+    <string name="dialog_edit_station_title">Sender bearbeiten</string>
+    <string name="label_station_name">Name</string>
+    <string name="label_station_url">URL</string>
+    <string name="label_station_category">Kategorie</string>
+    <string name="label_station_enabled">Aktiviert</string>
+    <string name="btn_save">Speichern</string>
+    <string name="btn_cancel">Abbrechen</string>
+    <string name="delete_station_confirm_title">Sender löschen?</string>
+    <string name="delete_station_confirm_message">„%1$s“ wirklich löschen?</string>
+    <string name="station_action_error">%1$s</string>
+
+    <string name="lock_reason_speech">⏸ Pause wegen Sprache</string>
+    <string name="lock_reason_dead">⚠ Antwortet nicht</string>
+
+    <string name="btn_zappen">⚡ ZAPPEN!</string>
+    <string name="bs_meter_label">🤥 Bullshitometer</string>
+    <string name="bs_meter_off">–</string>
+    <string name="bs_meter_pct">%1$d%%</string>
+
+    <string name="cfg_import_heading">📻 Sender-Import</string>
+    <string name="label_import_url">Playlist-URL (M3U, z.B. Kodi-Radioliste)</string>
+    <string name="btn_import_stations">Sender importieren</string>
+    <string name="import_loading">Lade Playlist …</string>
+    <string name="import_done">%1$d geprüft, %2$d neu hinzugefügt (deaktiviert, „Unsortiert“).</string>
+    <string name="import_error">Import fehlgeschlagen: %1$s</string>
+    <string name="btn_check_unsorted">🔍 Unsortierte Sender prüfen</string>
+    <string name="check_running">Prüfe %1$d / %2$d …</string>
+    <string name="check_done">%1$d geprüft, %2$d nicht erreichbar.</string>
+    <string name="unreachable_badge">⚠ nicht erreichbar</string>
+
+    <string name="news_break_label">📰 Nachrichten-Pause:</string>
+    <string name="news_break_enabled">Aktiviert (zur vollen/halben Stunde)</string>
+    <string name="btn_news_break_folder">📁 Ordner wählen</string>
+    <string name="news_break_no_folder">Kein Ordner gewählt.</string>
+    <string name="news_break_folder_selected">Ordner: %1$s</string>
+    <string name="news_break_window_hint">Fensterlänge (Minuten)</string>
+    <string name="news_break_window_saved">Fensterlänge gespeichert: %1$s Min.</string>
+    <string name="news_break_window_invalid">Ungültige Fensterlänge.</string>
+    <string name="news_break_now_playing">📰 Nachrichten-Pause: %1$s</string>
+
+    <string name="fp_chip_label">🔎 Fingerprint</string>
+    <string name="fp_chip_off">–</string>
+    <string name="fp_chip_match">%1$s (%2$dx gesehen)</string>
+    <string name="fp_chip_learned">Neuer Clip gelernt</string>
+    <string name="btn_clear_fingerprints">🗑 Fingerprint-DB leeren</string>
+    <string name="fp_cleared">Fingerprint-DB geleert: %1$d Clip(s) gelöscht.</string>
+    <string name="fp_clear_confirm_title">Fingerprint-DB leeren?</string>
+    <string name="fp_clear_confirm_message">Alle gelernten Jingle-/Werbe-Clips werden gelöscht. Die Erkennung lernt danach von vorn.</string>
+    <string name="btn_zapping_error">🛑 Zapping-Fehler</string>
+</resources>

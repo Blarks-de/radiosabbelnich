@@ -79,6 +79,13 @@ COPY web/sw.js .
 COPY pics/icon-192.png .
 COPY pics/icon-512.png .
 COPY pics/favicon.ico .
+# Einzige Ausnahme von "jede Datei einzeln per COPY" oben: language/ wird
+# als ganzer Ordner kopiert, weil i18n.py ihn zur Laufzeit per glob nach
+# *.lng-Dateien durchsucht (siehe dortiges LANGUAGE_DIR) -- eine neue
+# Sprachdatei soll durch bloßes Ablegen + Rebuild wirken, ohne zusätzlich
+# eine eigene COPY-Zeile hier zu brauchen (leicht zu vergessen, und ohne
+# sie fehlt die Sprache im Image lautlos statt mit einem Fehler beim Start).
+COPY language/ language/
 
 # ICECAST_URL wird beim Start via docker-compose environment gesetzt,
 # z.B. icecast://source:PASSWORT@icecast-radiosabbelnich:8000/mix.mp3

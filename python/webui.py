@@ -2447,8 +2447,7 @@ _CONFIG_PAGE_HTML = """<!doctype html>
     Einstellung.</p>
   <label><span data-i18n="cfg_language_label">Sprache der Oberfläche</span>
     <select id="language-select">
-      <option value="de">Deutsch</option>
-      <option value="en">English</option>
+%%LANGUAGE_OPTIONS%%
     </select>
   </label>
   <button type="submit" data-i18n="common_save">Speichern</button>
@@ -3496,13 +3495,30 @@ def _check_i18n_coverage(template: str, template_name: str):
         )
 
 
+def _escape_html_text(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+
+# Sprachauswahl auf der Config-Seite (%%LANGUAGE_OPTIONS%% in _CONFIG_PAGE_HTML)
+# kommt seit der .lng-Umstellung aus i18n.LANGUAGE_NAMES statt aus zwei
+# hartcodierten <option>-Zeilen -- eine neue Sprache (weitere .lng-Datei)
+# taucht dadurch automatisch im Dropdown auf, ohne dieses Template anzufassen.
+# Nach Anzeigename sortiert, nicht nach Code, damit die Liste im Dropdown
+# alphabetisch nach dem lesbar ist, was der Nutzer tatsächlich sieht.
+_LANGUAGE_OPTIONS_HTML = "\n".join(
+    f'      <option value="{code}">{_escape_html_text(name)}</option>'
+    for code, name in sorted(i18n.LANGUAGE_NAMES.items(), key=lambda kv: kv[1])
+)
+
+
 def _render_i18n_variants(template: str, template_name: str) -> dict:
     _check_i18n_coverage(template, template_name)
     variants = {}
     for lang in i18n.LANGUAGES:
         strings_json = json.dumps({k: v[lang] for k, v in i18n.STRINGS.items()}, ensure_ascii=False)
         html = (template.replace("%%LANG%%", lang).replace("%%I18N_JSON%%", strings_json)
-                .replace("%%VERSION%%", _VERSION_STRING))
+                .replace("%%VERSION%%", _VERSION_STRING)
+                .replace("%%LANGUAGE_OPTIONS%%", _LANGUAGE_OPTIONS_HTML))
         variants[lang] = html.encode("utf-8")
     return variants
 

@@ -189,10 +189,14 @@ merkt (siehe "Bekannte Grenzen").
 - **Update-Mechanismus mit konfigurierbarer Adresse** (`update/
   UpdateManager.kt`, siehe eigener Abschnitt unten) - Textfeld "Update-
   Server:" auf der Startseite (Default `https://blarks.de/
-  update_radiosabbelnich`, oeffentlich erreichbar, kein VPN noetig).
+  radio/update`, oeffentlich erreichbar, kein VPN noetig).
   Button "Nach Update suchen" prueft den dort eingetragenen Server, laedt
   bei Bedarf die neue APK und stoesst den System-Installer an. Kein Play
   Store, keine Signatur-Pruefung ueber die Debug-Signierung hinaus.
+- **Mehrsprachige UI** (Englisch Default, Deutsch auf deutschsprachigen
+  Geraeten) - Standard-Android-Ressourcenmechanismus (`res/values/`
+  = Englisch, `res/values-de/` = Deutsch), automatische Auswahl nach
+  Geraete-Locale, kein manueller Umschalter in der App noetig.
 
 ### Live-Testergebnis (Android-Emulator auf diesem Host, API 34 x86_64)
 
@@ -307,13 +311,13 @@ STAMP=$(date '+%Y%m%d-%H%M%S')
 APK_NAME="radiosabbelnich-${STAMP}.apk"
 cp radiosabbelnich.apk "$APK_NAME"
 echo "{\"buildTime\": \"$(date '+%Y-%m-%d %H:%M')\", \"apkFile\": \"$APK_NAME\"}" > version.json
-scp "$APK_NAME" version.json strato:/srv/www/blarks.de/update_radiosabbelnich/
+scp "$APK_NAME" version.json strato:/srv/www/blarks.de/radio/update/
 rm "$APK_NAME"
 # Zusaetzlich unter festem Namen hochladen -- NICHT fuer UpdateManager
 # (der liest ausschliesslich version.json/apkFile, siehe unten), sondern
 # als stabiles Ziel fuer den QR-Code im Haupt-README, der sonst nach
 # jedem Build auf eine veraltete Zeitstempel-Datei zeigen wuerde.
-scp radiosabbelnich.apk strato:/srv/www/blarks.de/update_radiosabbelnich/radiosabbelnich-latest.apk
+scp radiosabbelnich.apk strato:/srv/www/blarks.de/radio/update/radiosabbelnich-latest.apk
 ```
 
 Der Upload versorgt den Update-Mechanismus (siehe eigener Abschnitt
@@ -812,9 +816,11 @@ muss, liefert `UpdateManager.kt` sie per HTTP(S) direkt aus dem Netz nach.
 Seit 2026-08-08 (vorher: eigener Python-Server nur uebers Tailscale-Netz,
 siehe SESSION.md) ist die Gegenstelle keine eigene Software mehr, sondern
 ein ganz normales, statisches Verzeichnis auf dem oeffentlich erreichbaren
-Webserver von `blarks.de`: `/srv/www/blarks.de/update_radiosabbelnich/`
-(per SSH-Host-Alias `strato` erreichbar). Apache liefert Dateien von dort
-direkt aus - Verzeichnis-Listing ist per vhost-Konfiguration gesperrt
+Webserver von `blarks.de`: `/srv/www/blarks.de/radio/update/` (per
+SSH-Host-Alias `strato` erreichbar; bis 2026-08-12
+`/srv/www/blarks.de/update_radiosabbelnich/`, seitdem in einen neuen
+Unterordner mit identischem Inhalt umgezogen, siehe SESSION.md). Apache
+liefert Dateien von dort direkt aus - Verzeichnis-Listing ist per vhost-Konfiguration gesperrt
 (`Options -Indexes`), der `.apk`-MIME-Type (`application/vnd.android.
 package-archive`) kommt automatisch aus `/etc/mime.types`, kein
 Zusatzcode noetig.
@@ -832,9 +838,9 @@ STAMP=$(date '+%Y%m%d-%H%M%S')
 APK_NAME="radiosabbelnich-${STAMP}.apk"
 cp radiosabbelnich.apk "$APK_NAME"
 echo "{\"buildTime\": \"$(date '+%Y-%m-%d %H:%M')\", \"apkFile\": \"$APK_NAME\"}" > version.json
-scp "$APK_NAME" version.json strato:/srv/www/blarks.de/update_radiosabbelnich/
+scp "$APK_NAME" version.json strato:/srv/www/blarks.de/radio/update/
 rm "$APK_NAME"
-scp radiosabbelnich.apk strato:/srv/www/blarks.de/update_radiosabbelnich/radiosabbelnich-latest.apk
+scp radiosabbelnich.apk strato:/srv/www/blarks.de/radio/update/radiosabbelnich-latest.apk
 ```
 
 Aeltere Staende bleiben auf `blarks.de` liegen (kein automatisches
@@ -854,7 +860,7 @@ haelt sie in `SharedPreferences` (`getBaseUrl()`/`setBaseUrl()`), mit
 einem Textfeld direkt auf der Startseite ("Update-Server:") jederzeit
 ohne Rebuild aenderbar. `DEFAULT_UPDATE_BASE_URL` im Code ist nur der
 Startwert, falls noch nichts gespeichert ist - jetzt
-`https://blarks.de/update_radiosabbelnich`. Wer die APK von woanders
+`https://blarks.de/radio/update`. Wer die APK von woanders
 bekommt oder einen eigenen Server betreiben will, traegt einfach eine
 andere Adresse ins Textfeld ein.
 

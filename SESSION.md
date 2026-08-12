@@ -6525,3 +6525,140 @@ jetzt, neueste Einträge zuerst — reine Doku-Aufgabe.
   gegen die per `git log` abgerufene tatsächliche Commit-Reihenfolge
   (Datum+Uhrzeit) korrigiert. Abschließend jeden der zehn
   Tagesabschnitte einzeln gegen die `git log`-Ausgabe gegengelesen.
+
+## 2026-08-12 (Fortsetzung) — Basissprache Web-Interface auf Englisch umgestellt, Deutsch als externes Sprachpaket (`language/*.lng`)
+
+**Auslöser**: Nutzer wollte die Mehrsprachigkeit umbauen: Englisch soll
+Basissprache werden, Deutsch (und langfristig weitere Sprachen) sollen
+analog zu Windows-Sprachpaketen in externe Dateien ausgelagert werden,
+damit neue Sprachen ohne Code-Änderung nachrüstbar sind. Erst
+Bestandsaufnahme + Plan (Web-Interface: `i18n.py` mit hartcodiertem
+`{"de","en"}`-Set; Android: `strings.xml` einsprachig Deutsch, aber
+bereits über den nativen Android-Ressourcenmechanismus lauffähig),
+dann nach Freigabe umgesetzt.
+
+### Umsetzung — Web-Interface
+
+- Neuer Ordner `language/` (Repo-Root) mit `language/Deutsch.lng`: alle
+  204 bisherigen deutschen Übersetzungen aus `i18n.py`s altem
+  `STRINGS`-Dict wurden per Skript (AST-Parse von `i18n.py` +
+  `ast.literal_eval`, um die Original-Werte inkl. impliziter
+  String-Konkatenation exakt zu extrahieren) automatisiert in
+  Key=Value-Zeilen umgewandelt, mit denselben Abschnitts-Kommentaren
+  wie im Original gruppiert (Skript hat 204/204 Keys verifiziert
+  zugeordnet). Format-Entscheidung: einfaches `Key=Value`, eine Zeile
+  pro Eintrag, `#`-Kommentare, zwei reservierte `#!`-Metazeilen
+  (`#!code=de`/`#!name=Deutsch`) — gewählt statt JSON, weil alle
+  Strings Ein-Zeiler ohne echte Zeilenumbrüche sind und Key=Value ohne
+  Anführungszeichen-Escaping von Hand editierbar bleibt.
+- `python/i18n.py` komplett umgebaut: `_BASE_STRINGS` ist jetzt ein
+  flaches, IMMER vollständiges englisches Basis-Dict im Code.
+  `_parse_lng_file()`/`_discover_languages()` laden zur Laufzeit alle
+  `language/*.lng`-Dateien (glob), mergen jede Sprache gegen die
+  Basis (fehlender Key → Fallback aufs Englische, geloggt auf DEBUG;
+  unbekannter Key → Warnung, ignoriert; fehlendes `#!code=` → Datei
+  komplett übersprungen, Warnung). `STRINGS`/`LANGUAGES` bleiben nach
+  außen (webui.py) in Form/Bedeutung unverändert (`STRINGS[key][lang]`,
+  `LANGUAGES` als Set) — nur `LANGUAGES` ist jetzt dynamisch statt
+  hartcodiert `{"de","en"}`, dadurch mussten `_render_i18n_variants()`/
+  `_check_i18n_coverage()`/`settings_store.py`s Sprachvalidierung in
+  `webui.py` NICHT angefasst werden (lasen `i18n.LANGUAGES` schon vorher
+  zur Laufzeit statt es einzufrieren). `DEFAULT_LANGUAGE` fällt jetzt
+  auf `"en"` statt `"de"` zurück.
+- Stolperstein beim Parsen: `idx_switched_back_to` hat ein
+  bedeutungstragendes FÜHRENDES Leerzeichen (wird im Frontend an einen
+  anderen String angehängt) — `_parse_lng_file()` trimmt Werte deshalb
+  bewusst NUR am Zeilenende (`\r`/`\n`), nicht an den Rändern. Beim
+  ersten Testlauf verifiziert, dass das führende Leerzeichen erhalten
+  bleibt.
+- Sprachauswahl-Dropdown auf der Config-Seite (`language-select`) war
+  bisher zwei hartcodierte `<option>`-Zeilen — jetzt aus
+  `i18n.LANGUAGE_NAMES` generiert (`%%LANGUAGE_OPTIONS%%`-Platzhalter,
+  neu in `_render_i18n_variants()`, analog zu `%%LANG%%`/
+  `%%I18N_JSON%%`), alphabetisch nach Anzeigename sortiert. Eine neue
+  `.lng`-Datei taucht dadurch automatisch im Dropdown auf.
+- `Dockerfile`: einzige bewusste Ausnahme vom "jede Datei einzeln per
+  COPY"-Muster — `COPY language/ language/` kopiert den ganzen Ordner,
+  weil `i18n.py` ihn per `glob` durchsucht; eine einzelne COPY-Zeile
+  pro Sprachdatei wäre leicht zu vergessen und würde dann lautlos
+  (kein Fehler beim Start) statt laut scheitern.
+- `env.example`: `UI_LANGUAGE`-Kommentar und Default aktualisiert
+  (Default jetzt leer/„en“ statt `de`).
+- `CLAUDE.md`/`README.md` (DE+EN) nachgezogen: neuer i18n-Abschnitt,
+  `.lng`-Format samt Begründung, Anleitung "weitere Sprachen
+  nachrüsten", Datei-/Env-Tabellen aktualisiert.
+
+### Umsetzung — Android-App
+
+- Bestehende `res/values/strings.xml` (deutsch, 112 Keys) per `git mv`
+  nach `res/values-de/strings.xml` verschoben (Historie erhalten).
+- Neue `res/values/strings.xml` (jetzt der sprachneutrale
+  Android-Default) mit englischen Übersetzungen aller 112 Keys
+  angelegt — kein Custom-Lademechanismus nötig, der native
+  Android-Ressourcenmechanismus (`values/` = Fallback, `values-de/` =
+  Override nach Geräte-Locale) deckt das Ziel bereits vollständig ab.
+  Bewusst KEIN `.lng`-Äquivalent auf Android (siehe Plan-Antwort) —
+  wäre eine unidiomatische Doppelung des bereits vorhandenen
+  Standardmechanismus gewesen.
+- `android-app/CLAUDE.md`: neuer Abschnitt "UI-Sprache" in der
+  Architektur-Übersicht. `android-app/README.md`: Feature-Bullet
+  "Mehrsprachige UI" ergänzt.
+- Echter `./gradlew assembleDebug`-Build durchgeführt (Pflicht laut
+  `CLAUDE.md` bei jedem Android-Build) → APK lokal kopiert,
+  zeitgestempelt + `version.json` + `radiosabbelnich-latest.apk`-Alias
+  nach `blarks.de/radio/update/` hochgeladen (siehe SESSION-Eintrag
+  zum Pfad-Umzug vom selben Tag).
+
+### Verifiziert
+
+- Web: isolierter Test von `i18n.py` (Kopie nach `language/`-Ordner
+  daneben, Muster aus `CLAUDE.md`) — Sprachauswahl `{"de","en"}`
+  korrekt dynamisch entdeckt, `idx_switched_back_to`s führendes
+  Leerzeichen erhalten, Sonderzeichen/Anführungszeichen in Werten
+  korrekt übernommen. Synthetische Sprachdatei mit unvollständigen +
+  unbekannten Keys getestet: fehlende Keys fallen korrekt auf
+  Englisch zurück (mit DEBUG-Log), unbekannte Keys werden mit
+  Warnung ignoriert, eine Datei ohne `#!code=` wird komplett
+  übersprungen (mit Warnung) statt den Start zu blockieren.
+- `import webui` (mit Stub-Modulen für die auf diesem Host fehlenden
+  `mutagen`/`aubio`, siehe `CLAUDE.md` zu Host-Limitierungen) erfolgreich
+  — `_check_i18n_coverage()` (jetzt nur noch gegen die englische Basis
+  geprüft) läuft ohne Fehler, `_LANGUAGE_OPTIONS_HTML` enthält beide
+  `<option>`-Zeilen korrekt sortiert, kein `%%LANGUAGE_OPTIONS%%`-Rest
+  in den gerenderten Templates, Player-Seite zeigt "VLC Stream"/"Phone
+  Remote" (EN) bzw. "Handy Fernsteuerung" (DE) korrekt,
+  `settings_store.DEFAULTS["language"]` liefert jetzt `"en"`.
+- `docker compose build radiosabbelnich`: erfolgreich. Frisches Image
+  per `docker run --entrypoint python3 ... -c "import i18n; ..."`
+  geprüft: `LANGUAGES=['de','en']`, `/app/language/Deutsch.lng`
+  vorhanden. Danach echter Neustart des LAUFENDEN Dienstes
+  (`docker compose up -d radiosabbelnich`) — Container startet
+  fehlerfrei (Log zeigt normalen Boot inkl. laufender
+  Nachrichten-Pause), `curl` gegen die echte Instanz zeigt das
+  Sprach-Dropdown korrekt mit beiden Optionen, und `settings.json`s
+  bereits gespeichertes `"language": "de"` gewinnt weiterhin wie
+  dokumentiert (für Bestandsnutzer keine sichtbare Änderung durch den
+  neuen Code-Default).
+- Android: `git mv` + neue Datei ergeben je 112 Keys mit identischem
+  Key-Set in identischer Reihenfolge (Skript-Vergleich), UND
+  identischen Format-Platzhaltern (`%1$s`/`%1$d`/`%1$.2f`/…) pro Key
+  zwischen beiden Sprachen (kein Mismatch, der erst zur Laufzeit
+  aufgefallen wäre). `./gradlew assembleDebug`: `BUILD SUCCESSFUL`.
+  `aapt2 dump resources` am gebauten APK bestätigt die erwartete
+  Struktur direkt: `string/status_idle` hat sowohl einen
+  Default-Eintrag `() "Stopped"` als auch einen `(de) "Gestoppt"`.
+
+### Bewusst NICHT gemacht
+
+- Kein `English.lng` angelegt — laut Plan lebt Englisch als Fallback
+  direkt im Code (`_BASE_STRINGS`), eine zusätzliche Datei wäre reine
+  Redundanz. Der Lader unterstützt ein optionales `English.lng`
+  trotzdem transparent (würde `code=en` einfach überschreiben), falls
+  später doch gewünscht.
+- Kein manueller In-App-Sprachumschalter auf Android — Geräte-Locale
+  reicht für den aktuellen Bedarf, wäre ein separates, größeres
+  Feature.
+- `data/settings.json`/`.env` der laufenden Instanz NICHT angefasst —
+  das gespeicherte `"language": "de"` bleibt bewusst bestehen, der
+  Nutzer sieht durch den Code-Default-Wechsel keine Verhaltensänderung,
+  bis er/sie aktiv etwas anderes einstellt.

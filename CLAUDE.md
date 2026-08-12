@@ -23,7 +23,7 @@ Seit 2026-08-07 wird es aber mitgepflegt, dafür zwei feste Regeln:
   gitignored) UND zusätzlich mit Zeitstempel im Dateinamen
   (`radiosabbelnich-YYYYMMDD-HHMMSS.apk`) sowie ein passendes
   `version.json` (`{"buildTime": "...", "apkFile": "..."}`) nach
-  `blarks.de/update_radiosabbelnich/` hochladen (siehe
+  `blarks.de/radio/update/` hochladen (siehe
   `android-app/README.md`, Abschnitt "Update-Mechanismus" — sonst hält
   die App den alten Stand weiterhin für aktuell). Seit 2026-08-12
   zusätzlich unter dem festen Namen `radiosabbelnich-latest.apk`
@@ -38,8 +38,10 @@ Der Update-Mechanismus lief bis 2026-08-08 über einen eigenständigen
 lokalen Server (`update_server.py` + systemd-Service, nur übers
 Tailscale-Netz erreichbar) — seitdem stattdessen über den ganz normalen,
 öffentlich erreichbaren Webserver von `blarks.de`
-(`/srv/www/blarks.de/update_radiosabbelnich/`, statisches Verzeichnis,
-kein eigener Server-Prozess mehr nötig). Bewusste Ausnahme von "Kein Auth,
+(`/srv/www/blarks.de/radio/update/`, statisches Verzeichnis — seit
+2026-08-12 dort, davor `/srv/www/blarks.de/update_radiosabbelnich/`,
+identischer Inhalt umgezogen, siehe `android-app/SESSION.md`, kein
+eigener Server-Prozess mehr nötig). Bewusste Ausnahme von "Kein Auth,
 nur hinter VPN" unten: verteilt nur eine App-Binary ohne Nutzerdaten,
 Details und Abwägung in `android-app/SESSION.md`.
 
@@ -737,17 +739,44 @@ Float-Vergleich auf 0.0.
   liest `combine_label()`/`resolve_stt_language()` bei jedem Aufruf
   frisch aus `state.stt_filter_cfg` — dafür ist kein Reload nötig.
 
-### Zweisprachiges Web-Interface (i18n.py)
+### Mehrsprachiges Web-Interface (i18n.py + language/*.lng)
 
 `i18n.py` ist reine Domänenlogik ohne Bezug zu `StreamSource`/
-`SwitcherState`, analog zu `news_break.py`/`stt_filter.py`: ein Dict
-`STRINGS` (nach Key gruppiert, `"de"`/`"en"` nebeneinander) plus
-`DEFAULT_LANGUAGE` aus `UI_LANGUAGE` in `.env`. Übersetzt wird NUR, was
-der Nutzer im Browser sieht (Labels, Buttons, `alert()`/`confirm()`-
-Dialoge) — Log-Meldungen, Code-Kommentare und die von
+`SwitcherState`, analog zu `news_break.py`/`stt_filter.py`. Übersetzt
+wird NUR, was der Nutzer im Browser sieht (Labels, Buttons, `alert()`/
+`confirm()`-Dialoge) — Log-Meldungen, Code-Kommentare und die von
 `settings_store.py`/`station_import.py`/`stations_store.py` geworfenen
 `ValueError`-Texte bleiben bewusst deutsch (siehe "Sprache und
 Konventionen" oben).
+
+**Seit 2026-08-12 ist Englisch die Basissprache, direkt im Code
+eingebettet** (`_BASE_STRINGS` in `i18n.py`, IMMER vollständig — jeder in
+den Templates verwendete Key muss hier existieren). Weitere Sprachen
+kommen als externe "Sprachpakete" aus `language/*.lng` (Analogie:
+Windows-Sprachpakete) — `language/Deutsch.lng` für Deutsch. Format:
+einfaches `Key=Value`, eine Zeile pro Eintrag, `#`-Kommentare, zwei
+reservierte `#!`-Metazeilen am Dateianfang (`#!code=de`/`#!name=Deutsch`
+— Maschinencode bzw. Anzeigename fürs Sprach-Dropdown). Gewählt statt
+JSON, weil alle 204 Strings Ein-Zeiler ohne echte Zeilenumbrüche sind
+(auch die langen HTML-Hinweistexte) und Key=Value ohne
+Anführungszeichen-Escaping von Hand editierbar bleibt. Split nur am
+ERSTEN `=` (Werte dürfen `=` enthalten); Werte werden NUR am
+Zeilenende getrimmt, nicht an den Rändern — `idx_switched_back_to` hat
+ein bedeutungstragendes führendes Leerzeichen (wird im Frontend an
+einen anderen String angehängt).
+
+Eine `.lng`-Datei muss NICHT vollständig sein: `_discover_languages()`
+merged pro Sprache `_BASE_STRINGS` mit den in der Datei gefundenen
+Keys, ein fehlender Key fällt für GENAU diesen Key auf die englische
+Basis zurück (geloggt auf DEBUG) statt die ganze Sprache oder gar den
+Start scheitern zu lassen. Ein unbekannter Key in der Datei (z.B. nach
+einer Umbenennung im Code) wird als Warnung geloggt, aber ignoriert.
+Fehlt die `#!code=`-Zeile, wird die Datei komplett übersprungen
+(Warnung). `i18n.LANGUAGES`/`i18n.LANGUAGE_NAMES` sind dadurch
+DYNAMISCH (immer mindestens `{"en"}`, auch ganz ohne `language/`-
+Ordner) statt des früheren hartcodierten `{"de", "en"}` — `STRINGS`
+bleibt aber weiterhin `{key: {lang: text}}`, nach außen (webui.py)
+unverändert.
 
 `_PAGE_HTML`/`_CONFIG_PAGE_HTML` in `webui.py` bleiben EIN Quelltext
 pro Seite, nicht zwei Sprachvarianten: statisches Markup bekommt
@@ -761,18 +790,29 @@ sichtbares Umspringen der Sprache, kein zweiter Template-Mechanismus.
 
 Beide Templates werden trotzdem nur EINMAL pro Sprache tatsächlich
 gerendert, nicht pro Request: `_render_i18n_variants()` läuft beim
-Modul-Import von `webui.py` und ersetzt die zwei Platzhalter
-`%%LANG%%`/`%%I18N_JSON%%` für jede Sprache in `i18n.LANGUAGES`,
-Ergebnis landet in `_PAGE_HTML_BYTES`/`_CONFIG_PAGE_HTML_BYTES` (dict
-`{"de": bytes, "en": bytes}`, analog zu `_MANIFEST_JSON_BYTES` weiter
-oben in derselben Datei). `do_GET` wählt daraus nur per
+Modul-Import von `webui.py` und ersetzt DREI Platzhalter
+`%%LANG%%`/`%%I18N_JSON%%`/`%%LANGUAGE_OPTIONS%%` für jede Sprache in
+`i18n.LANGUAGES`, Ergebnis landet in `_PAGE_HTML_BYTES`/
+`_CONFIG_PAGE_HTML_BYTES` (dict `{lang_code: bytes, ...}`, ein Eintrag
+pro erfolgreich geladener Sprache, analog zu `_MANIFEST_JSON_BYTES`
+weiter oben in derselben Datei). `do_GET` wählt daraus nur per
 `state.language`-Lookup — kein Pro-Request-Stringersatz.
+`%%LANGUAGE_OPTIONS%%` (nur in `_CONFIG_PAGE_HTML` verwendet) füllt das
+Sprach-Dropdown auf der Config-Seite aus `i18n.LANGUAGE_NAMES` — seit
+der `.lng`-Umstellung nicht mehr zwei hartcodierte `<option>`-Zeilen,
+eine neue Sprachdatei taucht dadurch automatisch im Dropdown auf.
 
 `_check_i18n_coverage()` läuft beim selben Modul-Import: ein Regex
 sammelt alle in den Templates tatsächlich verwendeten
 `data-i18n*`/`t('key'`-Keys und gleicht sie gegen `i18n.STRINGS` ab —
 ein fehlender/vertippter Key wirft sofort beim Start (kein Test-
-Framework im Projekt, siehe oben, das übernimmt hier diese Rolle).
+Framework im Projekt, siehe oben, das übernimmt hier diese Rolle). Da
+`i18n.STRINGS` nur noch gegen die IMMER vollständige englische Basis
+geprüft werden muss (siehe oben), ist diese Prüfung durch die
+.lng-Umstellung strenggenommen sogar schwächer geworden als vorher
+(als "de" UND "en" für jeden Key zwingend vorhanden sein mussten) —
+bewusst in Kauf genommen, weil eine unvollständige `.lng`-Datei jetzt
+per Design ein gültiger Zustand ist (Fallback statt Fehler).
 Der Regex für `t('key'` braucht zwingend ein Lookbehind
 (`(?<![A-Za-z0-9_])t\('`), sonst matcht er in JEDEM Bezeichner, der
 zufällig auf "t(" endet — `document.createElemen`**`t('`**`div')`,
@@ -786,7 +826,12 @@ ist statt eines Socket-Rewraps. Die Config-Seite lädt sich nach dem
 Speichern trotzdem per `location.reload()` neu, weil pro Sprache schon
 fertiges Markup vorliegt — ein Sprachwechsel ohne Reload würde nur die
 serverseitig injizierten `I18N`-Strings der aktuell geladenen Seite
-treffen, nicht z.B. eine neu aufgerufene Unterseite.
+treffen, nicht z.B. eine neu aufgerufene Unterseite. `DEFAULT_LANGUAGE`
+(aus `UI_LANGUAGE` in `.env`, Fallback `"en"`) wirkt nur bei einer
+Neuinstallation ohne bestehende `settings.json` — bereits laufende
+Instanzen mit gespeichertem `language`-Wert (z.B. weiterhin `"de"`)
+sind von der neuen Basissprache nicht betroffen, die gespeicherte
+Einstellung gewinnt wie immer.
 
 ## Docker-Besonderheiten
 
@@ -809,7 +854,13 @@ das `.py`-seitige/Container-interne Ziel bleibt immer flach in `/app/`.
   `os.replace()` — ein Rename über einen Mountpoint scheitert mit
   "Device or resource busy". Nicht auf "atomares Schreiben" umbauen.
 - Der Dockerfile kopiert jede `.py`-Datei **einzeln**: neue Module dort
-  eintragen, sonst fehlen sie im Image.
+  eintragen, sonst fehlen sie im Image. `language/` (siehe i18n.py-Abschnitt
+  oben) ist die EINE bewusste Ausnahme davon: `COPY language/ language/`
+  kopiert den ganzen Ordner auf einmal, weil `i18n.py` ihn zur Laufzeit per
+  `glob` nach `*.lng`-Dateien durchsucht — eine neue Sprachdatei soll durch
+  bloßes Ablegen + Rebuild wirken, ohne zusätzlich eine eigene COPY-Zeile
+  zu brauchen (leicht zu vergessen, und ohne sie fehlt die Sprache im
+  Image lautlos statt mit einem Fehler beim Start).
 - `fix_silero_execstack.py` patcht zur Build-Zeit das PT_GNU_STACK-Bit der
   silero-vad-lite-`.so`. Ohne den Patch verweigert der Kernel dieses Hosts das
   `dlopen()` und die Spracherkennung fällt dauerhaft auf die Heuristik zurück.
