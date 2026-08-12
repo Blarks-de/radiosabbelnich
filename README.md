@@ -647,9 +647,15 @@ Datei oder bequemer über `http://<host>:5000/config`.
 Für den laufenden Betrieb danach reicht `./radiosabbelnich.sh` (ohne
 Argument = `status`, sonst `start`/`stop`/`restart`) statt sich
 `docker compose`-Befehle zu merken — `status` zeigt Container-Zustand,
-Port-Erreichbarkeit, RAM/HD (im selben Anzeige-Stil wie
+lokale Port-Erreichbarkeit, RAM/HD (im selben Anzeige-Stil wie
 `check-radiosabbelnich.sh`) sowie den aktuell laufenden Sender/Track
-und die Hörerzahl, sofern das Web-Interface erreichbar ist.
+und die Hörerzahl, sofern das Web-Interface erreichbar ist. Zusätzlich
+zeigt `status` den konfigurierten `ICECAST_HOSTNAME` (die Adresse für
+Hörer von außen, nicht nur `localhost`) und warnt rot, falls Tailscale
+ausgeloggt/gestoppt ist (nur bei einem `*.ts.net`-Hostnamen relevant)
+oder gar kein Internet/DNS erreichbar ist (per Ping gegen `hamburg.de`
+geprüft) — beides Fälle, in denen der Stream lokal noch normal läuft,
+aber niemand von außen mehr rankommt.
 
 ### Wichtige `.env`-Variablen
 
@@ -1417,9 +1423,15 @@ the file or more conveniently via `http://<host>:5000/config`.
 For day-to-day operation afterwards, `./radiosabbelnich.sh` (no
 argument = `status`, otherwise `start`/`stop`/`restart`) saves you from
 remembering `docker compose` commands — `status` shows container state,
-port reachability, RAM/disk (in the same display style as
+local port reachability, RAM/disk (in the same display style as
 `check-radiosabbelnich.sh`), plus the currently playing station/track
-and listener count, if the web interface is reachable.
+and listener count, if the web interface is reachable. It also shows the
+configured `ICECAST_HOSTNAME` (the address listeners use from outside,
+not just `localhost`) and prints a red warning if Tailscale is logged
+out/stopped (only relevant for a `*.ts.net` hostname) or if there's no
+internet/DNS at all (checked via a ping to `hamburg.de`) — both cases
+where the stream still runs fine locally but nobody outside can reach it
+anymore.
 
 ### Important `.env` variables
 

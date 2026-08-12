@@ -5886,3 +5886,74 @@ oder einen Link zu verwenden, der nach dem nächsten Build bricht.
 - `git status`: alle 16 Verschiebungen korrekt als Rename (`R`/`RM`)
   erkannt, keine versehentlichen Neu-Anlagen/Löschungen.
 - `VERSION`: v1.1.15 → v1.1.16.
+
+## 2026-08-12 — radiosabbelnich.sh: externe Erreichbarkeit (Hostname, Tailscale, Internet/DNS)
+
+**Auslöser**: Nutzer wies darauf hin, dass `./radiosabbelnich.sh status`
+zwar lokale Erreichbarkeit (Web-Interface/Icecast gegen `localhost`)
+prüft, aber nicht den `ICECAST_HOSTNAME` selbst zeigt — also nichts
+darüber aussagt, ob der Stream für Hörer von AUSSEN erreichbar ist. Im
+konkreten Einsatzfall des Nutzers ist dieser Hostname ein
+Tailscale-MagicDNS-Name (`*.ts.net`); wenn Tailscale ausgeloggt/gestoppt
+ist, läuft der Container lokal völlig normal weiter, aber niemand kommt
+mehr ran — das sollte eine deutliche rote Warnung geben. Ebenso
+gewünscht: ein genereller Internet/DNS-Check per Ping gegen `hamburg.de`.
+
+### Umsetzung
+
+`radiosabbelnich.sh`, `cmd_status()`, direkt nach dem bestehenden
+Icecast-`localhost`-Check (innerhalb desselben "🔌 Erreichbarkeit"-
+Blocks, kein neuer Abschnitt):
+- `ICECAST_HOSTNAME` wird aus `docker compose config --format json`
+  gelesen (`services.icecast.environment.IC_HOSTNAME`) — gleiches Muster
+  wie `resolved_port()` weiter oben in derselben Datei (Shell und
+  Compose interpretieren `.env` nicht immer identisch, "docker compose
+  config" ist die Quelle der Wahrheit). Fehlt der Wert, gelbe Warnung
+  statt stillschweigend nichts anzuzeigen.
+- **Tailscale-Check nur, wenn der Hostname auf `.ts.net` endet**
+  (`[[ "$icecast_hostname" == *.ts.net ]]`) — bei jedem anderen
+  Hostnamen (eigene Domain, Reverse-Proxy) wäre ein Tailscale-Status
+  irreführend/falsch zugeordnet. `tailscale status --json` →
+  `BackendState`-Feld: `"Running"` = grün, jeder andere Wert (z.B.
+  `"Stopped"`, `"NeedsLogin"`) = rot mit Klartext-Status, leerer/nicht
+  abrufbarer Wert (Daemon down) ebenfalls rot. Fehlt die
+  `tailscale`-CLI selbst (Skript soll auch auf Hosts ohne Tailscale
+  laufen), gelbe Warnung statt eines falschen roten Fehlalarms.
+- **Internet/DNS-Check**: ein einzelner `ping -c 1 -W 2 hamburg.de`
+  deckt beides in einem Aufruf ab — schlägt die DNS-Auflösung fehl, gibt
+  es gar keine Ziel-IP zum Anpingen; ist DNS ok, aber kein Uplink da,
+  läuft der Ping in den Timeout. `hamburg.de` (Nutzer-Vorgabe) statt
+  einer nackten IP wie `8.8.8.8`, weil eine IP DNS-Ausfälle nicht
+  aufdecken würde.
+- `README.md` (DE+EN): Absatz zu `radiosabbelnich.sh` um die neuen
+  Prüfungen ergänzt.
+- `VERSION`: v1.1.16 → v1.1.17.
+
+### Bewusst NICHT gemacht
+
+- Keine Änderung an `check-radiosabbelnich.sh` (Preflight VOR dem ersten
+  Start) — Nutzer bezog sich explizit auf `radiosabbelnich.sh` (laufender
+  Betrieb), nicht auf das Preflight-Skript. Beide Skripte dürfen laut
+  bestehender Konvention (siehe Kommentar in `radiosabbelnich.sh`)
+  ohnehin bewusst duplizieren statt eine gemeinsame Bibliothek zu teilen.
+- Keine Auswirkung auf den Exit-Code von `cmd_status()` — bleibt wie
+  bisher rein informativ (anders als `check-radiosabbelnich.sh`, das
+  `$FAILED` zählt und exit 1 liefert); ein einzelner Tailscale-Aussetzer
+  soll kein Skript in einer Kette hart abbrechen lassen, das den
+  laufenden Betrieb nur anzeigen will.
+
+### Verifiziert
+
+- `bash -n radiosabbelnich.sh` — Syntax fehlerfrei.
+- Live gegen den echten, laufenden Stack: `./radiosabbelnich.sh status`
+  zeigt korrekt `dockfish.icefish-ghost.ts.net`, Tailscale läuft (grün),
+  Internet/DNS erreichbar (grün) — Hostname stimmt mit dem echten
+  `ICECAST_HOSTNAME` in `.env` überein.
+- Alle sechs Verzweigungen isoliert mit einer extrahierten Kopie der
+  neuen Logik durchgespielt (gemockte `ts_state`/`ping_ok`-Werte, echte
+  Tailscale-Verbindung/Internet-Verbindung NICHT angetastet): (1) alles
+  gesund → alle grün, (2) Tailscale `Stopped` → rot mit Klartext-Status,
+  (3) leerer `BackendState` (Daemon down) → rot, (4) Ping fehlgeschlagen
+  → rot, (5) Hostname ohne `.ts.net` → Tailscale-Zeile wird komplett
+  übersprungen, (6) leerer Hostname → gelbe Warnung statt leerer Zeile.
+  Alle sechs verhielten sich wie erwartet.

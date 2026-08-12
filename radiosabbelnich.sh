@@ -132,6 +132,66 @@ except Exception:
     else
         echo -e "${RED}❌ Icecast (Port $icecast_port) antwortet nicht.${NC}"
     fi
+
+    # ICECAST_HOSTNAME ist die Adresse, unter der HÖRER sich tatsächlich
+    # verbinden (siehe docker-compose.yml, IC_HOSTNAME) -- die obigen beiden
+    # Checks laufen bewusst gegen localhost und sagen deshalb nichts darüber
+    # aus, ob diese Adresse von AUSSEN erreichbar ist. Aus "docker compose
+    # config" gelesen statt .env selbst geparst, gleicher Grund wie bei
+    # resolved_port() oben (Shell/Compose interpretieren .env nicht immer
+    # identisch).
+    local icecast_hostname
+    icecast_hostname=$(printf '%s' "$compose_config_json" | python3 -c "
+import json, sys
+try:
+    cfg = json.load(sys.stdin)
+    print(cfg['services']['icecast']['environment'].get('IC_HOSTNAME', ''))
+except Exception:
+    print('')
+" 2>/dev/null)
+
+    if [ -n "$icecast_hostname" ]; then
+        echo "🔗 Hostname für Hörer: $icecast_hostname"
+    else
+        echo -e "${YELLOW}⚠️  ICECAST_HOSTNAME nicht gesetzt (.env prüfen).${NC}"
+    fi
+
+    # Tailscale-Check nur, wenn der Hostname tatsächlich ein
+    # Tailscale-MagicDNS-Name ist (*.ts.net) -- bei jedem anderen Hostnamen
+    # (eigene Domain, Reverse-Proxy) wäre ein Tailscale-Status hier
+    # irreführend, nicht aussagekräftig.
+    if [[ "$icecast_hostname" == *.ts.net ]]; then
+        if ! command -v tailscale >/dev/null 2>&1; then
+            echo -e "${YELLOW}⚠️  Tailscale-CLI nicht gefunden -- kann Tailscale-Status nicht prüfen.${NC}"
+        else
+            local ts_state
+            ts_state=$(tailscale status --json 2>/dev/null | python3 -c "
+import json, sys
+try:
+    print(json.load(sys.stdin).get('BackendState', ''))
+except Exception:
+    print('')
+" 2>/dev/null)
+            if [ "$ts_state" = "Running" ]; then
+                echo -e "${GREEN}✅ Tailscale läuft -- $icecast_hostname sollte erreichbar sein.${NC}"
+            elif [ -n "$ts_state" ]; then
+                echo -e "${RED}❌ Tailscale nicht aktiv (Status: $ts_state) -- $icecast_hostname ist darüber NICHT erreichbar!${NC}"
+            else
+                echo -e "${RED}❌ Tailscale-Status nicht abrufbar (Daemon down/ausgeloggt?) -- $icecast_hostname vermutlich NICHT erreichbar!${NC}"
+            fi
+        fi
+    fi
+
+    # Internet/DNS-Grundcheck: ein einzelner Ping deckt beides ab -- schlägt
+    # die DNS-Auflösung fehl, gibt es gar keine Ziel-IP zum Anpingen; ist DNS
+    # ok, aber kein Uplink da, läuft der Ping stattdessen in den Timeout.
+    # hamburg.de statt z.B. 8.8.8.8, weil das zusätzlich einen echten
+    # DNS-Lookup erzwingt (eine reine IP würde DNS-Ausfälle nicht zeigen).
+    if ping -c 1 -W 2 hamburg.de >/dev/null 2>&1; then
+        echo -e "${GREEN}✅ Internet/DNS erreichbar (Ping hamburg.de).${NC}"
+    else
+        echo -e "${RED}❌ Kein Internet oder DNS kaputt (Ping hamburg.de fehlgeschlagen)!${NC}"
+    fi
     echo
 
     # --- RAM/HD des Hosts (nicht container-spezifisch -- für Details zu
