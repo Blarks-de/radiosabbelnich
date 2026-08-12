@@ -841,8 +841,22 @@ scannen, taggen und nach Kategorien abspielbar machen.
   Grenze: Oktavfehler (halbe/doppelte Geschwindigkeit) sind ein
   generisches Problem jeder Beat-Tracking-Methode, an einer echten
   402-Track-Sammlung gemessen fielen dadurch spürbar mehr Tracks unter
-  "schnell" als musikalisch stimmen dürfte. Energy/Duplikat-Erkennung/
-  Browse-UI aus der ursprünglichen Phase-3-Idee bleiben offen.
+  "schnell" als musikalisch stimmen dürfte. Energy-Erkennung/Browse-UI
+  aus der ursprünglichen Phase-3-Idee bleiben offen.
+- ✅ **Duplikat-Erkennung umgesetzt** (seit 2026-08-12): `music_query.
+  find_duplicates()` gruppiert Tracks mit demselben normalisierten
+  Artist+Titel-Paar (klein geschrieben, Whitespace getrimmt) — bewusst
+  reiner Metadaten-Abgleich, kein Audio-Fingerprint-Vergleich (der
+  bräuchte eigenen Analyse-Code wie `music_bpm.py`, auf Nutzerwunsch
+  nicht Teil dieser Runde). Erkennt z.B. denselben Song als MP3 UND
+  FLAC, aber nicht inhaltlich identisches Audio mit abweichenden Tags.
+  Tracks ohne Artist/Titel werden ausgeschlossen (sonst würden untaggte
+  Dateien fälschlich als eine riesige Duplikat-Gruppe erscheinen). Über
+  `GET /api/library/duplicates` abrufbar (JSON, inkl. Dateigröße pro
+  Treffer als Entscheidungshilfe) — **bewusst noch ohne UI-Anschluss**
+  und ohne Lösch-Aktion in dieser Phase (Nutzerentscheidung: erst nur
+  anzeigen/melden), siehe SESSION.md. An der echten 402-Track-Sammlung
+  des Nutzers verifiziert: genau eine echte Duplikat-Gruppe gefunden.
 - Enrichment (späterer Baustein, getrennt vom Scan): fehlende
   Cover/Lyrics nachträglich über externe Quellen (z.B.
   MusicBrainz/Cover Art Archive, lrclib.net) ergänzen, langfristiges
@@ -1676,9 +1690,22 @@ tag it, and make it playable by category.
   between falls under neither — known limitation: octave errors (half/
   double tempo) are a generic problem of any beat-tracking method;
   measured against a real 402-track collection, noticeably more tracks
-  ended up under "fast" than would musically make sense. Energy/
-  duplicate detection/browse UI from the original phase 3 idea remain
-  open.
+  ended up under "fast" than would musically make sense. Energy
+  detection/browse UI from the original phase 3 idea remain open.
+- ✅ **Duplicate detection implemented** (since 2026-08-12):
+  `music_query.find_duplicates()` groups tracks with the same
+  normalized artist+title pair (lowercased, whitespace trimmed) —
+  deliberately metadata-only, no audio fingerprint comparison (that
+  would need its own analysis code like `music_bpm.py`, out of scope
+  for this round by user request). Catches e.g. the same song as MP3
+  AND FLAC, but not audio content that's identical despite differing
+  tags. Tracks without artist/title are excluded (otherwise untagged
+  files would falsely show up as one giant duplicate group). Available
+  via `GET /api/library/duplicates` (JSON, includes file size per hit
+  as a decision aid) — **deliberately without a UI hookup** and without
+  a delete action in this phase (user's choice: report only for now),
+  see SESSION.md. Verified against the user's real 402-track
+  collection: found exactly one genuine duplicate group.
 - Enrichment (later building block, separate from the scan): fill in
   missing covers/lyrics afterwards from external sources (e.g.
   MusicBrainz/Cover Art Archive, lrclib.net), long-term goal: every

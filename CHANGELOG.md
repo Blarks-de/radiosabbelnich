@@ -17,6 +17,18 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 
 ## 2026-08-12
 
+- Musik-Library: Duplikat-Erkennung (`music_query.find_duplicates()`,
+  normalisiertes Artist+Titel-Metadaten-Match) über neuen
+  `GET /api/library/duplicates`-Endpoint, bewusst ohne UI-Anschluss.
+- Musik-Library: Format-Unterstützung über MP3 hinaus auf FLAC, OGG,
+  M4A, AAC, WAV und APE erweitert (Scan + Playback).
+- Web-Interface: Basissprache auf Englisch umgestellt, Deutsch als
+  externes Sprachpaket (`language/*.lng`, Windows-Sprachpaket-Analogie)
+  ausgelagert.
+- **Android:** UI-Basissprache ebenfalls auf Englisch umgestellt
+  (`values/` = Englisch, `values-de/` = Deutsch, nativer Android-
+  Ressourcenmechanismus); Update-Server-Pfad auf
+  `blarks.de/radio/update` verschoben.
 - Die drei Betriebs-Skripte auf eines reduziert: `check-radiosabbelnich.sh`
   und `run_radiosabbelnich.sh` als neue Subcommands `check`/`start` in
   `radiosabbelnich.sh` integriert, beide alten Dateien gelöscht.

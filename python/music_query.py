@@ -23,10 +23,20 @@ exakter Gleichheit: ID3-Genre-Tags sind Freitext ohne feste Taxonomie
 die einzige praktikable Annäherung ohne eigene Genre-Normalisierung
 (spätere Phase, nicht Teil hiervon). Bewusste Grenze: "klassik" matcht
 NICHT automatisch auch englisch getaggte "Classical"-Dateien — keine
-Synonym-Liste, um den Scope klein zu halten."""
+Synonym-Liste, um den Scope klein zu halten.
+
+Duplikat-Erkennung (find_duplicates(), seit 2026-08-12, siehe README-
+Roadmap): bewusst nur Metadaten-Abgleich (normalisiertes Artist+Titel-
+Paar), KEIN Audio-Fingerprint-Vergleich -- letzterer bräuchte eigenen
+Analyse-Code ähnlich music_bpm.py, für "Duplikat-Erkennung" auf
+Nutzerwunsch bewusst nicht in dieser Runde. Erkennt dadurch z.B.
+denselben Song als MP3 UND FLAC oder in zwei Ordnern, aber NICHT
+inhaltlich identisches Audio mit abweichenden/fehlenden Tags -- eine
+Grenze wie beim Genre-Match oben, kein Bug."""
 
 import logging
 import os
+import re
 import sqlite3
 
 log = logging.getLogger("musicquery")
@@ -96,3 +106,55 @@ def query_by_tempo(db_path: str, mode: str) -> list[dict]:
     if mode == "slow":
         return _query(db_path, "WHERE bpm > 0 AND bpm <= ?", (SLOW_BPM_MAX,))
     raise ValueError(f"Unbekannter Tempo-Modus: {mode!r} (erwartet 'fast' oder 'slow')")
+
+
+_WHITESPACE_RE = re.compile(r"\s+")
+
+
+def _normalize(text: str) -> str:
+    """Klein geschrieben, Whitespace getrimmt+kollabiert -- rein in Python
+    statt SQL, weil SQLite kein eingebautes "mehrere Leerzeichen zu einem
+    kollabieren" kennt und ein selbstgebautes REPLACE-Kettenkonstrukt dafür
+    unhandlicher wäre als der Python-Weg."""
+    return _WHITESPACE_RE.sub(" ", text.strip().lower())
+
+
+def find_duplicates(db_path: str) -> list[dict]:
+    """Gruppiert Tracks mit demselben normalisierten Artist+Titel-Paar
+    (siehe Moduldoc: reiner Metadaten-Abgleich, kein Audio-Fingerprint).
+    Tracks ohne Artist ODER ohne Titel werden ausgeschlossen -- sonst
+    würden zwei komplett untaggte Dateien fälschlich als "Duplikat"
+    gruppiert. Liefert nur Gruppen mit mindestens zwei Treffern, sortiert
+    nach Artist/Titel; jede Gruppe enthält die Original-Schreibweise
+    (vom ersten gefundenen Track) plus die vollständigen Tracks inkl.
+    Dateigröße (Entscheidungshilfe: z.B. FLAC vs. MP3 derselben Aufnahme).
+
+    Leere Liste (statt Exception) falls die DB noch nicht existiert/leer
+    ist oder kurzzeitig durch einen parallel laufenden Scan gesperrt ist --
+    gleiches Toleranz-Muster wie _query() oben."""
+    try:
+        conn = sqlite3.connect(db_path)
+        try:
+            rows = conn.execute(
+                "SELECT id, filepath, artist, title, album, cover_path, bpm, size "
+                "FROM tracks WHERE artist IS NOT NULL AND artist != '' "
+                "AND title IS NOT NULL AND title != ''"
+            ).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error as e:
+        log.debug("Duplikat-Suche fehlgeschlagen (%s) — vermutlich noch nicht gescannt.", e)
+        return []
+
+    groups: dict[tuple[str, str], dict] = {}
+    for track_id, filepath, artist, title, album, cover_path, bpm, size in rows:
+        key = (_normalize(artist), _normalize(title))
+        group = groups.setdefault(key, {"artist": artist, "title": title, "tracks": []})
+        group["tracks"].append({
+            "id": track_id, "filepath": filepath, "album": album,
+            "cover_path": cover_path, "bpm": bpm, "size": size,
+        })
+
+    duplicates = [g for g in groups.values() if len(g["tracks"]) > 1]
+    duplicates.sort(key=lambda g: (g["artist"].lower(), g["title"].lower()))
+    return duplicates

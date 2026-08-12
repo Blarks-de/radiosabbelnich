@@ -6762,3 +6762,78 @@ Testdateien pro Format geprüft.
   sortiert.
 - `docker compose build radiosabbelnich`: erfolgreich, alle Tests oben
   liefen gegen das ECHTE gebaute Image (nicht nur den Host-Python).
+
+## 2026-08-12 (Fortsetzung 5) — Musik-Library: Duplikat-Erkennung (`music_query.find_duplicates()`, `GET /api/library/duplicates`)
+
+**Auslöser**: nächster Roadmap-Punkt nach der Format-Erweiterung —
+README nannte bisher nur pauschal "Energy/Duplikat-Erkennung/
+Browse-UI aus der ursprünglichen Phase-3-Idee bleiben offen", ohne
+Details. Vor der Umsetzung zwei Rückfragen geklärt: (1) mit welchem
+der drei Teilstücke anfangen (Antwort: Duplikat-Erkennung), (2) was
+als Duplikat zählt und was mit Treffern passieren soll (Antworten:
+normalisiertes Artist+Titel-Metadaten-Match, nur anzeigen/melden,
+keine Lösch-Aktion) — reiner Audio-Fingerprint-Abgleich und eine
+Lösch-UI wurden damit bewusst ausgeschlossen, nicht vergessen.
+
+### Umsetzung
+
+- **`music_query.py`**: neue Funktion `find_duplicates(db_path)` —
+  eigene, kurzlebige SQLite-Connection (gleiches Muster wie `_query()`),
+  SQL-`WHERE` schließt Tracks ohne Artist ODER ohne Titel aus (sonst
+  würden untaggte Dateien fälschlich als eine riesige Duplikat-Gruppe
+  erscheinen), Gruppierung nach normalisiertem (klein geschrieben,
+  Whitespace getrimmt+kollabiert per `re.sub`) Artist+Titel-Paar in
+  Python — SQLite kennt kein eingebautes "mehrere Leerzeichen
+  kollabieren". Nur Gruppen mit ≥2 Treffern werden zurückgegeben, mit
+  der Original-Schreibweise vom ersten gefundenen Track (nicht der
+  normalisierten Form) plus Dateigröße pro Track als Entscheidungshilfe.
+- **`webui.py`**: neuer `GET /api/library/duplicates`-Endpoint
+  (`_handle_library_duplicates()`), reiner Lese-Zugriff, gleiches
+  Kurzlebige-Connection-Muster wie die anderen Query-Aufrufe in
+  `_handle_music_play()`. Bewusst kein neuer UI-Anschluss.
+- `README.md` (DE+EN) und `CLAUDE.md` nachgezogen: Roadmap-Bullet
+  aufgeteilt (Duplikat-Erkennung ✅, Energy-Erkennung/Browse-UI bleiben
+  offen), neuer Architektur-Abschnitt in `CLAUDE.md`.
+
+### Bewusst NICHT gemacht
+
+- Kein Audio-Fingerprint-Vergleich — Nutzerentscheidung, reiner
+  Metadaten-Abgleich reicht fürs Erste. Bekannte Grenze dadurch:
+  inhaltlich identisches Audio mit komplett unterschiedlichen/fehlenden
+  Tags wird NICHT erkannt, genau wie in der Rückfrage besprochen.
+  `fingerprint.py`s Constellation-Map-Ansatz wäre dafür ohnehin nicht
+  direkt wiederverwendbar (auf kurze Jingle-/Werbe-Clips gegen einen
+  Live-Stream zugeschnitten, nicht auf ganze Musiktracks aus Dateien).
+- Kein UI-Anschluss (kein Button auf `/musik`, keine eigene Seite) und
+  keine Lösch-Aktion — beides auf Nutzerwunsch für diese Runde
+  ausgeschlossen, bewusst wie Phase 1 des Scans damals ("erst nur der
+  Endpoint").
+- Album NICHT ins Match-Kriterium aufgenommen — Nutzerwunsch war explizit
+  "gleicher Artist+Titel", ein zusätzliches Album-Kriterium hätte
+  legitime Duplikate mit inkonsistenten Album-Tags (z.B. Studio- vs.
+  Live-Album-Eintrag für denselben Song) unter den Tisch fallen lassen.
+
+### Verifiziert
+
+- Synthetische Test-DB mit sieben Zeilen (echtes Duplikat in zwei
+  Formaten mit leicht unterschiedlichem Whitespace/Groß-Kleinschreibung
+  und unterschiedlichem Album-Tag, eine Cover-Version mit gleichem
+  Titel aber anderem Artist, ein eindeutiger Track, zwei komplett
+  untaggte Dateien, eine Zeile mit Leerstrings statt NULL): liefert
+  exakt eine Duplikat-Gruppe mit den zwei erwarteten Dateien, alle
+  Kontrollfälle (Cover-Version, untaggt, Leerstrings) korrekt NICHT
+  gruppiert.
+- **Gegen die echte 402-Track-Sammlung des Nutzers** (`data/
+  music_library.db`) direkt mit dem Host-Python getestet (read-only,
+  ohne den laufenden Dienst anzufassen): findet genau eine echte
+  Duplikat-Gruppe — "Westernhagen – Dicke" als
+  `Westernhagen - Dicke.mp3` (Album "Mit Pfefferminz ...", 3996943
+  Byte, BPM 133.7) und `226 - Westernhagen - Dicke.mp3` (Album "Live
+  (CD 2)", 4029684 Byte, BPM 148.4) — plausibler echter Fund (zwei
+  unterschiedliche Aufnahmen/Rips desselben Songs aus unterschiedlichen
+  Quellen), keine False Positives bei den übrigen 400 Tracks.
+- `docker compose build radiosabbelnich`: erfolgreich. Laufenden Dienst
+  neu gestartet (`docker compose up -d radiosabbelnich`) und
+  `curl -sk https://localhost:5000/api/library/duplicates` gegen die
+  ECHTE laufende Instanz mit der echten DB verifiziert — liefert exakt
+  denselben Treffer wie der direkte DB-Test oben, End-to-End bestätigt.

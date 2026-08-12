@@ -3682,6 +3682,8 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                 self._send_json(import_state.snapshot())
             elif self.path == "/api/library/scan/status":
                 self._send_json(library_scan_state.snapshot())
+            elif self.path == "/api/library/duplicates":
+                self._handle_library_duplicates()
             elif self.path == "/api/config/stt-calibration/status":
                 self._send_json(_build_calibration_status(state))
             elif self.path == "/api/resources":
@@ -3992,6 +3994,16 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
 
             threading.Thread(target=worker, daemon=True, name="libscan").start()
             self._send_json({"ok": True})
+
+        def _handle_library_duplicates(self):
+            # Duplikat-Erkennung (siehe music_query.find_duplicates(),
+            # README/CLAUDE.md) -- reiner Lese-Endpoint, bewusst OHNE
+            # UI-Anschluss in dieser Runde (Nutzerwunsch: erst nur
+            # anzeigen/melden, keine Lösch-Aktion). Gleiches Muster wie
+            # die anderen Query-Aufrufe in _handle_music_play(): kurzlebige
+            # SQLite-Connection direkt im Webserver-Thread.
+            duplicates = music_query.find_duplicates(music_library_db_path)
+            self._send_json({"ok": True, "count": len(duplicates), "duplicates": duplicates})
 
         def _handle_music_play(self):
             # Ein Endpoint für beide Fälle (Grundgerüst-Ordner-Play UND

@@ -54,8 +54,8 @@ Details und Abwägung in `android-app/SESSION.md`.
   `_write()` in `stations_store.py` kein write-temp-then-rename macht, warum
   der Import-Check nicht per ffprobe läuft). Diese Begründungen sind hart
   erarbeitet; nicht wegkürzen.
-- **Doku gehört zur Änderung, nicht danach.** Vor jedem Commit beide Dateien
-  nachziehen:
+- **Doku gehört zur Änderung, nicht danach.** Vor jedem Commit alle
+  vier Dateien nachziehen:
   - **`SESSION.md`** ist append-only: pro Arbeitseinheit ein neuer Eintrag am
     Ende (Datum, Auslöser, Umsetzung, "Verifiziert" mit echten Messwerten,
     ggf. "bewusst NICHT gemacht"). Ältere Einträge werden **nicht**
@@ -68,6 +68,12 @@ Details und Abwägung in `android-app/SESSION.md`.
   - **`CLAUDE.md`** (diese Datei) nachziehen, wenn sich Architektur,
     Invarianten oder Arbeitsabläufe ändern — inklusive der Liste offener
     Punkte unten.
+  - **`CHANGELOG.md`** (seit 2026-08-12 bei jedem Commit): verdichtete
+    Ein-/Zwei-Zeiler pro nennenswerter Änderung, neueste zuerst, am
+    Kopf des passenden Datumsabschnitts eingefügt (neuer Abschnitt bei
+    neuem Kalendertag) — keine Begründungen/Messwerte wie in
+    `SESSION.md`, nur die verdichtete Übersicht. Android-Einträge mit
+    `**Android:**`-Präfix (siehe Datei-Kopf dort).
 - Commit-Messages: die neueren sind Englisch, ältere Deutsch — am jeweils
   letzten Commit orientieren.
 - **Versionspflege (seit 2026-08-06)**: `VERSION` am Repo-Root, Format
@@ -574,6 +580,41 @@ Root zwischen Scan und Query-Play, zeigen die Pfade ins Leere. Kein
 Bug, sondern dieselbe implizite Annahme, die schon Phase 1 hatte (der
 Scan-Endpoint scannt ebenfalls einfach `state.music_library_path` zum
 Zeitpunkt des Scans) — ein Re-Scan nach einer Root-Änderung behebt das.
+
+### Duplikat-Erkennung (`music_query.find_duplicates()`, seit 2026-08-12)
+
+Erster Teil der README-Roadmap-Notiz "Energy/Duplikat-Erkennung/
+Browse-UI" (die anderen beiden bleiben offen, Nutzerentscheidung, mit
+welchem Teilstück angefangen wird). Bewusst reiner **Metadaten**-
+Abgleich (normalisiertes Artist+Titel-Paar: klein geschrieben, Whitespace
+getrimmt+kollabiert, Normalisierung in Python statt SQL — SQLite kennt
+kein eingebautes "mehrere Leerzeichen zu einem kollabieren"), KEIN
+Audio-Fingerprint-Vergleich — letzterer bräuchte eigenen Analyse-Code
+ähnlich `music_bpm.py`, auf Nutzerwunsch explizit nicht in dieser
+Runde. Erkennt dadurch z.B. denselben Song als MP3 UND FLAC oder in
+zwei Ordnern, aber NICHT inhaltlich identisches Audio mit abweichenden/
+fehlenden Tags — dieselbe Art bewusster Grenze wie beim Genre-
+Teilstring-Match oben.
+
+Tracks ohne Artist ODER ohne Titel werden von der Gruppierung
+ausgeschlossen (SQL-`WHERE`, nicht erst in Python) — sonst würden alle
+untaggten Dateien einer Sammlung fälschlich als eine riesige
+"Duplikat"-Gruppe auftauchen. Nur Gruppen mit ≥2 Treffern werden
+zurückgegeben; jede Gruppe enthält die Original-Schreibweise (vom
+ersten gefundenen Track, nicht die normalisierte Form) sowie pro Track
+zusätzlich die Dateigröße — als Entscheidungshilfe, welche Kopie man
+behält (z.B. die größere FLAC- statt der kleineren MP3-Datei).
+
+`GET /api/library/duplicates` (`webui.py`) ist ein reiner Lese-
+Endpoint, gleiches kurzlebige-Connection-Muster wie die anderen
+Query-Aufrufe in `_handle_music_play()`. **Bewusst kein UI-Anschluss**
+in dieser Runde (Nutzerentscheidung: erst nur anzeigen/melden übers
+API, keine Lösch-Aktion) — analog zu Phase 1 des Scans, der ebenfalls
+zuerst ganz ohne UI auskam. An der echten 402-Track-Sammlung des
+Nutzers verifiziert: genau eine echte Duplikat-Gruppe gefunden
+("Westernhagen – Dicke", zwei Dateien mit leicht unterschiedlicher
+Größe/Album-Tag aus unterschiedlichen Quellen), keine False Positives
+bei den übrigen 400 Tracks.
 
 ### Musik-Library-BPM (`music_bpm.py`, Phase 3, seit 2026-08-12)
 
