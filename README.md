@@ -593,9 +593,7 @@ Signaturprüfung über die Debug-Signierung hinaus (siehe oben).
 | `data/news_mp3/`, `data/vosk-model-de/`, `data/whisper_cache/` | Standard-Mountziele für `NEWS_MP3_FOLDER`/`VOSK_MODEL_FOLDER`/faster-whisper-Cache (überschreibbar in `.env`) |
 | `data/music_library/` | Standard-Mountziel für `MUSIC_LIBRARY_FOLDER` (überschreibbar in `.env`) |
 | `docker-compose.yml` | Icecast + RadioSabbelNich als zwei Services |
-| `check-radiosabbelnich.sh` | Preflight-Check vor dem (ersten) Start: Docker, RAM/HD/Internet, `.env`, MP3-Ordner, Ports |
-| `run_radiosabbelnich.sh` | Start-Skript: RAM/HD/Internet-Check + `docker compose up -d --build` |
-| `radiosabbelnich.sh` | Wrapper für den laufenden Betrieb: `start`/`stop`/`restart`/`status` (Default), Statusanzeige im Stil von `check-radiosabbelnich.sh` |
+| `radiosabbelnich.sh` | Alles-in-einem-Wrapper: `check`/`start`/`stop`/`restart`/`status` (Default) |
 
 RadioSabbelNich und das Web-Interface laufen im selben Prozess (Web-Server
 als Hintergrund-Thread) — kein separater Service, keine IPC nötig, nur
@@ -613,11 +611,11 @@ cd RadioSabbelNich
 cp env.example .env      # Passwörter/Hostname eintragen
 touch data/fingerprints.db    # muss als Datei existieren, siehe unten
 touch data/music_library.db   # dito, für den Musik-Library-Scan (siehe unten)
-./check-radiosabbelnich.sh   # optional: prüft Docker/.env/MP3-Ordner/Ports vorab
-docker compose up -d --build
+./radiosabbelnich.sh check   # optional: prüft Docker/.env/MP3-Ordner/Ports vorab
+./radiosabbelnich.sh start
 ```
 
-`./check-radiosabbelnich.sh` installiert bei Bedarf Docker, zeigt RAM/HD/
+`./radiosabbelnich.sh check` installiert bei Bedarf Docker, zeigt RAM/HD/
 Internet-Status, prüft ob `.env` vollständig ausgefüllt ist (inkl.
 Warnung vor unveränderten `env.example`-Platzhaltern), ob der in
 `NEWS_MP3_FOLDER` eingetragene Ordner existiert/lesbar ist/MP3s enthält,
@@ -625,13 +623,13 @@ und ob `WEBUI_PORT`/`ICECAST_PORT`/`ICECAST_SSL_PORT` frei sind — läuft
 bereits RadioSabbelNich selbst auf diesen Ports, gilt das als ok; blockiert
 stattdessen ein anderer Docker-Container den Port, schlägt das Skript
 eine freie Alternative zum Eintragen in `.env` vor. Reine Diagnose (Exit-
-Code 1 bei Problemen), startet selbst nichts. Danach `./run_radiosabbelnich.sh` zum eigentlichen Start (macht denselben
-RAM/HD/Internet-Check nochmal, prüft den `NEWS_MP3_FOLDER`-Ordner erneut
+Code 1 bei Problemen), startet selbst nichts. `./radiosabbelnich.sh start`
+für den eigentlichen Start prüft schlanker (RAM/HD/Internet, `NEWS_MP3_FOLDER`)
 und bricht bei einem kaputten/fehlenden Pfad **vor** `docker compose up`
 mit einer klaren Diagnose ab, statt Docker den rohen, oft kryptischen
-Mount-Fehler werfen zu lassen).
+Mount-Fehler werfen zu lassen — danach `docker compose up -d --build`.
 
-Beide Skripte fragen für den `NEWS_MP3_FOLDER`-Check bewusst
+Für den `NEWS_MP3_FOLDER`-Check fragt `radiosabbelnich.sh` bewusst
 `docker compose config` statt `.env` selbst zu parsen: eine Shell und
 Docker Compose interpretieren z.B. Backslashes in `.env`-Werten
 unterschiedlich (siehe `NEWS_MP3_FOLDER` in `env.example`) — ein per Shell
@@ -649,19 +647,18 @@ Danach `stations.json` nach Belieben anpassen — entweder direkt in der
 Datei oder bequemer über `http://<host>:5000/config`.
 
 Für den laufenden Betrieb danach reicht `./radiosabbelnich.sh` (ohne
-Argument = `status`, sonst `start`/`stop`/`restart`) statt sich
+Argument = `status`, sonst `check`/`start`/`stop`/`restart`) statt sich
 `docker compose`-Befehle zu merken — `status` zeigt Container-Zustand,
-lokale Port-Erreichbarkeit, RAM/HD (im selben Anzeige-Stil wie
-`check-radiosabbelnich.sh`) sowie den aktuell laufenden Sender/Track
-und die Hörerzahl, sofern das Web-Interface erreichbar ist. Zusätzlich
-zeigt `status` den konfigurierten `ICECAST_HOSTNAME` (die Adresse für
-Hörer von außen, nicht nur `localhost`) und warnt rot, falls Tailscale
-ausgeloggt/gestoppt ist (nur bei einem `*.ts.net`-Hostnamen relevant)
-oder gar kein Internet/DNS erreichbar ist (per Ping gegen `hamburg.de`
-geprüft) — beides Fälle, in denen der Stream lokal noch normal läuft,
-aber niemand von außen mehr rankommt. Ein weiterer Abschnitt zeigt den
-`NEWS_MP3_FOLDER`-Pfad der Nachrichten-Pause samt Trefferzahl (schlankere
-Variante desselben Checks aus `check-radiosabbelnich.sh`).
+lokale Port-Erreichbarkeit, RAM/HD sowie den aktuell laufenden Sender/
+Track und die Hörerzahl, sofern das Web-Interface erreichbar ist.
+Zusätzlich zeigt `status` den konfigurierten `ICECAST_HOSTNAME` (die
+Adresse für Hörer von außen, nicht nur `localhost`) und warnt rot, falls
+Tailscale ausgeloggt/gestoppt ist (nur bei einem `*.ts.net`-Hostnamen
+relevant) oder gar kein Internet/DNS erreichbar ist (per Ping gegen
+`hamburg.de` geprüft) — beides Fälle, in denen der Stream lokal noch
+normal läuft, aber niemand von außen mehr rankommt. Ein weiterer
+Abschnitt zeigt den `NEWS_MP3_FOLDER`-Pfad der Nachrichten-Pause samt
+Trefferzahl (schlankere Variante desselben Checks aus `check`).
 
 ### Wichtige `.env`-Variablen
 
@@ -1406,9 +1403,7 @@ beyond the debug signing (see above).
 | `data/news_mp3/`, `data/vosk-model-de/`, `data/whisper_cache/` | Default mount targets for `NEWS_MP3_FOLDER`/`VOSK_MODEL_FOLDER`/the faster-whisper cache (overridable in `.env`) |
 | `data/music_library/` | Default mount target for `MUSIC_LIBRARY_FOLDER` (overridable in `.env`) |
 | `docker-compose.yml` | Icecast + RadioSabbelNich as two services |
-| `check-radiosabbelnich.sh` | Preflight check before the (first) start: Docker, RAM/disk/internet, `.env`, MP3 folder, ports |
-| `run_radiosabbelnich.sh` | Start script: RAM/disk/internet check + `docker compose up -d --build` |
-| `radiosabbelnich.sh` | Wrapper for day-to-day operation: `start`/`stop`/`restart`/`status` (default), status display in the same style as `check-radiosabbelnich.sh` |
+| `radiosabbelnich.sh` | All-in-one wrapper: `check`/`start`/`stop`/`restart`/`status` (default) |
 
 RadioSabbelNich and the web interface run in the same process (web server
 as a background thread) — no separate service, no IPC needed, just
@@ -1426,11 +1421,11 @@ cd RadioSabbelNich
 cp env.example .env      # enter passwords/hostname
 touch data/fingerprints.db    # must exist as a file, see below
 touch data/music_library.db   # same, for the music library scan (see below)
-./check-radiosabbelnich.sh   # optional: pre-checks Docker/.env/MP3 folder/ports
-docker compose up -d --build
+./radiosabbelnich.sh check   # optional: pre-checks Docker/.env/MP3 folder/ports
+./radiosabbelnich.sh start
 ```
 
-`./check-radiosabbelnich.sh` installs Docker if needed, shows RAM/disk/
+`./radiosabbelnich.sh check` installs Docker if needed, shows RAM/disk/
 internet status, checks whether `.env` is fully filled in (including a
 warning about unchanged `env.example` placeholders), whether the
 folder set in `NEWS_MP3_FOLDER` exists/is readable/contains MP3s, and
@@ -1439,9 +1434,9 @@ RadioSabbelNich itself is already running on those ports, that counts as
 fine; if a different Docker container is blocking the port instead,
 the script suggests a free alternative to enter in `.env`. Pure
 diagnostics (exit code 1 on problems), starts nothing itself.
-Afterwards, `./run_radiosabbelnich.sh` does the actual start (runs the
-same RAM/disk/internet check again, then `docker compose up -d
---build`).
+`./radiosabbelnich.sh start` does the actual start with a leaner check
+(RAM/disk/internet, `NEWS_MP3_FOLDER`), then `docker compose up -d
+--build`.
 
 The `touch` is mandatory, not cosmetic: `fingerprints.db` is mounted in
 `docker-compose.yml` as a single file inside the container. If it's
@@ -1453,19 +1448,18 @@ Afterwards, adjust `stations.json` as you like — either directly in
 the file or more conveniently via `http://<host>:5000/config`.
 
 For day-to-day operation afterwards, `./radiosabbelnich.sh` (no
-argument = `status`, otherwise `start`/`stop`/`restart`) saves you from
-remembering `docker compose` commands — `status` shows container state,
-local port reachability, RAM/disk (in the same display style as
-`check-radiosabbelnich.sh`), plus the currently playing station/track
-and listener count, if the web interface is reachable. It also shows the
-configured `ICECAST_HOSTNAME` (the address listeners use from outside,
-not just `localhost`) and prints a red warning if Tailscale is logged
-out/stopped (only relevant for a `*.ts.net` hostname) or if there's no
-internet/DNS at all (checked via a ping to `hamburg.de`) — both cases
-where the stream still runs fine locally but nobody outside can reach it
-anymore. Another section shows the news break's `NEWS_MP3_FOLDER` path
-along with a file count (a leaner version of the same check from
-`check-radiosabbelnich.sh`).
+argument = `status`, otherwise `check`/`start`/`stop`/`restart`) saves
+you from remembering `docker compose` commands — `status` shows
+container state, local port reachability, RAM/disk, plus the currently
+playing station/track and listener count, if the web interface is
+reachable. It also shows the configured `ICECAST_HOSTNAME` (the address
+listeners use from outside, not just `localhost`) and prints a red
+warning if Tailscale is logged out/stopped (only relevant for a
+`*.ts.net` hostname) or if there's no internet/DNS at all (checked via
+a ping to `hamburg.de`) — both cases where the stream still runs fine
+locally but nobody outside can reach it anymore. Another section shows
+the news break's `NEWS_MP3_FOLDER` path along with a file count (a
+leaner version of the same check from `check`).
 
 ### Important `.env` variables
 

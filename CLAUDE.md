@@ -923,8 +923,8 @@ Module bedienen bewusst unterschiedliche Zwecke, siehe eigener
 Abschnitt oben. Eine während des Musik-Modus eigentlich fällige
 Nachrichten-Pause wird beim Rückweg zu Radio NICHT nachgeholt (die
 News-Break-Slot-Prüfung läuft im Musik-Modus schlicht nicht mit) —
-bewusste Grenze, kein Bug. Die Preflight-Skripte
-(`check-radiosabbelnich.sh`/`run_radiosabbelnich.sh`) prüfen
+bewusste Grenze, kein Bug. Die Preflight-/Start-Checks in
+`radiosabbelnich.sh` (`check`/`start`-Subcommands) prüfen
 `MUSIC_LIBRARY_FOLDER` bislang NICHT wie `NEWS_MP3_FOLDER` (Existenz/
 Lesbarkeit/Dateianzahl) — aus Zeitgründen zurückgestellt, das Feature
 funktioniert auch ohne, ein leerer/fehlender Ordner liefert beim

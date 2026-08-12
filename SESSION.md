@@ -6386,3 +6386,90 @@ Zeitpunkt neu ausgewertete `active_slot()`-Prüfung.
   fehlerfrei, `/api/status` liefert HTTP 200, keine Tracebacks im Log.
 - Testverzeichnis und Hintergrundprozesse (HTTP-Server, Testinstanz)
   nach Abschluss vollständig aufgeräumt.
+
+## 2026-08-12 — check-radiosabbelnich.sh + run_radiosabbelnich.sh in radiosabbelnich.sh integriert, beide Dateien gelöscht
+
+**Auslöser**: Nutzer wollte die drei operativen Shell-Skripte auf eines
+reduzieren — `check`/`start` als neue Subcommands direkt in
+`radiosabbelnich.sh` integrieren (das bisher nur `start`/`stop`/
+`restart`/`status` kannte, wobei `start` seinerseits nur
+`run_radiosabbelnich.sh` aufrief), danach die beiden alten Dateien
+löschen.
+
+### Umsetzung
+
+- `radiosabbelnich.sh`: zwei neue Subcommands.
+  - **`check`**: 1:1 der bisherige Inhalt von `check-radiosabbelnich.sh`
+    (Docker-Auto-Install, RAM/HD/Internet, `.env`-Vollständigkeit inkl.
+    Platzhalter-Warnung, MP3-Ordner-Check, Portkonflikt-Check mit
+    Alternativ-Port-Vorschlag) — reine Diagnose, startet nichts, `exit 1`
+    bei Problemen.
+  - **`start`**: 1:1 der bisherige Inhalt von `run_radiosabbelnich.sh`
+    (schlankeres RAM/HD/Internet + MP3-Ordner-Check MIT Sofort-Abbruch
+    bei fehlendem/nicht lesbarem Ordner, danach `docker compose up -d
+    --build`) — bewusst NICHT auf die volle Tiefe von `check`
+    aufgebohrt (kein Docker-Install-Check, keine `.env`-Vollständigkeits-
+    prüfung, kein Portkonflikt-Check), das bleibt ein separater,
+    optionaler `check`-Aufruf davor.
+  - Innerhalb der jetzt EINEN Datei ergab die bisherige Dreifach-
+    Kopie des RAM/HD-Anzeige-Blocks (ursprünglich über drei Dateien
+    verteilt, dort mit "keine gemeinsame Bibliothek nötig" begründet)
+    keinen Sinn mehr — zu `print_ram_hd()` und `print_internet_check()`
+    zusammengezogen, von `check`/`start`/`status` gemeinsam genutzt.
+    Der MP3-Ordner-Check ebenso zu `check_mp3_folder()` zusammengezogen
+    (`$1="abort"` steuert, ob bei einem fehlenden/nicht lesbaren Ordner
+    sofort `exit 1` kommt oder nur `fail()` mitzählt) -- `cmd_status()`s
+    eigene, bewusst schlankere MP3-Ordner-Variante (kein Backslash-
+    Hinweis) bleibt unangetastet separat, da inhaltlich eine andere
+    Anzeige (laufender Betrieb statt Preflight).
+  - `cmd_start()` ruft jetzt direkt die eingebetteten Funktionen auf
+    statt `exec ./run_radiosabbelnich.sh`.
+  - Datei-Kopfkommentar dokumentiert die Historie (drei Dateien bis
+    2026-08-12) und alle fünf Subcommands.
+- `check-radiosabbelnich.sh`/`run_radiosabbelnich.sh`: gelöscht
+  (`git rm`).
+- `README.md` (DE+EN): Datei-Tabelle (drei Zeilen → eine), Setup-Anleitung
+  und die Beschreibung von `status` auf die neue Ein-Datei-Struktur
+  umgeschrieben (`./check-radiosabbelnich.sh` → `./radiosabbelnich.sh
+  check`, `docker compose up -d --build` direkt → `./radiosabbelnich.sh
+  start`).
+- `CLAUDE.md`: Verweis auf die "Preflight-Skripte" im Musik-Modus-
+  Abschnitt ("Bekannte offene Punkte") auf `radiosabbelnich.sh`
+  (`check`/`start`) aktualisiert.
+- `env.example`: Kommentarverweis beim `NEWS_MP3_FOLDER`-Backslash-
+  Hinweis von den beiden alten Dateinamen auf `./radiosabbelnich.sh
+  check` bzw. `./radiosabbelnich.sh start` aktualisiert.
+- `VERSION`: v1.1.21 → v1.1.22.
+
+### Bewusst NICHT gemacht
+
+- Keine Änderung an SESSION.md-Alteinträgen, die die beiden gelöschten
+  Dateien erwähnen — append-only, ältere Einträge werden nicht
+  rückwirkend korrigiert (siehe CLAUDE.md).
+- `start` bekommt NICHT dieselbe Prüftiefe wie `check` (Docker-Install/
+  `.env`-Vollständigkeit/Portkonflikte) — bewusst wie schon in den
+  getrennten Dateien zwei unterschiedlich tiefe Prüfstufen, jetzt nur
+  als zwei Subcommands statt zwei Dateien.
+
+### Verifiziert
+
+- `bash -n radiosabbelnich.sh` -- Syntax fehlerfrei.
+- `./radiosabbelnich.sh check` live gegen das echte, laufende System:
+  alle Abschnitte (Docker/System/`.env`/MP3-Ordner/Ports) korrekt,
+  Ports korrekt als "eigener Container" erkannt, Abschluss-Zeile zeigt
+  `Start mit: ./radiosabbelnich.sh start`.
+- `./radiosabbelnich.sh status`: nach dem Refactoring zunächst eine
+  überzählige Leerzeile vor "🎶 Live" entdeckt (eigene `echo` nach dem
+  neuen `print_ram_hd()`-Aufruf plus die schon vorher vorhandene
+  Leerzeile im `if status_json`-Zweig) — behoben, Ausgabe danach
+  Zeichen für Zeichen identisch zum Stand vor dem Refactoring.
+- `./radiosabbelnich.sh start` live ausgeführt: System-Check-Ausgabe
+  korrekt, `docker compose up -d --build` lief durch, Container danach
+  fehlerfrei gestartet (`/api/status` HTTP 200, keine Tracebacks).
+- `stop`/`restart` nicht erneut live getestet (Code unverändert
+  gegenüber der bereits mehrfach in dieser Konversation getesteten
+  Fassung) — kein Anlass, den Produktivbetrieb dafür extra zu
+  unterbrechen.
+- `grep` über das gesamte Repo (außer `android-app/` und SESSION.md)
+  bestätigt: keine verbliebenen Referenzen auf die beiden gelöschten
+  Dateinamen.
