@@ -5957,3 +5957,231 @@ Blocks, kein neuer Abschnitt):
   → rot, (5) Hostname ohne `.ts.net` → Tailscale-Zeile wird komplett
   übersprungen, (6) leerer Hostname → gelbe Warnung statt leerer Zeile.
   Alle sechs verhielten sich wie erwartet.
+
+## 2026-08-12 — radiosabbelnich.sh: MP3-Ordner-Status ergänzt, Hostname-Zeile nach oben verschoben
+
+**Auslöser**: Nachtrag zur vorigen Session — Nutzer wollte zusätzlich den
+Status des Nachrichten-Pause-MP3-Ordners (Pfad + Trefferzahl) in
+`./radiosabbelnich.sh status` sehen, UND die neue `🔗 Hostname für Hörer:`-
+Zeile sollte direkt unter der `🔌 Erreichbarkeit`-Überschrift stehen statt
+nach den lokalen Web-Interface-/Icecast-Checks.
+
+### Umsetzung
+
+- `radiosabbelnich.sh`, `cmd_status()`: Hostname-Ermittlung + Ausgabe
+  (`icecast_hostname`, siehe letzte Session) an den Anfang des
+  `🔌 Erreichbarkeit`-Blocks verschoben — steht jetzt direkt nach der
+  Überschrift, vor den `curl`-Checks gegen `localhost`. Reine
+  Umsortierung, keine Logikänderung an diesem Teil.
+- Neuer Abschnitt "📻 MP3-Ordner (Nachrichten-Pause)" direkt nach dem
+  Erreichbarkeit-Block: `NEWS_MP3_FOLDER_HOST` aus `docker compose
+  config --format json` gelesen (identisches Muster wie bei
+  `IC_HOSTNAME` und `resolved_port()` -- Quelle der Wahrheit statt
+  `.env` selbst zu parsen), dann Pfad + `find -maxdepth 1 -iname
+  '*.mp3'`-Trefferzahl. Bewusst eine SCHLANKERE Variante des
+  ausführlichen Checks in `check-radiosabbelnich.sh` (kein
+  Backslash-Hinweis, keine Unterscheidung Default-Pfad vs. eigener
+  Pfad) — das hier ist eine laufende Status-Anzeige für den täglichen
+  Blick, keine Preflight-Diagnose vor dem ersten Start.
+- `README.md` (DE+EN): Absatz zu `radiosabbelnich.sh` um den neuen
+  MP3-Ordner-Abschnitt ergänzt.
+- `VERSION`: v1.1.17 → v1.1.18.
+
+### Verifiziert
+
+- `bash -n radiosabbelnich.sh` -- Syntax fehlerfrei.
+- Live gegen den echten Stack: `🔗 Hostname für Hörer:` steht jetzt
+  korrekt als erste Zeile direkt unter `🔌 Erreichbarkeit`. MP3-Ordner-
+  Status zeigt korrekt den aktuellen `NEWS_MP3_FOLDER`-Wert aus `.env`
+  (`/mnt/eimer/data/Audio/Musik/`, 1 MP3-Datei gefunden, non-rekursiv --
+  deckt sich mit dem tatsächlichen Laufzeitverhalten von
+  `news_break.py`).
+- Vier Fehlerpfade isoliert getestet (echtes `find`, kein Mock): Ordner
+  mit 2 Dateien (inkl. groß geschriebener `.MP3`-Endung dank `-iname`)
+  → grün mit korrekter Zahl, leerer Ordner → gelb, nicht existierender
+  Ordner → rot, leerer/nicht ermittelbarer Pfad → gelb. Alle vier wie
+  erwartet.
+
+## 2026-08-12 — Bugreport "Musiksammlung-Pfad nicht änderbar": fehlender MUSIC_LIBRARY_FOLDER-Mount, kein Code-Bug
+
+**Auslöser**: Nutzer meldete, der Ordner-Browser für die Musiksammlung
+(`/config`, "🎵 Musiksammlung") lasse sich im Gegensatz zum
+Nachrichten-Pause-Ordner nicht sinnvoll bedienen. Gewünschte Logik
+bestätigt (keine Änderung nötig, entspricht exakt dem bereits
+implementierten Radio/Musik-Modus-Fork, siehe CLAUDE.md): entweder
+Radio-Betrieb (mit optionalem Pausenfüller aus einem Unterordner) ODER
+Musiksammlung-Modus (durchgehend wechselnde MP3s aus einem ANDEREN,
+unabhängig wählbaren Unterordner) — beide Unterordner sollen aus
+demselben großen Musikbestand wählbar sein, jeweils per eigenem
+Breadcrumb-Picker.
+
+### Root Cause
+
+Kein Software-Bug. `MUSIC_LIBRARY_FOLDER` fehlte komplett in `.env` —
+`docker-compose.yml`s Default (`./data/music_library`) mountete
+dadurch einen leeren lokalen Ordner nach `/app/music_library`. Der
+Breadcrumb-Picker/die Save-Logik selbst funktionieren nachweislich
+korrekt (siehe Verifikation unten) — sie hatten schlicht nichts zum
+Anzeigen, weil der gemountete Ordner leer war. `NEWS_MP3_FOLDER` war
+dagegen längst auf die echte Sammlung gesetzt, deshalb funktionierte
+nur dieser Picker sichtbar.
+
+### Fix
+
+- `.env`: `MUSIC_LIBRARY_FOLDER="/mnt/eimer/data/Audio/Musik/"` ergänzt
+  — bewusst DERSELBE Root wie `NEWS_MP3_FOLDER`, read-only gemountet
+  nach `/app/music_library` (separat vom `/app/news_mp3`-Mount, siehe
+  docker-compose.yml). Beide Features greifen dadurch auf dieselbe
+  Sammlung zu, aber jedes über seinen EIGENEN Breadcrumb-Picker mit
+  unabhängig wählbarem Unterordner (`news_break.mp3_folder` vs.
+  `music_library.path`) — genau die vom Nutzer beschriebene Logik.
+- `docker compose up -d --build radiosabbelnich` — Mount übernommen.
+- Reiner `.env`/Deployment-Fix, kein Code geändert — kein Commit nötig
+  (`.env` ist gitignored), `VERSION` unverändert.
+
+### Verifiziert
+
+- `GET /api/browse-folder?target=music_library` zeigte VOR dem Fix
+  `"folders": []`, DANACH dieselbe vollständige Ordnerliste wie
+  `target=news_break` (80's, Metal, Schlager, Pavarotti & Friends, …).
+- Navigation in einen Unterordner (`&path=Schlager`) liefert korrekten
+  `breadcrumb` und `absolute_path` — `docker exec` bestätigt zwei echte
+  MP3-Dateien direkt darin (passend zu `music_library.py`s
+  nicht-rekursivem `list_tracks()`).
+- Save-Pfad separat verifiziert: `POST /api/config/settings` mit
+  `music_library_path` persistiert korrekt in `settings.json` — bestätigt,
+  dass die Speicherlogik schon VOR dem Fix funktionsfähig war, das
+  Problem lag ausschließlich am leeren Mount.
+- Konkrete Ordnerauswahl für `music_library.path` bewusst NICHT selbst
+  gesetzt — das ist eine Geschmacksfrage des Nutzers (welcher
+  Unterordner als Musiksammlung-Modus dienen soll), Auswahl bleibt ihm
+  über die Config-Seite überlassen, jetzt da der Picker echte Ordner
+  zeigt.
+
+## 2026-08-12 — Musik-Library Phase 2: Query-Layer + Kategorie-/Favoriten-Buttons angeschlossen
+
+**Auslöser**: Nutzer wollte Phase 2 der Musik-Library-Roadmap (README
+"Zukünftige Features") umsetzen — Query-Layer auf `music_library.db`
+(aus Phase 1) aufbauen und die bisher funktionslosen Kategorie-/
+Favoriten-Buttons auf `/musik` damit verbinden. Plan vorab abgestimmt,
+inkl. Klärung der Genre→Kategorie-Frage (schnell/langsam deaktiviert
+lassen, rock/klassik per Teilstring) und der Player-Integration
+(dieselbe `/api/music/play`-Route wiederverwenden statt eines zweiten
+Endpoints).
+
+### Umsetzung
+
+- **`music_query.py`** (neu): `query_all()`/`query_by_artist()`/
+  `query_by_genre()` gegen `music_library.db`, jeweils `LIKE
+  '%wert%'`-Teilstring-Match (ASCII-case-insensitiv per SQLite-Default,
+  kein `LOWER()` nötig), sortiert nach Artist/Album/Dateipfad
+  (`COLLATE NOCASE`). Jeder Treffer: `{id, filepath, artist, title,
+  album, cover_path, label}` — `label` = "Artist – Titel" mit
+  Dateiname-Fallback, falls Tags fehlen. Fehlt die `tracks`-Tabelle
+  (DB noch nie gescannt) oder ist sie kurzzeitig durch einen
+  parallelen Scan gesperrt: leere Liste statt Exception. Bewusst KEIN
+  echter Query-Parser (Beets nur als Inspirations-Vorbild) — nur die
+  zwei Filterarten, die die vier festen Buttons brauchen.
+- **`webui.py`**:
+  - `SwitcherState.request_music_play()`/`pop_music_play_request()`
+    tragen jetzt optional eine bereits aufgelöste Trackliste
+    (`tracks=None` => unverändertes Ordner-Modus-Verhalten,
+    `pop_music_play_request()` liefert seitdem ein
+    `(requested, tracks)`-Tupel statt nur `bool`).
+  - `set_music_status()`/`music_status` bekommen ein neues Feld
+    `label` — sowohl `/musik` als auch `_build_status()`s
+    `now_playing`-Override für die Player-Seite bevorzugen es vor dem
+    reinen Dateinamen.
+  - Neuer Handler `_handle_music_play()`: EIN Endpoint
+    (`POST /api/music/play`) für beide Fälle. Ohne `query`-Body
+    unverändertes Grundgerüst-Verhalten. Mit `query`-Body
+    (`{"type": "artist"|"genre", "value": "..."}`) löst der Handler
+    die Abfrage SOFORT im Webserver-Thread auf (kurzlebige
+    sqlite3-Connection, gleiches Muster wie `fingerprint.delete_clip()`)
+    und kann dadurch 0 Treffer auch SOFORT beantworten (`{"ok": false,
+    "error": "Keine Treffer für '...'."}`, kein Request geht in dem
+    Fall an den Hauptloop). Bei Treffern reicht er die fertige Liste
+    per `request_music_play(tracks=...)` durch.
+  - `/musik`-Seite: rock/klassik/Queen/Pavarotti jetzt echte Buttons
+    (`class="music-query-btn"`, `data-query-type`/`data-query-value`),
+    ein gemeinsamer Klick-Handler pro Button ruft `/api/music/play`
+    mit passendem Query-Body. schnell/langsam bleiben `disabled` +
+    Tooltip ("noch nicht verfügbar, benötigt BPM-Daten"). Anzeige
+    (`track-status`) bevorzugt `label` vor dem Dateinamen. Buttons
+    zusätzlich an `musicMode` gekoppelt (disabled außerhalb des
+    Musik-Modus, gleiches Gating wie der große Play-Button).
+  - `i18n.py`: zwei neue Keys (`music_category_unavailable_title`,
+    `music_query_failed`).
+- **`radiosabbelnich.py`**: `music_tracks` im Hauptloop vereinheitlicht
+  auf `[{"filepath": ..., "label": ...}]` (Ordner-Modus: `label=None`)
+  statt reiner Dateinamen — `start_music_track()` entsprechend
+  angepasst. Play-Request-Zweig unterscheidet `play_tracks is not None`
+  (Query-Play, ERSETZT laufende Wiedergabe sofort, kein
+  `music_index < 0`-Guard, `source.start()` stoppt die alte Quelle
+  intern selbst) von `play_tracks is None` (Ordner-Modus, unverändertes
+  Grundgerüst-Verhalten inkl. Idle-Guard). Track-Ende/zyklisches
+  Weiterspringen unverändert (nur `os.path.join()` betroffen).
+- **`Dockerfile`**: `COPY python/music_query.py .` ergänzt (beim ersten
+  Rebuild vergessen, sofort am `ModuleNotFoundError` im Container-Log
+  bemerkt und nachgezogen).
+- **`README.md`** (DE+EN): Phase-2-Bullet der Roadmap von "geplant" auf
+  "✅ umgesetzt", Grundgerüst-Bullet um den jetzt veralteten
+  "Kategorie-Buttons sind Platzhalter"-Satz gekürzt.
+- **`CLAUDE.md`**: neuer Abschnitt "Musik-Library-Query-Layer
+  (`music_query.py`, Phase 2)" mit den Architekturentscheidungen (kein
+  Parser, Query nie im Hauptloop, ein Endpoint für beide Fälle, sofortige
+  0-Treffer-Antwort, `music_library_path`-Root-Annahme
+  zwischen Scan und Query-Play); "Bekannte offene Punkte"-Absatz zum
+  Musik-Modus aktualisiert.
+- `VERSION`: v1.1.18 → v1.1.19.
+
+### Bewusst NICHT gemacht
+
+- Keine Synonym-Liste für "klassik"/"classical" — hält den Scope eng,
+  am echten Bestand des Nutzers verifiziert (siehe unten), dass das
+  eine reale, aber akzeptierte Lücke ist.
+- Keine Cover-Anzeige im UI — Aufgabenscope nannte nur Artist–Titel-
+  Anzeige, `cover_path` ist im Query-Ergebnis vorhanden, aber
+  ungenutzt (spätere Phase).
+- schnell/langsam weiterhin ohne Funktion (siehe Plan-Rückfrage) —
+  fehlende BPM-Daten, keine Genre-Ableitung geraten.
+
+### Verifiziert
+
+- `docker compose up -d --build radiosabbelnich`: erster Build schlug
+  mit `ModuleNotFoundError: No module named 'music_query'` fehl (Dockerfile-
+  COPY vergessen) — nachgezogen, zweiter Build+Start fehlerfrei, keine
+  Tracebacks im Log.
+- Voller Scan gegen die echte, vom Nutzer unter `/config` gewählte
+  Musiksammlung (`+_Kultliederbuch`, 402 Dateien) über
+  `POST /api/library/scan`: 402 gefunden, 402 neu, 0 Fehler.
+  Genre-Verteilung der echten Daten geprüft: "Rock"/"Rock - Pop
+  Rock"/"rock" (93 Treffer für den "rock"-Button), "Classical" (3
+  Treffer, aber NICHT für den "klassik"-Button, da anderes Wort — genau
+  die dokumentierte, akzeptierte Grenze).
+- Live gegen die echte, laufende Instanz (Modus zu "music" gewechselt,
+  danach zurück zu "radio" — Produktivbetrieb kurz unterbrochen,
+  bewusst wie in vorigen Sessions):
+  - `rock`-Button: 183 Treffer, Wiedergabe startet, `label` korrekt
+    (Fallback auf Titel ohne Artist bei fehlendem Tag).
+  - `klassik`-Button: 0 Treffer → `{"ok": false, "error": "Keine
+    Treffer für 'klassik'."}`, kein stilles Nichtstun.
+  - `Queen`-Button: 3 Treffer, `label` "Queen – <Titel>" korrekt,
+    `now_playing` auf `/api/status` zeigt denselben Text (bestätigt:
+    Player-Seite profitiert von derselben Änderung).
+  - `Pavarotti`-Button: 0 Treffer, korrekt abgefangen.
+  - Weiter-Navigation (`/api/music/next`) innerhalb der Query-Playlist
+    zyklisch korrekt (Index 0→1→2, `label` pro Track korrekt).
+  - Unbekannter Query-Typ (`{"type": "bogus", ...}`) → HTTP 400 mit
+    Fehlermeldung.
+  - Stop setzt `label` korrekt auf `null` zurück.
+  - Regressionstest: einfacher Ordner-Play (`POST /api/music/play` OHNE
+    Body) spielt weiterhin normal aus dem konfigurierten Ordner
+    (404 Dateien direkt darin), `label` bleibt `null` — Grundgerüst-
+    Pfad unverändert funktionsfähig.
+- `curl` gegen `/musik`: neue Buttons/Tooltips korrekt im HTML, keine
+  i18n-Coverage-Fehler beim Container-Start (`_check_i18n_coverage()`
+  hätte sonst den Start verhindert).
+- Nach den Tests: Wiedergabe gestoppt, Modus zurück auf "radio" —
+  Produktivzustand wiederhergestellt, `current_name` bestätigt normalen
+  Sender-Betrieb.

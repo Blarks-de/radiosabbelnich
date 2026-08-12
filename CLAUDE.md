@@ -439,6 +439,71 @@ DB-Eintrag für eine nur VORÜBERGEHEND defekte Datei fälschlich als
 über `filepath` (UNIQUE-Constraint), nicht über die Track-ID — ein
 erneuter Scan überschreibt bestehende Zeilen statt Duplikate anzulegen.
 
+### Musik-Library-Query-Layer (`music_query.py`, Phase 2, seit 2026-08-12)
+
+Dritte Datei im Musik-Library-Dreiklang: `music_library.py` (PLAYER,
+ein Ordner, nicht rekursiv), `music_scan.py` (SCANNER, ganzer Baum →
+DB), `music_query.py` (QUERY, DB → Trackliste). Bewusst KEIN echter
+Query-Parser (Beets nur als Inspiration, nicht als Vorbild für die
+Syntax) — es gibt genau zwei Filterarten (`query_by_artist()`/
+`query_by_genre()`, beide simples `LIKE '%wert%'`, ASCII-case-
+insensitiv per SQLite-Standardverhalten) für eine Handvoll fester
+Buttons, kein freies Nutzer-Eingabefeld. Genre-Tags sind ID3-Freitext
+ohne feste Taxonomie ("Rock" vs. "Classic Rock" vs. "rock'n'roll") —
+Teilstring-Match ist die einzige praktikable Näherung ohne eigene
+Genre-Normalisierung (spätere Phase). Bewusste Grenze: "klassik"
+matcht NICHT automatisch "Classical" (keine Synonym-Liste, hält den
+Scope klein) — am echten Bestand des Nutzers verifiziert (3 Tracks mit
+Genre "Classical", 0 mit "Klassik" → der Button liefert dort aktuell
+0 Treffer, korrekt als "keine Treffer" angezeigt statt eines Bugs).
+
+**Query läuft NIE im Hauptloop.** `music_query.py` wird ausschließlich
+aus dem Webserver-Thread heraus aufgerufen (`webui.py`,
+`_handle_music_play()`), mit derselben kurzlebigen-Connection-
+Begründung wie `fingerprint.delete_clip()` (sqlite3-Connections sind
+nicht thread-übergreifend sicher). Der Hauptloop bekommt nur die
+bereits fertig aufgelöste Trackliste durchgereicht — der
+~1s-Analysetakt darf nie auf eine SQLite-Query warten, exakt dasselbe
+Prinzip wie beim Scan selbst.
+
+**Ein Endpoint für beide Fälle** (`POST /api/music/play`), kein
+zweiter: ohne `query`-Body unverändertes Grundgerüst-Verhalten
+(Ordner-Modus, `SwitcherState.request_music_play()` ohne Argument).
+Mit `query`-Body löst der Handler die Abfrage SOFORT im Webserver-
+Thread auf — dadurch kann er 0 Treffer auch SOFORT beantworten
+(`{"ok": false, "error": "..."}`, kein Request geht in dem Fall
+überhaupt an den Hauptloop) statt den Client auf einen Status-Poll
+warten zu lassen. Bei Treffern reicht `request_music_play(tracks=...)`
+die FERTIGE Liste durch (`pop_music_play_request()` liefert jetzt ein
+`(requested, tracks)`-Tupel statt nur `bool` — `tracks is None`
+unterscheidet "Ordner-Modus" von "leere Query-Liste", was praktisch nie
+vorkommt, weil der Handler das schon vorher abfängt).
+
+Ein Query-Play **ersetzt** eine laufende Wiedergabe sofort (Klick auf
+"Queen" = "ab jetzt DIESE Playlist"), anders als der große Play-Button,
+der nur bei Idle wirkt — `StreamSource.start()` stoppt die alte Quelle
+intern bereits selbst, kein Extra-`stop_music_track()`-Aufruf nötig.
+`music_tracks` im Hauptloop ist seit Phase 2 einheitlich eine Liste von
+`{"filepath": ..., "label": ...}`-Dicts (Ordner-Modus: `label=None`)
+statt reiner Dateinamen — Track-Ende/zyklisches Weiterspringen bleibt
+unverändert, betroffen ist nur `os.path.join()` in `start_music_track()`.
+
+`SwitcherState.set_music_status()`/`music_status` bekommen ein neues
+Feld `label` ("Artist – Titel", `None` im Ordner-Modus) — sowohl die
+`/musik`-Seite als auch `_build_status()`s `now_playing`-Override für
+die Player-Seite bevorzugen `label` vor dem reinen Dateinamen, wenn
+vorhanden (dieselbe Infrastruktur speist beide Anzeigen, eine
+Inkonsistenz zwischen ihnen wäre nicht begründbar gewesen).
+
+Filepath-Auflösung setzt voraus, dass `state.music_library_path` beim
+Query-Play NOCH derselbe Root ist, unter dem `music_scan.py` zuletzt
+gescannt hat (die DB speichert `filepath` relativ zu jenem Root, nicht
+absolut, und trägt den Root selbst nicht mit) — ändert der Nutzer den
+Root zwischen Scan und Query-Play, zeigen die Pfade ins Leere. Kein
+Bug, sondern dieselbe implizite Annahme, die schon Phase 1 hatte (der
+Scan-Endpoint scannt ebenfalls einfach `state.music_library_path` zum
+Zeitpunkt des Scans) — ein Re-Scan nach einer Root-Änderung behebt das.
+
 ### STT-Sprachfilter (stt_filter.py)
 
 Zusätzliches Signal per Speech-to-Text, komplett unabhängig von
@@ -766,16 +831,15 @@ der Sender bis zum nächsten warmen Wechsel ohne Delay/Vorausschau,
 bewusst in Kauf genommen statt eines gapless-Übergangs, der ohne
 Zeitdehnung nicht möglich ist.
 Der Musiksammlung-Modus (siehe Architektur-Abschnitt oben) ist bewusst
-ein Grundgerüst: die Kategorie-Buttons auf `/musik` sind reine
-UI-Platzhalter ohne Backend-Mapping — der ID3/SQLite-Scan
-(`music_scan.py`, siehe eigener Abschnitt oben) existiert seit
-2026-08-12 als reiner Backend-Baustein (Endpoint `/api/library/scan`),
-aber absichtlich noch OHNE Anbindung an diese Buttons (kommt erst mit
-Phase 2, siehe README-Roadmap). Der PLAYER selbst (`music_library.py`,
-`list_tracks()`) bleibt weiterhin nicht-rekursiv und nur `.mp3`,
-unabhängig vom (rekursiven) Scan — beide Module bedienen bewusst
-unterschiedliche Zwecke, siehe eigener Abschnitt oben. Eine während des
-Musik-Modus eigentlich fällige
+ein Grundgerüst: die Kategorie-/Favoriten-Buttons auf `/musik` sind seit
+Phase 2 (`music_query.py`, siehe eigener Abschnitt oben) für
+rock/klassik/Queen/Pavarotti funktionsfähig (Genre-/Artist-Teilstring-
+Match gegen `music_library.db`), schnell/langsam bleiben bewusst
+deaktiviert (fehlende BPM-Daten, Phase 3, siehe README-Roadmap). Der
+PLAYER selbst (`music_library.py`, `list_tracks()`) bleibt weiterhin
+nicht-rekursiv und nur `.mp3`, unabhängig vom (rekursiven) Scan — beide
+Module bedienen bewusst unterschiedliche Zwecke, siehe eigener
+Abschnitt oben. Eine während des Musik-Modus eigentlich fällige
 Nachrichten-Pause wird beim Rückweg zu Radio NICHT nachgeholt (die
 News-Break-Slot-Prüfung läuft im Musik-Modus schlicht nicht mit) —
 bewusste Grenze, kein Bug. Die Preflight-Skripte

@@ -113,6 +113,10 @@ STRINGS = {
     "music_root_change_link": {"de": "Ordner unter /config ändern →", "en": "Change folder under /config →"},
     "music_categories_heading": {"de": "Kategorien", "en": "Categories"},
     "music_favorites_heading": {"de": "Favoriten", "en": "Favorites"},
+    "music_category_unavailable_title": {
+        "de": "Noch nicht verfügbar (benötigt BPM-Daten, spätere Phase)",
+        "en": "Not available yet (needs BPM data, later phase)"},
+    "music_query_failed": {"de": "Abfrage fehlgeschlagen.", "en": "Query failed."},
     "music_play_title": {"de": "Play", "en": "Play"},
     "music_stop_title": {"de": "Stop", "en": "Stop"},
     "music_prev_title": {"de": "Vorheriger Track", "en": "Previous track"},

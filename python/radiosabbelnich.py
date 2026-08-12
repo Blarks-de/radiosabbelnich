@@ -999,7 +999,11 @@ def main():
     # "STT/VAD im Musik-Modus komplett deaktiviert", nicht nur pausiert.
     current_mode = state.mode
     music_folder = None       # Container-Pfad, beim Play-Klick einmal gelesen
-    music_tracks = []         # Dateinamen (Basenames), alphabetisch
+    # Liste von {"filepath": <relativ zu music_folder>, "label": <"Artist –
+    # Titel" oder None>} -- Ordner-Modus (Grundgerüst) füllt "label" nie,
+    # Query-Ergebnisse (Phase 2, siehe music_query.py) immer. Einheitliche
+    # Form, damit start_music_track() unten beide Fälle identisch behandelt.
+    music_tracks = []
     music_index = -1          # -1 = idle, nichts läuft
 
     if current_mode == "music":
@@ -1020,11 +1024,13 @@ def main():
 
     def start_music_track(idx: int):
         nonlocal music_index
-        path = os.path.join(music_folder, music_tracks[idx])
+        track = music_tracks[idx]
+        path = os.path.join(music_folder, track["filepath"])
         source.start(path, realtime=True)  # realtime=True PFLICHT, siehe oben
         music_index = idx
-        state.set_music_status(True, music_tracks[idx], idx, len(music_tracks))
-        log.info("🎵 Spiele: %s (%d/%d)", music_tracks[idx], idx + 1, len(music_tracks))
+        file_name = os.path.basename(track["filepath"])
+        state.set_music_status(True, file_name, idx, len(music_tracks), label=track.get("label"))
+        log.info("🎵 Spiele: %s (%d/%d)", track.get("label") or file_name, idx + 1, len(music_tracks))
 
     def stop_music_track():
         nonlocal music_index
@@ -1201,15 +1207,35 @@ def main():
                 if state.pop_music_stop_request():
                     stop_music_track()
                     continue
-                if state.pop_music_play_request():
-                    if music_index < 0:
+                requested, play_tracks = state.pop_music_play_request()
+                if requested:
+                    # play_tracks is not None => bereits aufgelöste Query-
+                    # Ergebnisliste (Phase 2, siehe music_query.py) -- die
+                    # SQLite-Abfrage selbst lief schon vorher im Webserver-
+                    # Thread (webui.py/_handle_music_play()), hier kommt nur
+                    # noch das fertige Ergebnis an. Ein Query-Play ERSETZT
+                    # eine laufende Wiedergabe sofort (Klick auf einen
+                    # Kategorie-/Favoriten-Button = "ab jetzt DIESE
+                    # Playlist"), deshalb ANDERS als beim Ordner-Play kein
+                    # `music_index < 0`-Guard -- source.start() stoppt die
+                    # alte Quelle intern bereits selbst.
+                    if play_tracks is not None:
+                        music_folder = state.music_library_path
+                        if play_tracks:
+                            music_tracks = play_tracks
+                            start_music_track(0)
+                        # Leere Liste kommt hier praktisch nie an -- der
+                        # Webserver-Handler beantwortet 0 Treffer bereits
+                        # selbst mit einer Fehlermeldung und schickt in dem
+                        # Fall gar keinen Request (siehe dort).
+                    elif music_index < 0:
                         music_folder = state.music_library_path
                         tracks = music_library.list_tracks(music_folder)
                         if not tracks:
                             log.warning("🎵 Musiksammlung: keine Wiedergabe gestartet "
                                         "(Ordner leer/nicht lesbar: %s).", music_folder)
                         else:
-                            music_tracks = tracks
+                            music_tracks = [{"filepath": f, "label": None} for f in tracks]
                             start_music_track(0)
                     continue
                 skip_dir = state.pop_music_skip_request()

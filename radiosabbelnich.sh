@@ -117,29 +117,14 @@ except Exception:
     fi
 
     echo "🔌 Erreichbarkeit"
-    local status_json=""
-    # -k: bei https evtl. selbstsigniertes/auf einen anderen Hostnamen
-    # ausgestelltes Zertifikat (z.B. per "tailscale cert") -- für einen
-    # reinen Erreichbarkeits-Check hier egal, kein Sicherheitskontext.
-    if status_json=$(curl -sk --max-time 2 "$webui_scheme://localhost:$webui_port/api/status" 2>/dev/null) && [ -n "$status_json" ]; then
-        echo -e "${GREEN}✅ Web-Interface ($webui_scheme, Port $webui_port) antwortet.${NC}"
-    else
-        echo -e "${RED}❌ Web-Interface ($webui_scheme, Port $webui_port) antwortet nicht.${NC}"
-        status_json=""
-    fi
-    if curl -s --max-time 2 "http://localhost:$icecast_port/status.xsl" -o /dev/null 2>/dev/null; then
-        echo -e "${GREEN}✅ Icecast (Port $icecast_port) antwortet.${NC}"
-    else
-        echo -e "${RED}❌ Icecast (Port $icecast_port) antwortet nicht.${NC}"
-    fi
 
     # ICECAST_HOSTNAME ist die Adresse, unter der HÖRER sich tatsächlich
-    # verbinden (siehe docker-compose.yml, IC_HOSTNAME) -- die obigen beiden
-    # Checks laufen bewusst gegen localhost und sagen deshalb nichts darüber
-    # aus, ob diese Adresse von AUSSEN erreichbar ist. Aus "docker compose
-    # config" gelesen statt .env selbst geparst, gleicher Grund wie bei
-    # resolved_port() oben (Shell/Compose interpretieren .env nicht immer
-    # identisch).
+    # verbinden (siehe docker-compose.yml, IC_HOSTNAME) -- bewusst als
+    # ERSTES in diesem Block (vor den localhost-Checks unten), weil das die
+    # Adresse ist, die man als Mensch beim Vorlesen des Status zuerst sehen
+    # will. Aus "docker compose config" gelesen statt .env selbst geparst,
+    # gleicher Grund wie bei resolved_port() oben (Shell/Compose
+    # interpretieren .env nicht immer identisch).
     local icecast_hostname
     icecast_hostname=$(printf '%s' "$compose_config_json" | python3 -c "
 import json, sys
@@ -154,6 +139,22 @@ except Exception:
         echo "🔗 Hostname für Hörer: $icecast_hostname"
     else
         echo -e "${YELLOW}⚠️  ICECAST_HOSTNAME nicht gesetzt (.env prüfen).${NC}"
+    fi
+
+    local status_json=""
+    # -k: bei https evtl. selbstsigniertes/auf einen anderen Hostnamen
+    # ausgestelltes Zertifikat (z.B. per "tailscale cert") -- für einen
+    # reinen Erreichbarkeits-Check hier egal, kein Sicherheitskontext.
+    if status_json=$(curl -sk --max-time 2 "$webui_scheme://localhost:$webui_port/api/status" 2>/dev/null) && [ -n "$status_json" ]; then
+        echo -e "${GREEN}✅ Web-Interface ($webui_scheme, Port $webui_port) antwortet.${NC}"
+    else
+        echo -e "${RED}❌ Web-Interface ($webui_scheme, Port $webui_port) antwortet nicht.${NC}"
+        status_json=""
+    fi
+    if curl -s --max-time 2 "http://localhost:$icecast_port/status.xsl" -o /dev/null 2>/dev/null; then
+        echo -e "${GREEN}✅ Icecast (Port $icecast_port) antwortet.${NC}"
+    else
+        echo -e "${RED}❌ Icecast (Port $icecast_port) antwortet nicht.${NC}"
     fi
 
     # Tailscale-Check nur, wenn der Hostname tatsächlich ein
@@ -191,6 +192,39 @@ except Exception:
         echo -e "${GREEN}✅ Internet/DNS erreichbar (Ping hamburg.de).${NC}"
     else
         echo -e "${RED}❌ Kein Internet oder DNS kaputt (Ping hamburg.de fehlgeschlagen)!${NC}"
+    fi
+    echo
+
+    # MP3-Ordner der Nachrichten-Pause: Pfad + Trefferzahl, gleicher
+    # NEWS_MP3_FOLDER_HOST-Weg über "docker compose config" wie oben beim
+    # Hostname (Quelle der Wahrheit statt .env selbst zu parsen) -- bewusst
+    # eine schlankere Variante des ausführlichen Checks in
+    # check-radiosabbelnich.sh (Backslash-Hinweis etc.): das hier ist eine
+    # laufende Status-Anzeige, keine Preflight-Diagnose.
+    echo "📻 MP3-Ordner (Nachrichten-Pause)"
+    local news_folder_host mp3_count
+    news_folder_host=$(printf '%s' "$compose_config_json" | python3 -c "
+import json, sys
+try:
+    cfg = json.load(sys.stdin)
+    print(cfg['services']['radiosabbelnich']['environment'].get('NEWS_MP3_FOLDER_HOST', ''))
+except Exception:
+    print('')
+" 2>/dev/null)
+
+    if [ -z "$news_folder_host" ]; then
+        echo -e "${YELLOW}⚠️  NEWS_MP3_FOLDER nicht ermittelbar.${NC}"
+    elif [ ! -d "$news_folder_host" ]; then
+        echo -e "${RED}❌ $news_folder_host existiert nicht (Tippfehler? SMB-Mount nicht eingehängt?).${NC}"
+    elif [ ! -r "$news_folder_host" ]; then
+        echo -e "${RED}❌ $news_folder_host ist nicht lesbar.${NC}"
+    else
+        mp3_count=$(find "$news_folder_host" -maxdepth 1 -iname '*.mp3' 2>/dev/null | wc -l)
+        if [ "$mp3_count" -eq 0 ]; then
+            echo -e "${YELLOW}⚠️  $news_folder_host enthält keine MP3-Dateien.${NC}"
+        else
+            echo -e "${GREEN}✅ $news_folder_host ($mp3_count MP3-Datei(en) gefunden)${NC}"
+        fi
     fi
     echo
 

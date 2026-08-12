@@ -7,11 +7,11 @@
   "language": "de",
   "current_mode": "radio",
   "music_library": {
-    "path": "/app/music_library"
+    "path": "/app/music_library/+_Kultliederbuch"
   },
   "news_break": {
     "enabled": true,
-    "mp3_folder": "/app/news_mp3",
+    "mp3_folder": "/app/news_mp3/+_Blarks_Favoriten/Fav_Favoriten_Auto-1/Lady Gaga - Joanne",
     "window_minutes": 6.0,
     "enabled_hours": null
   },

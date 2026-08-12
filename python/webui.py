@@ -31,6 +31,7 @@ import fingerprint
 import folder_browse
 import i18n
 import music_library
+import music_query
 import music_scan
 import resource_monitor
 import settings_store
@@ -173,7 +174,9 @@ class SwitcherState:
         self._music_file = None
         self._music_index = -1
         self._music_total = 0
+        self._music_label = None  # "Artist – Titel" bei Query-Wiedergabe (Phase 2), sonst None
         self._music_play_requested = False
+        self._music_play_tracks = None  # None=Ordner-Modus, sonst bereits aufgelöste Query-Trackliste
         self._music_stop_requested = False
         self._music_skip_requested = None  # +1/-1 oder None
         self._stt_filter_cfg = dict(settings_store.DEFAULTS["stt_filter"])
@@ -664,15 +667,29 @@ class SwitcherState:
         aktualisiert, selbst nach einer Änderung über /config."""
         return settings_store.load()["music_library"]["path"]
 
-    def request_music_play(self):
+    def request_music_play(self, tracks: list = None):
+        """tracks: None (Default) => Ordner-Modus, der Hauptloop baut die
+        Trackliste selbst aus music_library_path (Grundgerüst,
+        unverändert). Eine bereits aufgelöste Liste => Query-Ergebnis
+        (Phase 2, siehe music_query.py) -- die eigentliche SQLite-Abfrage
+        läuft VOR diesem Aufruf synchron im Webserver-Thread
+        (_handle_music_play()), nie hier/im Hauptloop. Ein Query-Play
+        ERSETZT eine laufende Wiedergabe sofort, anders als der normale
+        Play-Klick, der nur bei Idle wirkt (siehe radiosabbelnich.py)."""
         with self._lock:
             self._music_play_requested = True
+            self._music_play_tracks = tracks
 
-    def pop_music_play_request(self) -> bool:
+    def pop_music_play_request(self):
+        """Gibt (requested: bool, tracks: list|None) zurück -- tracks nur
+        bedeutsam, wenn requested True ist (None danach heißt dann
+        "Ordner-Modus", nicht "kein Request")."""
         with self._lock:
             flag = self._music_play_requested
+            tracks = self._music_play_tracks
             self._music_play_requested = False
-            return flag
+            self._music_play_tracks = None
+            return (flag, tracks) if flag else (False, None)
 
     def request_music_stop(self):
         with self._lock:
@@ -696,16 +713,20 @@ class SwitcherState:
             return direction
 
     def set_music_status(self, active: bool, file_name: str = None,
-                          index: int = -1, total: int = 0):
+                          index: int = -1, total: int = 0, label: str = None):
         """Vom Hauptloop nach jedem Track-Start/-Stop aufgerufen -- fürs
         "Jetzt läuft"-Feld und den Play/Stop-Button-Zustand auf der
         Musiksammlung-Seite (und den now_playing-Override in
-        _build_status(), analog zum News-Break-Muster)."""
+        _build_status(), analog zum News-Break-Muster). label:
+        "Artist – Titel" bei Query-Wiedergabe (Phase 2, aus
+        music_query.py) -- None im Ordner-Modus (Grundgerüst), das
+        Frontend zeigt dann weiterhin nur den Dateinamen."""
         with self._lock:
             self._music_active = active
             self._music_file = file_name
             self._music_index = index
             self._music_total = total
+            self._music_label = label
             self._version += 1
             self._version_cond.notify_all()
 
@@ -715,6 +736,7 @@ class SwitcherState:
             return {
                 "active": self._music_active,
                 "file": self._music_file,
+                "label": self._music_label,
                 "index": self._music_index,
                 "total": self._music_total,
             }
@@ -1053,8 +1075,11 @@ def _build_status(state: SwitcherState, icecast_cfg: dict) -> dict:
     elif state.mode == "music" and music["active"]:
         # Gleiches Muster wie News-Break direkt oben, nur für den
         # persistenten Musiksammlung-Modus statt eines einzelnen
-        # pausierten Radiosenders.
-        now_playing = f"🎵 {music['file']}" if music["file"] else None
+        # pausierten Radiosenders. label (Artist – Titel) hat Vorrang vor
+        # dem reinen Dateinamen, wenn aus einer Query-Wiedergabe bekannt
+        # (Phase 2, siehe music_query.py) -- sonst wie bisher der Dateiname.
+        display = music["label"] or music["file"]
+        now_playing = f"🎵 {display}" if display else None
     else:
         now_playing = _fetch_now_playing(current) if current else None
     return {
@@ -1854,6 +1879,13 @@ _MUSIC_PAGE_HTML = """<!doctype html>
     flex: 1 1 28%; padding: .6rem .4rem; font-size: .85rem; border-radius: .4rem;
     border: 1px solid #999; background: none; color: inherit; opacity: .55; cursor: default;
   }
+  /* Query-Buttons (Phase 2, music_query.py) -- im Gegensatz zu den grau
+     ausgegrauten Platzhaltern (schnell/langsam) tatsächlich klickbar,
+     gleiche Akzentfarbe wie Play/Stop und Zurück/Nächster. */
+  .category-row button.music-query-btn {
+    opacity: 1; cursor: pointer; border-color: #1abc9c; background: #1abc9c1a;
+  }
+  .category-row button.music-query-btn:active { background: #1abc9c33; }
   .play-stop-row { text-align: center; margin-top: 1.5rem; }
   #btn-play-stop {
     width: 6.5rem; height: 6.5rem; border-radius: 50%; font-size: 2.4rem;
@@ -1890,24 +1922,26 @@ _MUSIC_PAGE_HTML = """<!doctype html>
   <a class="config-link" href="/config" data-i18n="music_root_change_link">Ordner unter /config ändern →</a>
 </div>
 
-<!-- Kategorie-/Favoriten-Buttons: reine UI-Platzhalter, kein Backend-Mapping.
-     Echte Filterung kommt erst mit dem ID3/SQLite-Scan (spätere Phase, siehe
-     README "Zukünftige Features") -- Kategorien dann als Filter auf
-     Metadaten/Tags (BPM, Genre), Favoriten als Filter auf den Künstler-Tag. -->
+<!-- Kategorie-/Favoriten-Buttons (Phase 2, music_query.py): rock/klassik
+     und Queen/Pavarotti lösen eine echte Query gegen music_library.db aus
+     (Genre- bzw. Artist-Teilstring-Match, siehe dortiger Modul-Docstring).
+     schnell/langsam bleiben disabled -- es gibt keine BPM-Daten in der DB
+     (spätere Phase, siehe README "Zukünftige Features"), eine Ableitung
+     aus dem Genre-Tag wäre geraten statt abgefragt. -->
 <div class="category-group">
   <div class="category-group-heading" data-i18n="music_categories_heading">Kategorien</div>
   <div class="category-row">
-    <button disabled>schnell</button>
-    <button disabled>langsam</button>
-    <button disabled>rock</button>
-    <button disabled>klassik</button>
+    <button disabled title="Noch nicht verfügbar (benötigt BPM-Daten, spätere Phase)" data-i18n-title="music_category_unavailable_title">schnell</button>
+    <button disabled title="Noch nicht verfügbar (benötigt BPM-Daten, spätere Phase)" data-i18n-title="music_category_unavailable_title">langsam</button>
+    <button class="music-query-btn" data-query-type="genre" data-query-value="rock">rock</button>
+    <button class="music-query-btn" data-query-type="genre" data-query-value="klassik">klassik</button>
   </div>
 </div>
 <div class="category-group">
   <div class="category-group-heading" data-i18n="music_favorites_heading">Favoriten</div>
   <div class="category-row">
-    <button disabled>Queen</button>
-    <button disabled>Pavarotti</button>
+    <button class="music-query-btn" data-query-type="artist" data-query-value="Queen">Queen</button>
+    <button class="music-query-btn" data-query-type="artist" data-query-value="Pavarotti">Pavarotti</button>
   </div>
 </div>
 
@@ -1979,7 +2013,7 @@ function applyStatus(data) {
 
   document.getElementById('root-path').textContent = data.music_library_path || t('common_unknown');
 
-  const m = data.music || {active: false, file: null, index: -1, total: 0};
+  const m = data.music || {active: false, file: null, label: null, index: -1, total: 0};
   musicActive = !!m.active;
 
   const playBtn = document.getElementById('btn-play-stop');
@@ -1989,12 +2023,17 @@ function applyStatus(data) {
 
   document.getElementById('btn-prev-track').disabled = !musicMode || !musicActive;
   document.getElementById('btn-next-track').disabled = !musicMode || !musicActive;
+  // Query-Buttons (Phase 2) nur im Musiksammlung-Modus klickbar -- gleiches
+  // Gating wie der große Play/Stop-Button oben.
+  document.querySelectorAll('.music-query-btn').forEach((btn) => { btn.disabled = !musicMode; });
 
   const statusEl = document.getElementById('track-status');
   if (!musicMode) {
     statusEl.textContent = t('music_switch_hint');
   } else if (musicActive && m.file) {
-    statusEl.textContent = t('music_now_playing', {file: m.file, index: m.index + 1, total: m.total});
+    // label ("Artist – Titel") hat Vorrang vor dem reinen Dateinamen, wenn
+    // aus einer Query-Wiedergabe bekannt (Phase 2) -- sonst wie bisher.
+    statusEl.textContent = t('music_now_playing', {file: m.label || m.file, index: m.index + 1, total: m.total});
   } else {
     statusEl.textContent = t('music_idle');
   }
@@ -2045,6 +2084,28 @@ document.getElementById('btn-next-track').addEventListener('click', async () => 
   } catch (e) {
     setActionMsg(t('common_error', {msg: e.message}));
   }
+});
+// Kategorie-/Favoriten-Buttons (Phase 2, music_query.py) -- derselbe
+// /api/music/play-Endpoint wie der große Play-Button oben, nur mit
+// zusätzlichem "query"-Body. Der Server antwortet bei 0 Treffern sofort
+// mit ok:false (kein Request geht an den Hauptloop, siehe webui.py/
+// _handle_music_play()) -- die Fehlermeldung landet 1:1 im Action-Feld.
+document.querySelectorAll('.music-query-btn').forEach((btn) => {
+  btn.addEventListener('click', async () => {
+    const query = {type: btn.dataset.queryType, value: btn.dataset.queryValue};
+    try {
+      const res = await fetch('/api/music/play', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({query}),
+      });
+      const data = await res.json();
+      setActionMsg(data.ok ? '' : (data.error || t('music_query_failed')));
+      setTimeout(refresh, 800);
+    } catch (e) {
+      setActionMsg(t('common_error', {msg: e.message}));
+    }
+  });
 });
 
 refresh();
@@ -3657,8 +3718,7 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
             elif self.path == "/api/mode":
                 self._handle_mode_change()
             elif self.path == "/api/music/play":
-                state.request_music_play()
-                self._send_json({"ok": True})
+                self._handle_music_play()
             elif self.path == "/api/music/stop":
                 state.request_music_stop()
                 self._send_json({"ok": True})
@@ -3917,6 +3977,41 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
 
             threading.Thread(target=worker, daemon=True, name="libscan").start()
             self._send_json({"ok": True})
+
+        def _handle_music_play(self):
+            # Ein Endpoint für beide Fälle (Grundgerüst-Ordner-Play UND
+            # Phase-2-Query-Play), Unterscheidung über den optionalen
+            # "query"-Body -- kein zweiter Endpoint, siehe CLAUDE.md/
+            # SESSION.md zu Phase 2. Die eigentliche SQLite-Abfrage läuft
+            # HIER synchron im Webserver-Thread (kurzlebige Connection,
+            # gleicher Grund wie bei fingerprint.delete_clip() -- sqlite3-
+            # Connections sind nicht thread-übergreifend sicher), NICHT im
+            # Hauptloop: der ~1s-Analysetakt darf nie auf eine Query
+            # warten. Dadurch kann diese Methode "keine Treffer" auch
+            # SOFORT beantworten, ohne überhaupt einen Request an den
+            # Hauptloop zu schicken.
+            payload = self._read_json_body()
+            query = payload.get("query")
+            if not query:
+                state.request_music_play()
+                self._send_json({"ok": True})
+                return
+
+            q_type = query.get("type")
+            q_value = str(query.get("value") or "")
+            if q_type == "artist":
+                tracks = music_query.query_by_artist(music_library_db_path, q_value)
+            elif q_type == "genre":
+                tracks = music_query.query_by_genre(music_library_db_path, q_value)
+            else:
+                self._send_json({"ok": False, "error": f"Unbekannter Query-Typ: {q_type!r}"}, status=400)
+                return
+
+            if not tracks:
+                self._send_json({"ok": False, "error": f"Keine Treffer für '{q_value}'."})
+                return
+            state.request_music_play(tracks=tracks)
+            self._send_json({"ok": True, "track_count": len(tracks)})
 
         def _handle_status_wait(self):
             """Long-Poll-Fast-Path für die Web-UI: blockiert bis zu

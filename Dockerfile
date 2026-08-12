@@ -28,6 +28,7 @@ COPY python/station_import.py .
 COPY python/logging_setup.py .
 COPY python/news_break.py .
 COPY python/music_library.py .
+COPY python/music_query.py .
 COPY python/music_scan.py .
 COPY python/folder_browse.py .
 COPY python/stt_filter.py .

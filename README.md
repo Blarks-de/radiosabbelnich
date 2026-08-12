@@ -655,7 +655,9 @@ Hörer von außen, nicht nur `localhost`) und warnt rot, falls Tailscale
 ausgeloggt/gestoppt ist (nur bei einem `*.ts.net`-Hostnamen relevant)
 oder gar kein Internet/DNS erreichbar ist (per Ping gegen `hamburg.de`
 geprüft) — beides Fälle, in denen der Stream lokal noch normal läuft,
-aber niemand von außen mehr rankommt.
+aber niemand von außen mehr rankommt. Ein weiterer Abschnitt zeigt den
+`NEWS_MP3_FOLDER`-Pfad der Nachrichten-Pause samt Trefferzahl (schlankere
+Variante desselben Checks aus `check-radiosabbelnich.sh`).
 
 ### Wichtige `.env`-Variablen
 
@@ -759,8 +761,7 @@ scannen, taggen und nach Kategorien abspielbar machen.
   STT/VAD im Musik-Modus komplett aus) **und ein minimaler Player**
   (Play/Stop/Zurück/Nächster über einen konfigurierbaren Ordner, nicht
   rekursiv, keine Kategorisierung) sind umgesetzt — siehe
-  "Musiksammlung-Modus (Grundgerüst)" weiter oben. Die Kategorie-Buttons
-  dort sind noch reine Platzhalter, echtes Mapping kommt erst mit:
+  "Musiksammlung-Modus (Grundgerüst)" weiter oben.
 - Format-Unterstützung erweitern (geplant): aktuell wird nur `.mp3`
   unterstützt (Scan + Playback im Grundgerüst oben). Geplant: Erweiterung
   auf gängige Formate wie FLAC, APE, OGG, M4A/AAC, WAV — mutagen
@@ -779,8 +780,22 @@ scannen, taggen und nach Kategorien abspielbar machen.
   nicht jedes Mal wieder alle Dateien komplett neu einliest.
   - Quelle: Fileserver 192.168.1.10, per SMB auf SERVER gemountet
     unter `/mnt/server/data`
-- Phase 2: Query-Layer (CLI/kleine API, angelehnt an Beets' Query-Syntax),
-  Anbindung an den Player als Alternative zum Icecast-Stream
+- ✅ **Phase 2 umgesetzt**: schlanker Query-Layer (`music_query.py`, an
+  Beets' Query-Syntax angelehnt, aber ohne echten Parser — nur feste
+  Artist-/Genre-Teilstring-Filter) direkt an den Musik-Player angebunden.
+  Die Kategorie-/Favoriten-Buttons auf `/musik` sind damit größtenteils
+  funktionsfähig: **Queen/Pavarotti** filtern per Artist-Teilstring,
+  **rock/klassik** per Genre-Teilstring (`LIKE '%rock%'` — reine
+  Freitext-Ähnlichkeit, kein exaktes Genre-Mapping, deckt sich nicht mit
+  jeder Schreibweise). **schnell/langsam bleiben bewusst deaktiviert**
+  (mit Tooltip) — dafür fehlen BPM-Daten, siehe Phase 3 unten. Ein Klick
+  löst dieselbe `POST /api/music/play`-Route wie der normale Play-Knopf
+  aus (optionaler `query`-Body statt eines zweiten Endpoints), ersetzt
+  eine laufende Wiedergabe sofort durch die Query-Ergebnisliste und
+  zeigt bei 0 Treffern eine klare Meldung statt nichts zu tun. Läuft
+  Artist/Titel bekannt (aus der DB), zeigt "Jetzt läuft" **Artist –
+  Titel** statt nur des Dateinamens — auf `/musik` UND auf der
+  Player-Seite.
 - Phase 3 (optional, später): Audio-Features (BPM, Energy via librosa)
   für Smart-Playlists, Duplikat-Erkennung, kleines Web-UI zum Browsen
 - Enrichment (späterer Baustein, getrennt vom Scan): fehlende
@@ -1431,7 +1446,9 @@ not just `localhost`) and prints a red warning if Tailscale is logged
 out/stopped (only relevant for a `*.ts.net` hostname) or if there's no
 internet/DNS at all (checked via a ping to `hamburg.de`) — both cases
 where the stream still runs fine locally but nobody outside can reach it
-anymore.
+anymore. Another section shows the news break's `NEWS_MP3_FOLDER` path
+along with a file count (a leaner version of the same check from
+`check-radiosabbelnich.sh`).
 
 ### Important `.env` variables
 
@@ -1538,8 +1555,7 @@ tag it, and make it playable by category.
   STT/VAD fully off in music mode) **and a minimal player** (play/stop/
   back/next over a configurable folder, non-recursive, no
   categorization) are implemented — see "Music library mode
-  (foundation)" further up. The category buttons there are still pure
-  placeholders; real mapping arrives with:
+  (foundation)" further up.
 - Expand format support (planned): currently only `.mp3` is supported
   (scan + playback in the foundation above). Planned: expand to common
   formats like FLAC, APE, OGG, M4A/AAC, WAV — mutagen already supports
@@ -1557,8 +1573,21 @@ tag it, and make it playable by category.
   from scratch each time.
   - Source: file server 192.168.5.101, SMB-mounted on Dockfish under
     `/mnt/eimer/data`
-- Phase 2: query layer (CLI/small API, modeled on Beets' query syntax),
-  hooked into the player as an alternative to the Icecast stream
+- ✅ **Phase 2 implemented**: a lean query layer (`music_query.py`,
+  modeled on Beets' query syntax but without a real parser — just a
+  handful of fixed artist/genre substring filters) hooked directly into
+  the music player. The category/favorite buttons on `/musik` are now
+  mostly functional: **Queen/Pavarotti** filter by artist substring,
+  **rock/klassik** by genre substring (`LIKE '%rock%'` — plain text
+  similarity, not an exact genre mapping, so it won't catch every
+  spelling). **schnell/langsam stay deliberately disabled** (with a
+  tooltip) — that needs BPM data, see phase 3 below. A click reuses the
+  same `POST /api/music/play` route as the regular play button (an
+  optional `query` body instead of a second endpoint), replaces any
+  running playback immediately with the query results, and shows a
+  clear message on 0 hits instead of doing nothing. Once artist/title
+  are known (from the DB), "now playing" shows **artist – title**
+  instead of just the filename — on `/musik` AND on the player page.
 - Phase 3 (optional, later): audio features (BPM, energy via librosa)
   for smart playlists, duplicate detection, small web UI for browsing
 - Enrichment (later building block, separate from the scan): fill in
