@@ -594,6 +594,7 @@ Signaturprüfung über die Debug-Signierung hinaus (siehe oben).
 | `data/music_library/` | Standard-Mountziel für `MUSIC_LIBRARY_FOLDER` (überschreibbar in `.env`) |
 | `docker-compose.yml` | Icecast + RadioSabbelNich als zwei Services |
 | `radiosabbelnich.sh` | Alles-in-einem-Wrapper: `check`/`start`/`stop`/`restart`/`status` (Default) |
+| `CHANGELOG.md` | Verdichtete Versionshistorie, neueste zuerst (Details in `SESSION.md`) |
 
 RadioSabbelNich und das Web-Interface laufen im selben Prozess (Web-Server
 als Hintergrund-Thread) — kein separater Service, keine IPC nötig, nur
@@ -1404,6 +1405,7 @@ beyond the debug signing (see above).
 | `data/music_library/` | Default mount target for `MUSIC_LIBRARY_FOLDER` (overridable in `.env`) |
 | `docker-compose.yml` | Icecast + RadioSabbelNich as two services |
 | `radiosabbelnich.sh` | All-in-one wrapper: `check`/`start`/`stop`/`restart`/`status` (default) |
+| `CHANGELOG.md` | Condensed version history, newest first (details in `SESSION.md`) |
 
 RadioSabbelNich and the web interface run in the same process (web server
 as a background thread) — no separate service, no IPC needed, just

@@ -6473,3 +6473,55 @@ löschen.
 - `grep` über das gesamte Repo (außer `android-app/` und SESSION.md)
   bestätigt: keine verbliebenen Referenzen auf die beiden gelöschten
   Dateinamen.
+
+## 2026-08-12 — CHANGELOG.md angelegt: verdichtete Versionshistorie von Anfang an
+
+**Auslöser**: Nutzer wollte eine `CHANGELOG.md` von Projektbeginn bis
+jetzt, neueste Einträge zuerst — reine Doku-Aufgabe.
+
+### Umsetzung
+
+- Quelle: `git log` (68 Commits, 2026-08-02 bis 2026-08-12, kein Tag im
+  Repo) statt SESSION.md — SESSION.md ist bewusst die ausführliche
+  "Wie und Warum"-Erzählung pro Arbeitseinheit, ein Changelog braucht
+  die verdichtete "Was"-Sicht, ein Commit ist dafür die verlässlichere
+  Zähleinheit.
+- Gliederung nach Datum (10 Abschnitte), innerhalb eines Tages
+  Commit-Reihenfolge neuestes zuerst — durchgehend, nicht nur
+  zwischen den Tagen. Rein dokumentierende Folge-Commits (z.B. reine
+  "SESSION.md dokumentiert"/"VERSION-Bump"-Commits ohne eigenen
+  Funktionsumfang) an geeigneter Stelle mit dem zugehörigen
+  Feature-Commit zusammengezogen, damit nicht für jeden Dokumentations-
+  Nachtrag ein eigener, inhaltsleerer Punkt entsteht.
+- Namenshistorie (RadioZapper → KeinSabbelRadio → RadioSabbelNich,
+  zwei echte Umbenennungen am 2026-08-08 bzw. 2026-08-09) im
+  Kopftext erklärt, damit ältere Einträge mit den historischen Namen
+  (z.B. `check-radiozapper.sh`) nicht verwirren — die Änderungspunkte
+  selbst sind einheitlich mit dem aktuellen Namen formuliert, außer wo
+  der Umbenennungsvorgang selbst der Punkt ist.
+- Android-App-Einträge (eigenständiges Projekt, siehe `CLAUDE.md`) mit
+  **Android:**-Präfix markiert statt in eine eigene Datei auszulagern —
+  dieselbe Datei deckt bewusst beide Teile des Repos ab.
+- `README.md` (DE+EN): `CHANGELOG.md` in die Datei-Tabelle aufgenommen.
+- `VERSION`: v1.1.22 → v1.1.23.
+
+### Bewusst NICHT gemacht
+
+- Keine Versionsnummern-Anker (z.B. `## v1.1.9`) — Datumsgliederung
+  gewählt, weil sie durchgehend verfügbar ist (VERSION-Tracking
+  begann erst am 2026-08-06, die ersten vier Tage hätten sonst gar
+  keine Version zum Verankern).
+- Keine englische Parallelversion (anders als `README.md`) — Changelog
+  ist reine Projekt-eigene Historie wie `SESSION.md`/`CLAUDE.md`, für
+  die "Alles auf Deutsch" gilt.
+
+### Verifiziert
+
+- Beim ersten Entwurf wiederholt geprüft, ob jeder Tagesabschnitt
+  tatsächlich neueste-zuerst sortiert ist (nicht nur die Tage
+  untereinander) — dabei mehrfach den eigenen Fehler gefunden, einen
+  Abschnitt versehentlich chronologisch aufsteigend statt absteigend
+  geschrieben zu haben (2026-08-02, -04, -05, -06, -07, -08), jeweils
+  gegen die per `git log` abgerufene tatsächliche Commit-Reihenfolge
+  (Datum+Uhrzeit) korrigiert. Abschließend jeden der zehn
+  Tagesabschnitte einzeln gegen die `git log`-Ausgabe gegengelesen.
