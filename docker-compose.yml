@@ -170,6 +170,15 @@ services:
       # öffnen): einmalig `touch fingerprints.db`, siehe README-Setup.
       - ./data/fingerprints.db:/app/fingerprints.db
       - ./data/fingerprint_clips:/app/fingerprint_clips
+      # Musik-Library-Scan (music_scan.py, Phase 1 der Roadmap): eigene
+      # SQLite-DB, komplett getrennt von fingerprints.db (andere Domäne),
+      # gleiches "muss vorher als Datei existieren"-Muster wie oben --
+      # einmalig `touch data/music_library.db`, siehe README-Setup. Der
+      # Cover-Cache braucht einen eigenen, BESCHREIBBAREN Mount (kein :ro,
+      # anders als der eigentliche MUSIC_LIBRARY_FOLDER-Mount unten, aus
+      # dem nur gelesen wird).
+      - ./data/music_library.db:/app/music_library.db
+      - ./data/music_library_covers:/app/music_library_covers
       # Rotierende Logdatei (immer DEBUG, siehe logging_setup.py) — hier
       # gemountet, damit man sie ohne `docker exec` direkt vom Host lesen
       # kann, auch nachdem der Container neugestartet ist.

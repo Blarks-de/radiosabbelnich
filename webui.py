@@ -31,6 +31,7 @@ import fingerprint
 import folder_browse
 import i18n
 import music_library
+import music_scan
 import resource_monitor
 import settings_store
 import station_import
@@ -750,6 +751,71 @@ class ImportState:
                 return False
             self._running = True
             self._phase = "downloading"
+            self._checked = 0
+            self._total = 0
+            self._result = None
+            self._error = None
+            return True
+
+    def set_phase(self, phase: str, total: int = None):
+        with self._lock:
+            self._phase = phase
+            if total is not None:
+                self._total = total
+
+    def increment_checked(self):
+        with self._lock:
+            self._checked += 1
+
+    def finish(self, result: dict):
+        with self._lock:
+            self._running = False
+            self._phase = "done"
+            self._result = result
+
+    def fail(self, error: str):
+        with self._lock:
+            self._running = False
+            self._phase = "error"
+            self._error = error
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            return {
+                "running": self._running,
+                "phase": self._phase,
+                "checked": self._checked,
+                "total": self._total,
+                "result": self._result,
+                "error": self._error,
+            }
+
+
+class LibraryScanState:
+    """Thread-sicherer Fortschritts-/Ergebnis-Tracker für den Musik-
+    Library-Scan (music_scan.py) — Kopie des ImportState-Musters oben,
+    gleicher Grund: der Scan kann bei einer großen Sammlung mehrere
+    Minuten dauern und läuft deshalb in einem Hintergrund-Thread, ein
+    Client pollt snapshot() für den Fortschritt. Phasen: idle (noch nie
+    gelaufen) -> walking (Verzeichnisbaum wird eingelesen, total noch
+    unbekannt) -> scanning (total bekannt, checked zählt hoch) ->
+    done/error."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._running = False
+        self._phase = "idle"  # idle | walking | scanning | done | error
+        self._checked = 0
+        self._total = 0
+        self._result = None
+        self._error = None
+
+    def start(self) -> bool:
+        with self._lock:
+            if self._running:
+                return False
+            self._running = True
+            self._phase = "walking"
             self._checked = 0
             self._total = 0
             self._result = None
@@ -1778,7 +1844,12 @@ _MUSIC_PAGE_HTML = """<!doctype html>
   }
   #root-path-box a { font-size: .8rem; }
   @media (prefers-color-scheme: dark) { #root-path-box { background: #2a2a2a; } }
-  .category-row { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1.2rem; }
+  .category-group { margin-top: 1.2rem; }
+  .category-group-heading {
+    font-size: .75rem; text-transform: uppercase; letter-spacing: .03em;
+    color: #888; margin-bottom: .35rem;
+  }
+  .category-row { display: flex; flex-wrap: wrap; gap: .5rem; }
   .category-row button {
     flex: 1 1 28%; padding: .6rem .4rem; font-size: .85rem; border-radius: .4rem;
     border: 1px solid #999; background: none; color: inherit; opacity: .55; cursor: default;
@@ -1819,16 +1890,25 @@ _MUSIC_PAGE_HTML = """<!doctype html>
   <a class="config-link" href="/config" data-i18n="music_root_change_link">Ordner unter /config ändern →</a>
 </div>
 
-<!-- Kategorie-Buttons: reine UI-Platzhalter, kein Backend-Mapping. Echte
-     Kategorisierung kommt erst mit dem ID3/SQLite-Scan (spätere Phase,
-     siehe README "Zukünftige Features"). -->
-<div class="category-row">
-  <button disabled>80er</button>
-  <button disabled>Queen</button>
-  <button disabled>Oldies</button>
-  <button disabled>Metal</button>
-  <button disabled>Klassik</button>
-  <button disabled>Pavarotti</button>
+<!-- Kategorie-/Favoriten-Buttons: reine UI-Platzhalter, kein Backend-Mapping.
+     Echte Filterung kommt erst mit dem ID3/SQLite-Scan (spätere Phase, siehe
+     README "Zukünftige Features") -- Kategorien dann als Filter auf
+     Metadaten/Tags (BPM, Genre), Favoriten als Filter auf den Künstler-Tag. -->
+<div class="category-group">
+  <div class="category-group-heading" data-i18n="music_categories_heading">Kategorien</div>
+  <div class="category-row">
+    <button disabled>schnell</button>
+    <button disabled>langsam</button>
+    <button disabled>rock</button>
+    <button disabled>klassik</button>
+  </div>
+</div>
+<div class="category-group">
+  <div class="category-group-heading" data-i18n="music_favorites_heading">Favoriten</div>
+  <div class="category-row">
+    <button disabled>Queen</button>
+    <button disabled>Pavarotti</button>
+  </div>
 </div>
 
 <div class="play-stop-row">
@@ -3378,7 +3458,9 @@ _CONFIG_PAGE_HTML_BYTES = _render_i18n_variants(_CONFIG_PAGE_HTML, "_CONFIG_PAGE
 
 
 def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: str,
-                  host_paths: dict = None, log_file_path: str = None):
+                  host_paths: dict = None, log_file_path: str = None,
+                  music_library_db_path: str = music_scan.MUSIC_LIBRARY_DB_FILE,
+                  music_library_covers_dir: str = music_scan.MUSIC_LIBRARY_COVERS_DIR):
     """Baut eine BaseHTTPRequestHandler-Subklasse mit state/icecast_cfg im
     Closure — so bleibt der Handler selbst zustandslos und threadsicher.
 
@@ -3391,6 +3473,7 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
     host_paths = host_paths or {}
 
     import_state = ImportState()
+    library_scan_state = LibraryScanState()
     # Einmalig pro Server-Instanz statt pro Request, analog zu import_state:
     # ResourceMonitor hält psutil-Process-Handles über Requests hinweg am
     # Leben, damit cpu_percent() über die Zeit aussagekräftige Deltas liefert
@@ -3521,6 +3604,8 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                 self._send_json(data)
             elif self.path == "/api/config/import/status":
                 self._send_json(import_state.snapshot())
+            elif self.path == "/api/library/scan/status":
+                self._send_json(library_scan_state.snapshot())
             elif self.path == "/api/config/stt-calibration/status":
                 self._send_json(_build_calibration_status(state))
             elif self.path == "/api/resources":
@@ -3567,6 +3652,8 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                 self._handle_calibration_stop()
             elif self.path == "/api/config/import/start":
                 self._handle_import_start()
+            elif self.path == "/api/library/scan":
+                self._handle_library_scan_start()
             elif self.path == "/api/mode":
                 self._handle_mode_change()
             elif self.path == "/api/music/play":
@@ -3802,6 +3889,35 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
             threading.Thread(target=worker, daemon=True, name="import").start()
             self._send_json({"ok": True})
 
+        def _handle_library_scan_start(self):
+            # Backend-Trigger für Phase 1 der Musik-Library-Roadmap (siehe
+            # README/CLAUDE.md): rekursiver ID3-Scan der aktuell unter
+            # music_library.path konfigurierten Musiksammlung in
+            # music_library.db. Bewusst OHNE UI-Anschluss in dieser Phase --
+            # nur der Endpoint, siehe SESSION.md. Gleiches Hintergrund-
+            # Thread-/Progress-Poll-Muster wie _handle_import_start() oben.
+            if not library_scan_state.start():
+                self._send_json({
+                    "ok": False,
+                    "error": "Es läuft bereits ein Musik-Scan.",
+                }, status=409)
+                return
+
+            root = state.music_library_path
+
+            def worker():
+                try:
+                    result = music_scan.scan_library(
+                        root, db_path=music_library_db_path,
+                        covers_dir=music_library_covers_dir, progress=library_scan_state)
+                    library_scan_state.finish(result)
+                except Exception as e:
+                    log.exception("⚠ Musik-Scan fehlgeschlagen (%s).", root)
+                    library_scan_state.fail(str(e))
+
+            threading.Thread(target=worker, daemon=True, name="libscan").start()
+            self._send_json({"ok": True})
+
         def _handle_status_wait(self):
             """Long-Poll-Fast-Path für die Web-UI: blockiert bis zu
             _STATUS_WAIT_TIMEOUT Sekunden, bis state.version sich ändert
@@ -3968,10 +4084,14 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
 def start_server(port: int, state: SwitcherState, icecast_cfg: dict,
                   fingerprint_db_path: str, tls_cert_file: str = None,
                   tls_key_file: str = None, host_paths: dict = None,
-                  log_file_path: str = None) -> ThreadingHTTPServer:
+                  log_file_path: str = None,
+                  music_library_db_path: str = music_scan.MUSIC_LIBRARY_DB_FILE,
+                  music_library_covers_dir: str = music_scan.MUSIC_LIBRARY_COVERS_DIR
+                  ) -> ThreadingHTTPServer:
     httpd = ThreadingHTTPServer(("0.0.0.0", port),
                                  make_handler(state, icecast_cfg, fingerprint_db_path,
-                                              host_paths, log_file_path))
+                                              host_paths, log_file_path,
+                                              music_library_db_path, music_library_covers_dir))
     scheme = "http"
     if tls_cert_file and tls_key_file:
         try:

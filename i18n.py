@@ -111,6 +111,8 @@ STRINGS = {
     "music_heading": {"de": "🎵 Musik Sammlung", "en": "🎵 Music Library"},
     "music_root_label": {"de": "MP3-Root-Ordner:", "en": "MP3 root folder:"},
     "music_root_change_link": {"de": "Ordner unter /config ändern →", "en": "Change folder under /config →"},
+    "music_categories_heading": {"de": "Kategorien", "en": "Categories"},
+    "music_favorites_heading": {"de": "Favoriten", "en": "Favorites"},
     "music_play_title": {"de": "Play", "en": "Play"},
     "music_stop_title": {"de": "Stop", "en": "Stop"},
     "music_prev_title": {"de": "Vorheriger Track", "en": "Previous track"},

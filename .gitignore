@@ -7,5 +7,7 @@ data/fingerprint_clips/
 data/logs/
 data/news_mp3/
 data/music_library/
+data/music_library.db
+data/music_library_covers/
 data/vosk-model-*/
 data/whisper_cache/

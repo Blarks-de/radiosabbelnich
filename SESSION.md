@@ -5503,3 +5503,207 @@ nicht umschaltete).
   `setMode('music', '/musik')` auf (per `grep` im ausgelieferten HTML
   bestätigt), `mode-radio-btn` auf der Musiksammlung-Seite entsprechend
   `setMode('radio', '/')`. Alle drei Seiten liefern weiterhin HTTP 200.
+
+## 2026-08-12 — README: zwei weitere Roadmap-Punkte (Musik-Format-Support, iOS-App)
+
+**Auslöser**: Nutzer wollte zwei weitere Ideen in die bestehende
+"Zukünftige Features"/"Future features"-Sektion aufnehmen -- wieder
+reine Doku-Aufgabe, kein Code.
+
+### Umsetzung
+
+- `README.md` (DE+EN), Abschnitt "Eigene Musik-Library &
+  Kategorisierung" / "Own music library & categorization": neuer
+  Bullet vor Phase 1 ("Format-Unterstützung erweitern") -- aktuell nur
+  `.mp3` (Scan + Playback im Grundgerüst), geplant Erweiterung auf
+  FLAC, APE, OGG, M4A/AAC, WAV. mutagen kann diese Formate bereits
+  taggen, Aufwand liegt an der Dateiendungen-Filterliste beim Scan und
+  der Prüfung des Playback-Pfads.
+- Neuer Unterabschnitt "iOS-App (Idee, noch nicht terminiert)" /
+  "iOS app (idea, not yet scheduled)" direkt nach dem Musik-Library-
+  Block: native iOS-App als Pendant zur bestehenden Android-App,
+  Swift/SwiftUI via Xcode auf einem Mac, gleiche Sender-/ggf.
+  Musiksammlung-Bedienung -- eigenständiges Projekt mit eigenem
+  Tech-Stack analog zu `android-app/`, bislang ohne Zeitplan.
+- `VERSION`: v1.1.12 -> v1.1.13.
+
+### Bewusst NICHT gemacht
+
+- Kein Code, kein neues Modul -- ausdrücklich nur Doku-Ergänzung wie
+  angefragt.
+
+### Verifiziert
+
+- Manuell gegenlesen: DE- und EN-Abschnitt inhaltlich deckungsgleich,
+  Platzierung/Formatierung passt zum bestehenden Roadmap-Muster
+  (Bullet-Liste bzw. Unterabschnitt nach demselben Vorbild wie die
+  übrigen Einträge dieser Sektion).
+
+## 2026-08-12 — Musiksammlung-Seite: Platzhalter-Buttons in zwei Gruppen aufgeteilt (Kategorien/Favoriten)
+
+**Auslöser**: Nutzer wollte die bisher einheitliche Reihe der sechs
+Platzhalter-Buttons (80er/Queen/Oldies/Metal/Klassik/Pavarotti) auf
+`/musik` in zwei fachlich unterschiedliche Gruppen aufteilen: Kategorien
+(Stimmung/Genre, später Filter auf BPM/Genre-Tags) und Favoriten
+(Künstler-Shortcuts, später Filter auf den Künstler-Tag). Reine
+UI-Struktur/Beschriftung, weiterhin kein Backend-Mapping — Plan vorab
+mit Nutzer abgestimmt, inkl. Rückfrage ob die neuen Kategorie-Labels
+übersetzt werden sollen (Antwort: nein, wie die bisherigen Platzhalter
+unübersetzt lassen).
+
+### Umsetzung
+
+- `webui.py`, `_MUSIC_PAGE_HTML`: bisherigen einzelnen
+  `.category-row`-Block durch zwei `.category-group`-Wrapper ersetzt,
+  je mit kleiner `.category-group-heading` ("Kategorien"/"Favoriten")
+  und eigener `.category-row`-Button-Reihe darunter:
+  - Kategorien: schnell, langsam, rock, klassik
+  - Favoriten: Queen, Pavarotti
+  Buttons bleiben `disabled`/funktionslos wie zuvor. CSS: neue
+  `.category-group`/`.category-group-heading`-Regeln (kleine, gedämpfte
+  Überschrift), `.category-row` unverändert für die Button-Flexbox.
+  Kommentar über den Buttons erweitert: Kategorien filtern später auf
+  Metadaten/Tags (BPM, Genre), Favoriten auf den Künstler-Tag — beides
+  erst mit dem ID3/SQLite-Scan (siehe README-Roadmap).
+- `i18n.py`: zwei neue Keys `music_categories_heading`/
+  `music_favorites_heading` (DE "Kategorien"/"Favoriten", EN
+  "Categories"/"Favorites") für die beiden Gruppenüberschriften. Die
+  Button-Labels selbst (schnell/langsam/rock/klassik/Queen/Pavarotti)
+  bewusst NICHT über i18n geführt — Konsistenz mit den bisherigen
+  Platzhaltern (80er/Oldies/Metal/Klassik waren ebenfalls unübersetzt),
+  da es spätere Tag-Werte aus der DB sind, keine UI-Copy.
+- `README.md` (DE+EN): Beschreibung der `/musik`-Seite im
+  "Musiksammlung-Modus (Grundgerüst)"-Abschnitt an die neue
+  Zwei-Gruppen-Struktur angepasst (vorher "Sechs Kategorie-Buttons
+  (80er/Queen/...)").
+- `VERSION`: v1.1.13 -> v1.1.14.
+
+### Bewusst NICHT gemacht
+
+- Kein Backend-Mapping, keine echte Filterung — wie bisher reine
+  Platzhalter, wie vom Nutzer explizit verlangt.
+
+### Verifiziert
+
+- `python3 -c "import webui"` — `_check_i18n_coverage()` lief für alle
+  Templates fehlerfrei durch (beide neuen Keys erkannt, kein
+  fehlender/toter Key).
+- Beide gerenderten Sprachvarianten (`_MUSIC_PAGE_HTML_BYTES['de'/'en']`)
+  gegengeprüft: `category-group-heading` vorhanden, "Kategorien"/
+  "Categories" bzw. "Favoriten"/"Favorites" enthalten,
+  schnell/langsam/rock/klassik/Queen/Pavarotti vorhanden, alte Namen
+  (80er/Oldies/Metal) nicht mehr enthalten.
+
+## 2026-08-12 — Musik-Library Phase 1: rekursiver ID3-Scan in eigene SQLite-DB (`music_scan.py`)
+
+**Auslöser**: Nutzer wollte Phase 1 der Musik-Library-Roadmap (README
+"Zukünftige Features") umsetzen — Scan der Musiksammlung samt
+ID3-Metadaten in eine DB, NUR Scan+DB, ausdrücklich noch keine Query-API/
+UI-Anbindung. Plan vorab mit Nutzer abgestimmt (inkl. Namenskonflikt
+`music_library.py` bereits vom Player-Modul belegt → neue Datei
+`music_scan.py`). Nach Plan-Freigabe kam ein Nachtrag: "scan nicht alle
+MP3 das sind viele dauert zu lange" — Rückfrage ergab, gewünscht ist ein
+inkrementeller Scan per mtime/Größe (nicht ein Batch-Limit pro Aufruf),
+damit nur der ERSTE Scan zwangsläufig lange dauert und jeder folgende
+Re-Scan einer unveränderten Sammlung schnell ist.
+
+### Umsetzung
+
+- **`music_scan.py`** (neu): rekursiver `os.walk()` ab dem konfigurierten
+  `music_library.path`, filtert über `AUDIO_EXTENSIONS` — importiert aus
+  `music_library.py` statt dupliziert, damit eine spätere
+  Formaterweiterung (FLAC/OGG/…, siehe README-Roadmap) an einer
+  einzigen Stelle passiert. Pro Datei: `os.stat()`, dann NUR bei
+  geänderter mtime/Größe gegenüber der letzten DB-Zeile tatsächlich
+  `mutagen.File(easy=True)` (Artist/Album/Titel/Genre/Jahr, Titel-
+  Fallback = Dateiname ohne Endung) plus rohes `mutagen.id3.ID3` fürs
+  erste APIC-Frame (Cover). Cover werden als Datei nach
+  `music_library_covers/` gecacht (Dateiname = SHA1 des relativen
+  Pfads, überschreibbar ohne DB-Lookup), NICHT als Blob in der DB.
+  Defekte/nicht lesbare Dateien: geloggt, übersprungen, aber TROTZDEM
+  ins "gefunden"-Set aufgenommen — sonst würde die Aufräum-Phase am
+  Ende (Zeilen zu nicht mehr gefundenen Pfaden löschen, inkl. ihrer
+  Cover-Dateien) einen gültigen Eintrag für eine nur vorübergehend
+  defekte Datei fälschlich als "gelöscht" werten.
+- **SQLite-Schema** (`music_library.db`, eigene DB, nicht
+  `fingerprints.db`): Tabelle `tracks` (id, filepath UNIQUE, artist,
+  album, title, genre, year, cover_path, **mtime, size** — letztere
+  zwei zusätzlich zur ursprünglichen Spaltenliste, tragen die
+  Änderungserkennung für die Inkrementalität —, scanned_at), Indizes
+  auf `artist`/`genre`. Upsert per `INSERT ... ON CONFLICT(filepath) DO
+  UPDATE`.
+- **`webui.py`**: `LibraryScanState` (Kopie des `ImportState`-Musters)
+  + `POST /api/library/scan` (409 bei bereits laufendem Scan, sonst
+  Hintergrund-Thread) + `GET /api/library/scan/status` (Progress-
+  Polling: phase walking/scanning/done/error, checked/total). Bewusst
+  KEIN UI-Button, keine Config-Seiten-Integration — Aufgabenscope
+  explizit ohne UI-Anschluss. `make_handler()`/`start_server()` um
+  `music_library_db_path`/`music_library_covers_dir`-Parameter
+  erweitert (Default aus den `music_scan.py`-Konstanten).
+- **`radiosabbelnich.py`**: neue CLI-Args `--music-library-db`/
+  `--music-library-covers-dir` (gleiches Muster wie `--fingerprint-db`,
+  fürs isolierte Testen ohne Produktivpfade), durchgereicht an
+  `webui.start_server()`.
+- **Docker**: `Dockerfile` — `mutagen` zu `pip install`, `COPY
+  music_scan.py .`. `docker-compose.yml` — zwei neue Mounts nach dem
+  `fingerprints.db`-Muster: `./data/music_library.db:/app/music_library.db`
+  (Datei, braucht `touch` wie `fingerprints.db`) und
+  `./data/music_library_covers:/app/music_library_covers`
+  (Verzeichnis, BESCHREIBBAR — anders als der `:ro`-gemountete
+  `MUSIC_LIBRARY_FOLDER`, da der Cover-Cache Schreibzugriff braucht).
+  `.gitignore` um `data/music_library.db`/`data/music_library_covers/`
+  ergänzt.
+- **`README.md`** (DE+EN): Setup-Abschnitt um `touch
+  data/music_library.db` ergänzt, Phase-1-Bullet der Roadmap von
+  "(noch offen)" auf "✅ umgesetzt" mit Endpoint-Namen und
+  Inkrementell-Hinweis.
+- **`CLAUDE.md`**: neuer Abschnitt "Musik-Library-Scan (`music_scan.py`,
+  Phase 1)" mit den Architekturentscheidungen (eigene DB, Cover als
+  Datei statt Blob, "gefunden"-Set-Schutz, Inkrementalität); "Bekannte
+  offene Punkte"-Absatz zum Musik-Modus präzisiert (Scan existiert
+  jetzt als Backend-Baustein, Player bleibt separat nicht-rekursiv).
+- `VERSION`: v1.1.14 -> v1.1.15.
+
+### Bewusst NICHT gemacht
+
+- Keine Query-API, keine Anbindung an die Kategorie-/Favoriten-Buttons
+  auf `/musik`, keine Cover-Anzeige im UI, keine Player-Integration über
+  die Scan-Ergebnisse — alles explizit Phase 2, siehe README-Roadmap.
+- Kein Batch-Limit pro Scan-Aufruf (siehe Rückfrage oben) — inkrementell
+  per mtime/Größe gewählt, damit ein einzelner Request weiterhin "einmal
+  anstoßen, fertig" bleibt statt mehrfach nachgetriggert werden zu
+  müssen.
+- Preflight-Skripte (`check-radiosabbelnich.sh`/`run_radiosabbelnich.sh`)
+  NICHT um eine `music_library.db`-Prüfung erweitert — gleiche
+  Zurückstellung wie beim `MUSIC_LIBRARY_FOLDER`-Check, siehe
+  CLAUDE.md.
+
+### Verifiziert
+
+- Isolierter Testlauf (venv mit `mutagen`+`numpy`, Testordner mit
+  ffmpeg-generierten Silent-MP3s + `mutagen`-gesetzten Tags/Cover +
+  einer absichtlich kaputten "MP3"): erster Scan liefert korrekte
+  Artist/Album/Titel/Genre/Jahr, Titel-Fallback für ungetaggte Datei
+  greift, Cover wird als Datei gecacht, kaputte Datei wird geloggt
+  übersprungen (Fehlerzähler 1, aber im "gefunden"-Set). Zweiter Scan
+  ohne Änderungen: alle drei gültigen Dateien `unchanged`. Eine Datei
+  geändert (Inhalt+mtime) → `updated=1`, Rest weiter `unchanged`. Eine
+  Datei mit Cover gelöscht → `removed=1`, zugehörige Cover-Datei aus
+  `covers_dir` verschwindet. Fehlender Root-Ordner wirft `ValueError`.
+- Isolierte Webserver-Instanz (Kopie aller `*.py` in Testverzeichnis,
+  `settings_store.update(music_library_path=...)`, `webui.start_server()`
+  auf Testport): `POST /api/library/scan` → `GET
+  /api/library/scan/status` zeigt `phase="done"` mit korrektem
+  Ergebnis-Dict. `LibraryScanState.start()` direkt geprüft: zweiter
+  `start()`-Aufruf während `running=True` liefert `False` (409-Pfad).
+- `python3 -c "import webui"` (mit `mutagen` im venv) lief fehlerfrei
+  durch, `_check_i18n_coverage()` unauffällig (keine UI-Änderung in
+  dieser Phase).
+- **Live gegen die echte laufende Instanz** (nach `docker compose up -d
+  --build radiosabbelnich`): `POST /api/library/scan` liefert `{"ok":
+  true}`, `GET /api/library/scan/status` zeigt danach `phase="done"`
+  (0 Dateien, da `data/music_library/` auf diesem Host aktuell leer
+  ist — kein Fehler, erwartetes Verhalten). `data/music_library.db`
+  und `data/music_library_covers/` korrekt vom Container angelegt.
+  Log zeigt `🎵 Musik-Scan fertig: 0 Datei(en) gefunden, ...` ohne
+  Fehler. Produktivdaten (`stations.json`/`settings.json`) unberührt.

@@ -381,6 +381,59 @@ unten) ist "ein Client kann beliebige Dateisystempfade aus dem
 Container auflisten" keine akzeptable Nebenwirkung eines
 Ordner-Pickers.
 
+### Musik-Library-Scan (`music_scan.py`, Phase 1, seit 2026-08-12)
+
+Bewusst eine **eigene Datei**, getrennt von `music_library.py`: Letzteres
+ist der PLAYER (`list_tracks()`, ein Ordner, nicht rekursiv, für den
+Play/Stop-Button — bleibt unverändert), `music_scan.py` ist der SCANNER
+(ganzer Baum, ID3-Metadaten via mutagen, eigene SQLite-DB
+`music_library.db`). Beide teilen sich nur `AUDIO_EXTENSIONS` (Import
+aus `music_library.py`), damit eine spätere Formaterweiterung (FLAC/
+OGG/…, siehe README-Roadmap) an einer einzigen Stelle passiert statt in
+zwei Kopien der Filterliste.
+
+Läuft **ausschließlich aus dem Webserver-Thread** heraus (`POST
+/api/library/scan` in `webui.py`, gleiches Hintergrund-Thread- +
+Progress-Poll-Muster wie `station_import.py`/`ImportState` — hier
+`LibraryScanState`, `GET /api/library/scan/status` fürs Polling, zweiter
+Start während eines laufenden Scans wird mit 409 abgelehnt statt
+parallel zu laufen) — der Hauptloop weiß nichts vom Scan, exakt wie bei
+`news_break.py`/`station_import.py`. **Bewusst kein UI-Anschluss in
+Phase 1**: kein Scan-Button, keine Cover-Anzeige, keine Verbindung zu
+den Kategorie-/Favoriten-Buttons auf `/musik` — kommt erst mit Phase 2
+(Query-Layer), siehe README-Roadmap.
+
+Eigene DB (`music_library.db`, NICHT `fingerprints.db`) — komplett
+andere Domäne, eine gemeinsame DB wäre nur zufällige Kopplung. Gleiches
+Bind-Mount-Muster wie `fingerprints.db` (muss vor dem ersten Start als
+Datei existieren, siehe README-Setup). Cover-Bilder werden als Dateien
+in einem eigenen, BESCHREIBBAREN Mount (`music_library_covers/`)
+gecacht, NICHT als Blob in der DB — analog zum Bild-Handling an anderer
+Stelle im Projekt (`fingerprint_clips/` für gelernte Audio-Clips). Der
+Dateiname ist ein SHA1-Hash des relativen Track-Pfads, kein DB-
+Lookup nötig, um zu wissen, wohin ein Re-Scan das Cover einer bereits
+bekannten Datei schreibt (überschreibt einfach an derselben Stelle).
+
+**Inkrementell per mtime+Größe** (Nutzer-Vorgabe, weil ein voller
+Re-Scan einer großen Sammlung sonst bei jedem Aufruf wieder komplett
+lange dauert): pro Datei erst `os.stat()`, und nur wenn sich mtime ODER
+Größe gegenüber der in der DB gespeicherten Zeile unterscheiden, wird
+tatsächlich mutagen/ID3-APIC gelesen (der teure Teil). Der ERSTE Scan
+einer Sammlung bleibt zwangsläufig langsam (jede Datei muss einmal
+gelesen werden) — das ist nicht wegoptimierbar, nur jeder folgende
+Re-Scan wird durch den `stat()`-Vergleich massiv billiger.
+
+**"Gefunden"-Set schützt vor Fehlbereinigung**: eine Datei, die zwar
+noch auf der Platte liegt, aber gerade nicht lesbar ist (kaputte MP3,
+kurzer SMB-Hänger), wird trotzdem zum "gefunden"-Set hinzugefügt (nur
+das mutagen-Parsing wird übersprungen, geloggt als Fehler) — sonst
+würde die abschließende Aufräum-Phase (Zeilen zu beim Walk nicht mehr
+gefundenen Pfaden löschen, inkl. ihrer Cover-Dateien) einen gültigen
+DB-Eintrag für eine nur VORÜBERGEHEND defekte Datei fälschlich als
+"Datei wurde gelöscht/verschoben" werten und entfernen. Upsert läuft
+über `filepath` (UNIQUE-Constraint), nicht über die Track-ID — ein
+erneuter Scan überschreibt bestehende Zeilen statt Duplikate anzulegen.
+
 ### STT-Sprachfilter (stt_filter.py)
 
 Zusätzliches Signal per Speech-to-Text, komplett unabhängig von
@@ -708,9 +761,15 @@ bewusst in Kauf genommen statt eines gapless-Übergangs, der ohne
 Zeitdehnung nicht möglich ist.
 Der Musiksammlung-Modus (siehe Architektur-Abschnitt oben) ist bewusst
 ein Grundgerüst: die Kategorie-Buttons auf `/musik` sind reine
-UI-Platzhalter ohne Backend-Mapping (kommt erst mit dem ID3/SQLite-Scan,
-siehe README-Roadmap), es wird nicht rekursiv gescannt, nur `.mp3`
-unterstützt, und eine während des Musik-Modus eigentlich fällige
+UI-Platzhalter ohne Backend-Mapping — der ID3/SQLite-Scan
+(`music_scan.py`, siehe eigener Abschnitt oben) existiert seit
+2026-08-12 als reiner Backend-Baustein (Endpoint `/api/library/scan`),
+aber absichtlich noch OHNE Anbindung an diese Buttons (kommt erst mit
+Phase 2, siehe README-Roadmap). Der PLAYER selbst (`music_library.py`,
+`list_tracks()`) bleibt weiterhin nicht-rekursiv und nur `.mp3`,
+unabhängig vom (rekursiven) Scan — beide Module bedienen bewusst
+unterschiedliche Zwecke, siehe eigener Abschnitt oben. Eine während des
+Musik-Modus eigentlich fällige
 Nachrichten-Pause wird beim Rückweg zu Radio NICHT nachgeholt (die
 News-Break-Slot-Prüfung läuft im Musik-Modus schlicht nicht mit) —
 bewusste Grenze, kein Bug. Die Preflight-Skripte

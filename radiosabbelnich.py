@@ -51,6 +51,7 @@ import numpy as np
 import fingerprint
 import logging_setup
 import music_library
+import music_scan
 import news_break
 import settings_store
 import stt_filter
@@ -633,6 +634,12 @@ def main():
     parser.add_argument("--music-library-folder-host", default=None,
                          help="Host-Pfad von MUSIC_LIBRARY_FOLDER (.env), analog zu "
                               "--news-mp3-folder-host.")
+    parser.add_argument("--music-library-db", default=music_scan.MUSIC_LIBRARY_DB_FILE,
+                         help=f"Pfad zur Musik-Library-SQLite-DB für den ID3-Scan "
+                              f"(default: {music_scan.MUSIC_LIBRARY_DB_FILE})")
+    parser.add_argument("--music-library-covers-dir", default=music_scan.MUSIC_LIBRARY_COVERS_DIR,
+                         help=f"Ordner für gecachte Cover-Bilder aus dem Musik-Library-Scan "
+                              f"(default: {music_scan.MUSIC_LIBRARY_COVERS_DIR})")
     args = parser.parse_args()
 
     log_path = logging_setup.setup(args.log_file, verbose=args.verbose)
@@ -737,7 +744,9 @@ def main():
         }
         httpd = webui.start_server(args.webui_port, state, icecast_cfg, args.fingerprint_db,
                                     tls_cert_file=tls_cert, tls_key_file=tls_key,
-                                    host_paths=host_paths, log_file_path=log_path)
+                                    host_paths=host_paths, log_file_path=log_path,
+                                    music_library_db_path=args.music_library_db,
+                                    music_library_covers_dir=args.music_library_covers_dir)
 
     source = StreamSource(SAMPLE_RATE)
     current = active[0]  # aktuell gespielter Sender (dict: id/name/url/category/enabled)

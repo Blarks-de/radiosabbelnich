@@ -200,9 +200,11 @@ Auf der neuen Seite `/musik`:
 
 - Ein read-only angezeigter Root-Ordner (Container-Pfad, unter `/config`
   einstellbar — siehe unten).
-- Sechs Kategorie-Buttons (80er/Queen/Oldies/Metal/Klassik/Pavarotti) —
-  aktuell reine Platzhalter ohne Funktion, echte Kategorisierung kommt
-  erst mit dem Musik-Scan (Phase 1 der Roadmap unten).
+- Zwei Gruppen von Buttons, "Kategorien" (schnell/langsam/rock/klassik)
+  und "Favoriten" (Queen/Pavarotti) — aktuell reine Platzhalter ohne
+  Funktion, echte Filterung (Kategorien auf Metadaten/Tags wie BPM/Genre,
+  Favoriten auf den Künstler-Tag) kommt erst mit dem Musik-Scan (Phase 1
+  der Roadmap unten).
 - Ein großer Play/Stop-Button und Zurück/Nächster — spielt die MP3s im
   konfigurierten Ordner **nicht rekursiv**, alphabetisch, endlos im
   Kreis, bis Stop gedrückt wird.
@@ -594,6 +596,7 @@ git clone <repo-url> RadioSabbelNich
 cd RadioSabbelNich
 cp env.example .env      # Passwörter/Hostname eintragen
 touch data/fingerprints.db    # muss als Datei existieren, siehe unten
+touch data/music_library.db   # dito, für den Musik-Library-Scan (siehe unten)
 ./check-radiosabbelnich.sh   # optional: prüft Docker/.env/MP3-Ordner/Ports vorab
 docker compose up -d --build
 ```
@@ -740,12 +743,24 @@ scannen, taggen und nach Kategorien abspielbar machen.
   rekursiv, keine Kategorisierung) sind umgesetzt — siehe
   "Musiksammlung-Modus (Grundgerüst)" weiter oben. Die Kategorie-Buttons
   dort sind noch reine Platzhalter, echtes Mapping kommt erst mit:
-- Phase 1 (noch offen): Scan der Musiksammlung (ID3/Vorbis-Metadaten via mutagen) →
-  SQLite-DB (Artist, Album, Titel, Genre, Jahr, Dateipfad, eingebettetes
-  Cover falls vorhanden)
+- Format-Unterstützung erweitern (geplant): aktuell wird nur `.mp3`
+  unterstützt (Scan + Playback im Grundgerüst oben). Geplant: Erweiterung
+  auf gängige Formate wie FLAC, APE, OGG, M4A/AAC, WAV — mutagen
+  unterstützt Tagging dafür bereits nativ, der Aufwand liegt
+  hauptsächlich in der Dateiendungen-Filterliste beim Scan und der
+  Prüfung des Playback-Pfads.
+- ✅ **Phase 1 umgesetzt**: rekursiver Scan der Musiksammlung (`music_scan.py`,
+  getrennt vom Player-Modul `music_library.py`) über ID3-Metadaten
+  (mutagen) → eigene SQLite-DB `music_library.db` (Artist, Album, Titel,
+  Genre, Jahr, Dateipfad, eingebettetes Cover als gecachte Datei falls
+  vorhanden). Manueller Trigger per `POST /api/library/scan`
+  (`GET /api/library/scan/status` fürs Polling, kein Cronjob) —
+  **bewusst noch ohne UI-Anschluss** in dieser Phase, siehe SESSION.md.
+  Unveränderte Dateien (mtime+Größe wie beim letzten Scan) werden beim
+  erneuten Scan übersprungen, damit ein Re-Scan einer großen Sammlung
+  nicht jedes Mal wieder alle Dateien komplett neu einliest.
   - Quelle: Fileserver 192.168.1.10, per SMB auf SERVER gemountet
     unter `/mnt/server/data`
-  - Scan wird manuell getriggert (kein Cronjob)
 - Phase 2: Query-Layer (CLI/kleine API, angelehnt an Beets' Query-Syntax),
   Anbindung an den Player als Alternative zum Icecast-Stream
 - Phase 3 (optional, später): Audio-Features (BPM, Energy via librosa)
@@ -761,6 +776,15 @@ scannen, taggen und nach Kategorien abspielbar machen.
 Tech-Stack: Python, mutagen, SQLite, ggf. FastAPI für Query-API.
 Referenz: Beets (Library-Manager) als Inspiration für
 Datenmodell/Query-Sprache, kein 1:1-Einsatz.
+
+### iOS-App (Idee, noch nicht terminiert)
+
+Native iOS-App als Pendant zur bestehenden Android-App (siehe
+"Android-App" weiter oben): würde dieselbe Sender-Steuerung und ggf.
+Musiksammlung-Bedienung bieten wie die Android-Version, aber mit
+Swift/SwiftUI gebaut und über Xcode auf einem Mac kompiliert — ein
+eigenständiges Projekt mit eigenem Tech-Stack, analog zu
+`android-app/`. Bislang nur Idee, kein Zeitplan.
 
 ---
 
@@ -955,9 +979,11 @@ On the new `/musik` page:
 
 - A read-only root folder display (container path, set under `/config`
   — see below).
-- Six category buttons (80s/Queen/Oldies/Metal/Classical/Pavarotti) —
-  currently pure placeholders with no function; real categorization
-  arrives with the music scan (roadmap phase 1 below).
+- Two button groups, "Categories" (schnell/langsam/rock/klassik) and
+  "Favorites" (Queen/Pavarotti) — currently pure placeholders with no
+  function; real filtering (categories on metadata/tags like BPM/genre,
+  favorites on the artist tag) arrives with the music scan (roadmap
+  phase 1 below).
 - A big play/stop button plus back/next — plays the MP3s in the
   configured folder **non-recursively**, alphabetically, looping
   forever until stop is pressed.
@@ -1337,6 +1363,7 @@ git clone <repo-url> RadioSabbelNich
 cd RadioSabbelNich
 cp env.example .env      # enter passwords/hostname
 touch data/fingerprints.db    # must exist as a file, see below
+touch data/music_library.db   # same, for the music library scan (see below)
 ./check-radiosabbelnich.sh   # optional: pre-checks Docker/.env/MP3 folder/ports
 docker compose up -d --build
 ```
@@ -1477,12 +1504,23 @@ tag it, and make it playable by category.
   categorization) are implemented — see "Music library mode
   (foundation)" further up. The category buttons there are still pure
   placeholders; real mapping arrives with:
-- Phase 1 (still open): scan the music collection (ID3/Vorbis metadata via mutagen)
-  → SQLite DB (artist, album, title, genre, year, file path, embedded
-  cover if present)
+- Expand format support (planned): currently only `.mp3` is supported
+  (scan + playback in the foundation above). Planned: expand to common
+  formats like FLAC, APE, OGG, M4A/AAC, WAV — mutagen already supports
+  tagging for these natively, the effort is mainly in the file
+  extension filter list at scan time and checking the playback path.
+- ✅ **Phase 1 implemented**: recursive scan of the music collection
+  (`music_scan.py`, separate from the player module `music_library.py`)
+  via ID3 metadata (mutagen) → its own SQLite DB `music_library.db`
+  (artist, album, title, genre, year, file path, embedded cover cached
+  as a file if present). Manually triggered via `POST /api/library/scan`
+  (`GET /api/library/scan/status` for polling, no cron job) —
+  **deliberately without UI hookup yet** in this phase, see SESSION.md.
+  Unchanged files (same mtime+size as the last scan) are skipped on a
+  re-scan, so re-scanning a large collection doesn't re-read every file
+  from scratch each time.
   - Source: file server 192.168.5.101, SMB-mounted on Dockfish under
     `/mnt/eimer/data`
-  - Scan is triggered manually (no cron job)
 - Phase 2: query layer (CLI/small API, modeled on Beets' query syntax),
   hooked into the player as an alternative to the Icecast stream
 - Phase 3 (optional, later): audio features (BPM, energy via librosa)
@@ -1498,3 +1536,12 @@ tag it, and make it playable by category.
 Tech stack: Python, mutagen, SQLite, possibly FastAPI for the query API.
 Reference: Beets (library manager) as inspiration for the data
 model/query language, not a 1:1 adoption.
+
+### iOS app (idea, not yet scheduled)
+
+Native iOS app as a counterpart to the existing Android app (see
+"Android app" further up): would offer the same station control and
+possibly music library operation as the Android version, but built
+with Swift/SwiftUI and compiled via Xcode on a Mac — a standalone
+project with its own tech stack, analogous to `android-app/`. Idea
+only so far, no timeline.
