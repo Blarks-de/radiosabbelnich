@@ -112,18 +112,18 @@ _BASE_STRINGS = {
     'idx_switched_back_to': ' — back to {name}',
     'idx_zap_switching': '🗣️ Switching …',
     'idx_filter_switching': 'Toggling chatter filter …',
-    'idx_music_mode_active': '🎵 Music library active — radio paused',
+    'idx_music_mode_active': '🎵 Player active — radio paused',
     'idx_music_mode_short': '🎵 Music',
 
     # ---- Radio/Musiksammlung-Modus-Umschalter ----
     'mode_radio_btn': '📻 Radio',
-    'mode_music_btn': '🎵 Music library',
+    'mode_music_btn': '🎵 Player',
     'idx_mode_switching': 'Switching mode …',
 
     # ---- Musiksammlung-Seite (/musik) ----
-    'music_heading': '🎵 Music Library',
-    'music_root_label': 'MP3 root folder:',
-    'music_root_change_link': 'Change folder under /config →',
+    'music_heading': '🎵 Player',
+    'music_root_label': 'Music folder:',
+    'music_root_change_link': 'Change path',
     'music_categories_heading': 'Categories',
     'music_favorites_heading': 'Favorites',
     'music_query_failed': 'Query failed.',
@@ -133,7 +133,7 @@ _BASE_STRINGS = {
     'music_next_title': 'Next track',
     'music_now_playing': '🎵 {file} ({index}/{total})',
     'music_idle': 'Ready — tap ▶ to play.',
-    'music_switch_hint': 'Switch to 🎵 Music library above first.',
+    'music_switch_hint': 'Switch to 🎵 Player above first.',
     'music_back_link': 'back to the radio player',
 
     # ---- Config-Seite (/config) ----
@@ -147,10 +147,10 @@ _BASE_STRINGS = {
     'cfg_nb_hours_enabled_label': 'only active during certain hours',
     'cfg_nb_hour_start_label': 'from hour',
     'cfg_nb_hour_end_label': 'to hour',
-    'cfg_music_library_heading': '🎵 Music library',
-    'cfg_music_library_hint': 'Root folder for the music library mode (play/stop on the /musik page) — container-internal path, mounted via MUSIC_LIBRARY_FOLDER in .env.',
+    'cfg_music_library_heading': '🎵 Player',
+    'cfg_music_library_hint': 'Root folder for the player mode (play/stop on the /musik page) — container-internal path, mounted via MUSIC_LIBRARY_FOLDER in .env.',
     'cfg_music_library_folder_label': 'Music folder (container path)',
-    'cfg_music_library_saved': '🎵 Music library settings saved.',
+    'cfg_music_library_saved': '🎵 Player settings saved.',
     'cfg_new_station_heading': 'New station',
     'cfg_add_name_placeholder': 'Name',
     'cfg_add_url_placeholder': 'Stream URL (https://...)',

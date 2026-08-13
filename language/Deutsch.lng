@@ -65,19 +65,19 @@ idx_clip_deleted=✓ Clip gelöscht
 idx_switched_back_to= — zurück zu {name}
 idx_zap_switching=🗣️ Wird umgeschaltet …
 idx_filter_switching=Sabbelfilter wird umgeschaltet …
-idx_music_mode_active=🎵 Musiksammlung aktiv — Radio pausiert
+idx_music_mode_active=🎵 Player aktiv — Radio pausiert
 idx_music_mode_short=🎵 Musik
 
 # ==== Radio/Musiksammlung-Modus-Umschalter ====
 mode_radio_btn=📻 Radio
-mode_music_btn=🎵 Musiksammlung
+mode_music_btn=🎵 Player
 idx_mode_switching=Modus wird gewechselt …
 
 # ==== Musiksammlung-Seite (/musik) ====
-# --- 🎵 Musik Sammlung ---
-music_heading=🎵 Musik Sammlung
-music_root_label=MP3-Root-Ordner:
-music_root_change_link=Ordner unter /config ändern →
+# --- 🎵 Player ---
+music_heading=🎵 Player
+music_root_label=Musik-Ordner:
+music_root_change_link=Pfad ändern
 # --- Kategorien ---
 music_categories_heading=Kategorien
 # --- Favoriten ---
@@ -89,7 +89,7 @@ music_prev_title=Vorheriger Track
 music_next_title=Nächster Track
 music_now_playing=🎵 {file} ({index}/{total})
 music_idle=Bereit — auf ▶ tippen zum Abspielen.
-music_switch_hint=Erst oben auf 🎵 Musiksammlung wechseln.
+music_switch_hint=Erst oben auf 🎵 Player wechseln.
 music_back_link=zurück zum Radio-Player
 
 # ==== Config-Seite (/config) ====
@@ -105,11 +105,11 @@ cfg_nb_window_label=Zeitfenster (Minuten)
 cfg_nb_hours_enabled_label=nur zu bestimmten Stunden aktiv
 cfg_nb_hour_start_label=von Stunde
 cfg_nb_hour_end_label=bis Stunde
-# --- 🎵 Musiksammlung ---
-cfg_music_library_heading=🎵 Musiksammlung
-cfg_music_library_hint=Root-Ordner für den Musiksammlung-Modus (Play/Stop auf der /musik-Seite) — Container-interner Pfad, gemountet über MUSIC_LIBRARY_FOLDER in .env.
+# --- 🎵 Player ---
+cfg_music_library_heading=🎵 Player
+cfg_music_library_hint=Root-Ordner für den Player-Modus (Play/Stop auf der /musik-Seite) — Container-interner Pfad, gemountet über MUSIC_LIBRARY_FOLDER in .env.
 cfg_music_library_folder_label=Musik-Ordner (Container-Pfad)
-cfg_music_library_saved=🎵 Musiksammlung-Einstellungen gespeichert.
+cfg_music_library_saved=🎵 Player-Einstellungen gespeichert.
 # --- Neuer Sender ---
 cfg_new_station_heading=Neuer Sender
 cfg_add_name_placeholder=Name

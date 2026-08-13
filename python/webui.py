@@ -1059,7 +1059,31 @@ def _build_calibration_status(state: SwitcherState) -> dict:
     return result
 
 
-def _build_status(state: SwitcherState, icecast_cfg: dict) -> dict:
+def _music_library_host_path(container_path: str, host_root: str) -> str:
+    """Übersetzt den (evtl. verschachtelten) Container-Pfad des aktuell
+    gewählten Musiksammlung-Unterordners in den entsprechenden Host-Pfad,
+    rein zur Anzeige auf `/musik` -- reines String-Mapping anhand des
+    festen Mount-Präfixes (`_BROWSE_ROOTS["music_library"]`), kein
+    Dateisystemzugriff. `/app/music_library/...` ist zwar technisch
+    korrekt, aber für den Nutzer bedeutungslos (siehe SESSION.md-Eintrag
+    2026-08-13) -- der echte Host-Root kommt aus MUSIC_LIBRARY_FOLDER
+    (.env), durchgereicht über host_paths (siehe make_handler()-Docstring)."""
+    if not host_root or not container_path:
+        return None
+    container_root = _BROWSE_ROOTS["music_library"]
+    if container_path == container_root:
+        rel = ""
+    elif container_path.startswith(container_root + "/"):
+        rel = container_path[len(container_root) + 1:]
+    else:
+        # Sollte nicht vorkommen (music_library.path wird nur über die
+        # Breadcrumb-Auswahl unterhalb dieses Roots gesetzt) -- lieber
+        # unverändert anzeigen als eine falsche Übersetzung vortäuschen.
+        return container_path
+    return host_root.rstrip("/") + ("/" + rel if rel else "")
+
+
+def _build_status(state: SwitcherState, icecast_cfg: dict, host_paths: dict = None) -> dict:
     current = state.current_station()
     active = state.active_stations
     listeners = _fetch_listeners(
@@ -1102,6 +1126,8 @@ def _build_status(state: SwitcherState, icecast_cfg: dict) -> dict:
         "mode": state.mode,
         "music": music,
         "music_library_path": state.music_library_path,
+        "music_library_host_path": _music_library_host_path(
+            state.music_library_path, (host_paths or {}).get("music_library_folder")),
         "version": state.version,
     }
 
@@ -1276,7 +1302,7 @@ _PAGE_HTML = """<!doctype html>
 <div class="version-tag">%%VERSION%%</div>
 <div class="mode-toggle">
   <button id="mode-radio-btn" data-i18n="mode_radio_btn">📻 Radio</button>
-  <button id="mode-music-btn" data-i18n="mode_music_btn">🎵 Musiksammlung</button>
+  <button id="mode-music-btn" data-i18n="mode_music_btn">🎵 Player</button>
 </div>
 <h1 class="sr-only">RadioSabbelNich</h1>
 <div id="current" data-i18n="common_loading">Lade …</div>
@@ -1839,7 +1865,7 @@ _MUSIC_PAGE_HTML = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>RadioSabbelNich — Musiksammlung</title>
+<title>RadioSabbelNich — Player</title>
 <link rel="icon" href="/favicon.ico">
 <meta name="theme-color" content="#1abc9c">
 <style>
@@ -1885,6 +1911,13 @@ _MUSIC_PAGE_HTML = """<!doctype html>
     border: 1px solid #1abc9c; background: #1abc9c1a; color: inherit; cursor: pointer;
   }
   .category-row button:active { background: #1abc9c33; }
+  #player { display: none; }
+  .change-path-btn {
+    display: inline-block; margin-top: .5rem; padding: .45rem .9rem; font-size: .85rem;
+    border-radius: .4rem; border: 1px solid #1abc9c; background: #1abc9c1a;
+    color: inherit; text-decoration: none; cursor: pointer;
+  }
+  .change-path-btn:active { background: #1abc9c33; }
   .play-stop-row { text-align: center; margin-top: 1.5rem; }
   #btn-play-stop {
     width: 6.5rem; height: 6.5rem; border-radius: 50%; font-size: 2.4rem;
@@ -1907,19 +1940,24 @@ _MUSIC_PAGE_HTML = """<!doctype html>
 </style>
 </head>
 <body>
-<img class="banner" src="/radiosabbelnich.webp" alt="RadioSabbelNich">
 <div class="version-tag">%%VERSION%%</div>
 <div class="mode-toggle">
   <button id="mode-radio-btn" data-i18n="mode_radio_btn">📻 Radio</button>
-  <button id="mode-music-btn" data-i18n="mode_music_btn">🎵 Musiksammlung</button>
+  <button id="mode-music-btn" data-i18n="mode_music_btn">🎵 Player</button>
 </div>
-<h1 data-i18n="music_heading">🎵 Musik Sammlung</h1>
+<h1 data-i18n="music_heading">🎵 Player</h1>
 
 <div id="root-path-box">
-  <div data-i18n="music_root_label">MP3-Root-Ordner:</div>
+  <div data-i18n="music_root_label">Musik-Ordner:</div>
   <strong id="root-path">–</strong><br>
-  <a class="config-link" href="/config" data-i18n="music_root_change_link">Ordner unter /config ändern →</a>
+  <a class="change-path-btn" href="/config" data-i18n="music_root_change_link">Pfad ändern</a>
 </div>
+
+<!-- Kein <audio controls> hier -- der eine große Play/Stop-Button unten ist
+     der einzige sichtbare Play-Knopf (siehe applyStatus(): das Element hier
+     folgt automatisch dem musicActive-Status, statt ein zweites, eigenes
+     Play/Pause zu zeigen, das dem großen Button in die Quere kommen würde). -->
+<audio id="player" preload="none"></audio>
 
 <!-- Kategorie-/Favoriten-Buttons (Phase 2, music_query.py): rock/klassik
      Queen/Pavarotti/rock/klassik lösen eine echte Query gegen
@@ -1972,6 +2010,7 @@ applyStaticI18n();
 
 let lastVersion = 0;
 let musicActive = false;
+let playerSrcSet = false;
 
 function setActionMsg(text) {
   const el = document.getElementById('action-msg');
@@ -2010,10 +2049,44 @@ function applyStatus(data) {
   document.getElementById('mode-radio-btn').classList.toggle('active', !musicMode);
   document.getElementById('mode-music-btn').classList.toggle('active', musicMode);
 
-  document.getElementById('root-path').textContent = data.music_library_path || t('common_unknown');
+  // Gleiche Player-Quelle-Logik wie auf der Radio-Seite (dort ausführlich
+  // begründet: nur einmal setzen, Schema/Port als Paar wählen wegen
+  // HTTP/HTTPS auf unterschiedlichen Icecast-Ports) -- Musiksammlung-Modus
+  // sendet über denselben Icecast-Mount, nur eben andere Quelle.
+  if (!playerSrcSet && data.stream_port && data.stream_mount) {
+    const pageIsHttps = location.protocol === 'https:';
+    const useSsl = pageIsHttps && data.stream_ssl_port;
+    const streamScheme = useSsl ? 'https:' : 'http:';
+    const streamPort = useSsl ? data.stream_ssl_port : data.stream_port;
+    document.getElementById('player').src =
+      streamScheme + '//' + location.hostname + ':' + streamPort + data.stream_mount;
+    playerSrcSet = true;
+  }
+
+  // Host-Pfad (aus .env, siehe host_paths in webui.py) bevorzugt vor dem
+  // Container-Pfad -- Letzterer (/app/music_library/...) ist zwar korrekt,
+  // aber für den Nutzer bedeutungslos, der kennt nur seinen echten
+  // NAS/Host-Pfad. Fallback auf den Container-Pfad nur, falls host_paths
+  // beim Start nicht mitgegeben wurde (siehe cfg_host_path_unknown-Fall
+  // auf der Config-Seite).
+  document.getElementById('root-path').textContent =
+    data.music_library_host_path || data.music_library_path || t('common_unknown');
 
   const m = data.music || {active: false, file: null, label: null, index: -1, total: 0};
   musicActive = !!m.active;
+
+  // Einziger sichtbarer Play/Pause-Knopf ist der große Button unten --
+  // das <audio>-Element (ohne "controls", siehe HTML oben) folgt dessen
+  // Zustand hier automatisch, statt selbst ein zweites, unabhängiges
+  // Play/Pause anzubieten. Vorher gab es zwei Play-Knöpfe (großer Button
+  // fürs Backend + nativer Player-Button fürs Zuhören), die sich nicht
+  // kannten -- Klick auf den einen ließ den anderen unverändert.
+  const player = document.getElementById('player');
+  if (musicMode && musicActive) {
+    if (player.paused) player.play().catch(() => {});
+  } else if (!player.paused) {
+    player.pause();
+  }
 
   const playBtn = document.getElementById('btn-play-stop');
   playBtn.textContent = musicActive ? '⏹' : '▶';
@@ -2364,9 +2437,9 @@ _CONFIG_PAGE_HTML = """<!doctype html>
   <button type="submit" data-i18n="common_save">Speichern</button>
 </form>
 
-<h2 data-i18n="cfg_music_library_heading">🎵 Musiksammlung</h2>
+<h2 data-i18n="cfg_music_library_heading">🎵 Player</h2>
 <form id="music-library-form">
-  <p class="hint" data-i18n="cfg_music_library_hint">Root-Ordner für den Musiksammlung-Modus (Play/Stop auf der
+  <p class="hint" data-i18n="cfg_music_library_hint">Root-Ordner für den Player-Modus (Play/Stop auf der
     /musik-Seite) — Container-interner Pfad, gemountet über MUSIC_LIBRARY_FOLDER in .env.</p>
   <label><span data-i18n="cfg_music_library_folder_label">Musik-Ordner (Container-Pfad)</span></label>
   <p class="hint" id="ml-folder-selected"></p>
@@ -3651,7 +3724,7 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                     self.end_headers()
                     self.wfile.write(icon_bytes)
             elif self.path == "/api/status":
-                self._send_json(_build_status(state, icecast_cfg))
+                self._send_json(_build_status(state, icecast_cfg, host_paths))
             elif self.path.startswith("/api/status/wait"):
                 self._handle_status_wait()
             elif self.path == "/api/config/stations":
@@ -4068,7 +4141,7 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
             except ValueError:
                 known_version = 0
             state.wait_for_change(known_version, timeout=_STATUS_WAIT_TIMEOUT)
-            self._send_json(_build_status(state, icecast_cfg))
+            self._send_json(_build_status(state, icecast_cfg, host_paths))
 
         def _handle_skip(self):
             # "ZAPPEN!"-Knopf: Nutzer hat selbst Sprache erkannt, auch

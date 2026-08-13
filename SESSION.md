@@ -6837,3 +6837,170 @@ Lösch-UI wurden damit bewusst ausgeschlossen, nicht vergessen.
   `curl -sk https://localhost:5000/api/library/duplicates` gegen die
   ECHTE laufende Instanz mit der echten DB verifiziert — liefert exakt
   denselben Treffer wie der direkte DB-Test oben, End-to-End bestätigt.
+
+## 2026-08-13 — `/musik`-Seite bekommt eigenen Audio-Player statt Rücksprung zur Player-Seite
+
+**Auslöser**: Nutzer-Bugreport — nach Umschalten in den Musiksammlung-
+Modus und Play-Klick auf `/musik` lief laut Web-Interface Track 2/17,
+aber "ich höre nix". Untersuchung ergab keinen Bug im Player-Backend:
+Icecast-Stats zeigten `total_bytes_read` stetig steigend (ffmpeg
+schreibt korrekt in den Mount), aber `listeners: 0` und
+`total_bytes_sent: 0` — es hatte sich schlicht nie ein Client mit dem
+Stream verbunden. Grund: das einzige `<audio id="player">`-Element im
+gesamten Web-Interface sitzt auf der Player-Seite (`/`, `_PAGE_HTML`) —
+`/musik` (`_MUSIC_PAGE_HTML`) hatte nie einen eigenen. Nach Rücksprung
+zu `/` lief die Musik dort tatsächlich. Nutzer-Feedback danach: das
+Zurückspringen widerspricht dem Sinn der zwei getrennten Seiten/Modi
+("wenn Radio, dann Radio, wenn MP3-Player dann MP3-Player") — explizite
+Bitte, `/musik` eigenständig lauffähig zu machen.
+
+### Umsetzung
+
+- `_MUSIC_PAGE_HTML` (`webui.py`) bekommt ein eigenes
+  `<audio id="player" controls preload="none">`, platziert direkt unter
+  der Root-Ordner-Box, vor den Kategorie-/Favoriten-Buttons.
+- JS: dieselbe Player-Quelle-Logik wie auf der Player-Seite 1:1
+  übernommen (einmalig setzen per `playerSrcSet`-Flag, Schema/Port als
+  Paar wählen wegen HTTP/HTTPS auf unterschiedlichen Icecast-Ports,
+  siehe ausführlicher Kommentar dort) — beide Player hören denselben
+  Icecast-Mount ab, nur eben von der jeweils passenden Seite aus. Kein
+  gemeinsames JS-Modul dafür angelegt, da beide Templates schon vorher
+  komplett eigenständige Strings sind (`_render_i18n_variants()` rendert
+  pro Sprache getrennt) — eine Extraktion wäre eine größere Umstrukturierung
+  gewesen, die der Nutzer nicht angefragt hat.
+- `README.md` (DE+EN) im Musiksammlung-Modus-Abschnitt um den neuen
+  Player-Bullet ergänzt.
+- Bewusst NICHT angefasst: der `← zurück zum Radio-Player`-Link unten
+  auf `/musik` bleibt bestehen (reine Navigation ohne Moduswechsel,
+  anders als der Radio-Button im Umschalter oben, der zusätzlich
+  `setMode('radio', '/')` auslöst) — nicht Teil der Bitte, und weiterhin
+  sinnvoll, falls jemand kurz auf die Player-Seite schauen will, ohne
+  den Musiksammlung-Modus zu verlassen.
+
+### Verifiziert
+
+- `docker compose up -d --build radiosabbelnich`: Start ohne Fehler,
+  insbesondere `_check_i18n_coverage()` beim Modul-Import unauffällig
+  (kein neuer `data-i18n`-Key eingeführt, der Player hat keinen
+  sichtbaren Text).
+- `curl -sk https://localhost:5000/musik | grep 'id="player"'`: Element
+  vorhanden.
+- End-to-End gegen die echte laufende Instanz: `POST /api/music/play`
+  gestartet, `GET /api/status` zeigt `music.active: true` mit
+  fortlaufendem Track-Index — Player-Backend war schon vorher
+  unverändert korrekt, dieser Fix betraf ausschließlich das Fehlen
+  einer Hör-Möglichkeit auf `/musik` selbst.
+
+## 2026-08-13 (Fortsetzung) — `/musik` aufgeräumt: ein Play-Knopf statt zwei, Umbenennung zu "Player", echter Host-Pfad, kein Banner
+
+**Auslöser**: direktes Folge-Feedback zum vorherigen Eintrag (eigener
+Player auf `/musik`) — der neu hinzugefügte native `<audio controls>`
+hatte einen EIGENEN Play-Knopf, der unabhängig vom bestehenden großen
+Play/Stop-Button reagierte ("zwei Play-Knöpfe, die sich gegenseitig in
+die Quere kommen"). Zusätzlich vier Aufräum-Wünsche für die Seite:
+Funktion umbenennen zu schlicht "Player" (statt "Musiksammlung"),
+Banner-Bild weg, Label "MP3-Root-Ordner" zu "Musik Ordner", und den
+angezeigten Pfad vom technisch korrekten, aber nutzerseitig
+bedeutungslosen Container-Pfad (`/app/music_library/...`) auf den
+echten `.env`-Host-Pfad umstellen, mit einem Knopf "Pfad ändern" statt
+des Text-Links "Ordner unter /config ändern".
+
+### Umsetzung
+
+- **Ein-Knopf-Lösung fürs Play-Problem**: `controls`-Attribut vom
+  `<audio id="player">` auf `/musik` entfernt (Element dadurch komplett
+  unsichtbar, kein zweiter Play-Knopf mehr). Stattdessen synct
+  `applyStatus()` das Element automatisch mit dem Backend-Status: sobald
+  `musicMode && musicActive` und das Element noch pausiert ist, wird
+  `player.play()` ausgelöst (Promise-Rejection bei blockiertem Autoplay
+  wird verschluckt — kein Fehlerdialog, einfach kein Ton, bis der nächste
+  Poll es erneut versucht bzw. der Nutzer selbst eingreift); wechselt der
+  Status auf inaktiv, wird `player.pause()` aufgerufen. Der bestehende
+  große Play/Stop-Button (`#btn-play-stop`) blieb unverändert (steuert
+  weiterhin nur das Backend über `/api/music/play`+`/stop`) — er ist
+  jetzt aber der EINZIGE sichtbare Knopf, das unsichtbare `<audio>`
+  folgt ihm nur noch.
+- **Umbenennung "Musiksammlung" → "Player"**: alle user-sichtbaren
+  Strings geändert (`i18n.py` Basis-Englisch + `language/Deutsch.lng`) —
+  `mode_music_btn`, `music_heading`, `music_switch_hint`,
+  `idx_music_mode_active`, `cfg_music_library_heading`,
+  `cfg_music_library_hint`, `cfg_music_library_saved` — plus der
+  hartcodierte `<title>`-Tag auf `/musik`. Bewusst NICHT umbenannt:
+  interne Bezeichner (`music_library.py`, `current_mode == "music"`,
+  Routen wie `/musik`, `_BROWSE_ROOTS["music_library"]`,
+  Konfigurationsschlüssel `music_library` in `settings.json`) — das wäre
+  eine große, nicht angefragte Umstrukturierung gewesen; nur was der
+  Nutzer im Browser sieht, heißt jetzt "Player".
+- **Banner entfernt**: `<img class="banner" ...>` aus `_MUSIC_PAGE_HTML`
+  gestrichen (CSS-Regel `img.banner` bleibt, wird von der Radio-Seite
+  weiter gebraucht). Bewusst NUR auf `/musik` — die Bitte war explizit
+  auf "die Player Seite aufräumen" bezogen, die Radio-Hauptseite bleibt
+  unverändert mit Banner.
+- **Musik-Ordner-Anzeige mit echtem Host-Pfad**: neue Funktion
+  `_music_library_host_path(container_path, host_root)` in `webui.py` —
+  reines String-Mapping (kein Dateisystemzugriff): ersetzt das feste
+  Mount-Präfix `_BROWSE_ROOTS["music_library"]` (`/app/music_library`)
+  durch den echten Host-Root aus `host_paths["music_library_folder"]`
+  (`MUSIC_LIBRARY_FOLDER` aus `.env`, schon vorher für die Config-Seite
+  durchgereicht, siehe CLAUDE.md "host_paths"-Abschnitt) — übersetzt
+  dabei auch verschachtelte Unterordner-Auswahlen korrekt (nicht nur den
+  Root selbst), weil `music_library.path` ja ein beliebig tiefer
+  Unterordner sein kann. `_build_status()` bekommt dafür einen neuen
+  optionalen `host_paths`-Parameter, neues Feld
+  `music_library_host_path` in der `/api/status`-Antwort. Frontend
+  bevorzugt dieses Feld, fällt auf den Container-Pfad zurück, falls
+  `host_paths` beim Start nicht mitgegeben wurde. Label
+  `music_root_label` von "MP3-Root-Ordner:" auf "Musik-Ordner:"
+  geändert (Konsistent mit dem bereits vorhandenen
+  `cfg_music_library_folder_label` auf der Config-Seite, das schon
+  vorher "Musik-Ordner (Container-Pfad)" hieß).
+- **"Pfad ändern"-Knopf**: `music_root_change_link` von "Ordner unter
+  /config ändern →" auf "Pfad ändern" gekürzt, Markup von `<a
+  class="config-link">` auf `<a class="change-path-btn">` mit neuer
+  Button-Optik (Rahmen/Hintergrund wie die übrigen Player-Buttons) statt
+  reinem Text-Link.
+
+### Bewusst NICHT gemacht
+
+- Keine Umbenennung der Route `/musik` selbst (z.B. zu `/player`) — der
+  Nutzer sprach von der Funktion/Anzeige, nicht von der URL; eine
+  Routenänderung hätte zusätzlich Redirects/Bookmarks/QR-Codes betroffen,
+  ohne dass danach gefragt wurde.
+- Keine Änderung an der Radio-Hauptseite (`/`) — weder Banner noch
+  Play-Knopf-Verhalten dort angefasst, die "zwei Play-Knöpfe"-Problematik
+  gab es dort nie (kein zweiter Backend-Play-Knopf neben dem nativen
+  Player).
+- Kein manueller "Weiterhören"-Knopf für den Fall, dass die Seite neu
+  geladen wird, während im Hintergrund schon Musik läuft, und der
+  Browser das automatische `player.play()` mangels vorheriger
+  Nutzerinteraktion blockiert (Autoplay-Policy) — in der Praxis lösen
+  moderne Browser das selbst über ihren "Media Engagement Index" (nach
+  dem ersten manuellen Abspielen auf dieser Origin wird künftiges
+  Autoplay dort erlaubt); eine eigene Umgehung dafür wäre zusätzliche
+  Komplexität für einen Rand­fall, der nicht angefragt war.
+
+### Verifiziert
+
+- `docker compose up -d --build radiosabbelnich`: Start ohne Fehler,
+  `_check_i18n_coverage()` unauffällig (keine neuen/entfernten
+  `data-i18n`-Keys, nur Werte geändert).
+- `curl -sk https://localhost:5000/musik`: kein `<img class="banner"`
+  mehr im HTML, `<audio id="player" preload="none">` ohne
+  `controls`-Attribut, Button-Text "Pfad ändern"/"Musik-Ordner:"/"🎵
+  Player" wie erwartet im injizierten `I18N`-JSON.
+  `curl -sk https://localhost:5000/`: unverändert weiterhin mit Banner
+  und nativem `<audio controls>`.
+- `curl -sk https://localhost:5000/api/status`: `music_library_path`
+  (Container) UND `music_library_host_path` (übersetzt) beide korrekt
+  befüllt, am echten laufenden Pfad geprüft — Container-Pfad
+  `/app/music_library/+_Alphabetisch/!MNO/Melissa Etheridge/2005 -
+  Greatest Hits - The Road Less Traveled` wird korrekt zu
+  `/mnt/eimer/data/Audio/Musik/+_Alphabetisch/!MNO/Melissa
+  Etheridge/2005 - Greatest Hits - The Road Less Traveled` (dem
+  tatsächlichen `MUSIC_LIBRARY_FOLDER`-Host-Pfad aus `.env`) übersetzt.
+- End-to-End gegen die echte laufende Instanz: `POST /api/music/play`
+  → `music.active: true`; `POST /api/music/stop` → `music.active:
+  false` — Backend-Steuerung unverändert korrekt. Das clientseitige
+  `player.play()`/`.pause()`-Sync selbst braucht einen echten Browser
+  (Autoplay-Policy lässt sich nicht per `curl` prüfen) — nicht
+  automatisiert verifiziert, Code-Review-geprüft.

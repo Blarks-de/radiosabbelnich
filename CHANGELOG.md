@@ -15,6 +15,18 @@ umbenannt. Ältere Commit-Nachrichten/Dateinamen (z.B. `radio_switch`,
 wider — hier einheitlich mit dem aktuellen Namen beschrieben, sofern
 nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 
+## 2026-08-13
+
+- `/musik` aufgeräumt: nur noch ein Play-Knopf (der native Browser-
+  Play-Knopf kam vorher dem großen Play/Stop-Button in die Quere), die
+  Funktion heißt jetzt schlicht "Player" statt "Musiksammlung", kein
+  Banner-Bild mehr auf der Seite, angezeigter Musik-Ordner ist jetzt der
+  echte Host-Pfad aus `.env` statt des Container-Pfads, neuer
+  "Pfad ändern"-Knopf statt Text-Link.
+- Musiksammlung-Seite (`/musik`) bekommt einen eigenen eingebetteten
+  Audio-Player — man muss zum Zuhören nicht mehr zur Player-Seite
+  zurückspringen.
+
 ## 2026-08-12
 
 - Musik-Library: Duplikat-Erkennung (`music_query.find_duplicates()`,

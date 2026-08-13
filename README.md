@@ -188,22 +188,29 @@ pausiert auch die automatische Sprache-Erkennung (VAD/Heuristik/
 Fingerprint) — die MP3 selbst enthält u.U. Sprache, das soll nicht als
 "Moderation" auf dem eigentlichen Sender fehlgedeutet werden.
 
-## Musiksammlung-Modus (Grundgerüst)
+## Player-Modus (Grundgerüst)
 
 Erster Umsetzungsschritt der unten unter "Zukünftige Features"
 beschriebenen Musik-Library-Idee: ein **eigenständiger, persistierter
-Modus** neben dem normalen Radio-Betrieb — oben auf der Player- UND der
-Musiksammlung-Seite per gut sichtbarem Umschalter ("📻 Radio" / "🎵
-Musiksammlung") wechselbar. Im Musiksammlung-Modus ist die komplette
-automatische Erkennung (VAD/Heuristik/STT/Fingerprint) aus, nicht nur
-pausiert — es läuft ausschließlich lokale Musik, nichts wird analysiert.
-Der Modus übersteht einen Container-Neustart (in `settings.json`
-gespeichert).
+Modus** neben dem normalen Radio-Betrieb — oben auf der Radio- UND der
+Player-Seite per gut sichtbarem Umschalter ("📻 Radio" / "🎵 Player")
+wechselbar (die Funktion hieß bis 2026-08-13 "Musiksammlung" — intern,
+in `settings.json`/Code, heißt der Modus weiterhin `music`, nur die
+Bezeichnung im Web-Interface wurde vereinfacht). Im Player-Modus ist die
+komplette automatische Erkennung (VAD/Heuristik/STT/Fingerprint) aus,
+nicht nur pausiert — es läuft ausschließlich lokale Musik, nichts wird
+analysiert. Der Modus übersteht einen Container-Neustart (in
+`settings.json` gespeichert).
 
-Auf der neuen Seite `/musik`:
+Auf der eigenständigen Seite `/musik` ("🎵 Player"):
 
-- Ein read-only angezeigter Root-Ordner (Container-Pfad, unter `/config`
-  einstellbar — siehe unten).
+- Der ausgewählte Musik-Ordner wird angezeigt — seit 2026-08-13 der
+  **echte Host-Pfad** (serverseitig aus dem Container-Pfad
+  zurückübersetzt, per `MUSIC_LIBRARY_FOLDER` aus `.env`), vorher stand
+  dort der technisch korrekte, aber für den Nutzer bedeutungslose
+  Container-Pfad (`/app/music_library/...`). Ein Knopf "Pfad ändern"
+  führt zur eigentlichen Ordnerauswahl auf der Config-Seite (siehe
+  unten).
 - Zwei Gruppen von Buttons, "Kategorien" (schnell/langsam/rock/klassik)
   und "Favoriten" (Queen/Pavarotti) — aktuell reine Platzhalter ohne
   Funktion, echte Filterung (Kategorien auf Metadaten/Tags wie BPM/Genre,
@@ -211,13 +218,21 @@ Auf der neuen Seite `/musik`:
   der Roadmap unten).
 - Ein großer Play/Stop-Button und Zurück/Nächster — spielt die MP3s im
   konfigurierten Ordner **nicht rekursiv**, alphabetisch, endlos im
-  Kreis, bis Stop gedrückt wird.
+  Kreis, bis Stop gedrückt wird. Seit 2026-08-13 ist dieser eine Button
+  auch der einzige sichtbare Knopf fürs tatsächliche Zuhören: ein
+  unsichtbares `<audio>`-Element (ohne eigene Bedienleiste) folgt
+  automatisch dem Wiedergabestatus. Vorher gab es zusätzlich einen
+  nativen Browser-Player mit eigenem Play-Knopf, der unabhängig vom
+  großen Button reagierte — zwei "Play"-Knöpfe, die sich gegenseitig
+  nicht kannten und sich dadurch in die Quere kamen.
+- Kein Banner-Bild mehr auf dieser Seite (seit 2026-08-13, aufgeräumtere
+  eigenständige Optik statt der Radio-Seiten-Elemente).
 
-Der Root-Ordner wird — wie der News-Break-MP3-Ordner — auf der
+Der Musik-Ordner wird — wie der News-Break-MP3-Ordner — auf der
 Config-Seite gesetzt, per **Breadcrumb-Ordnerauswahl**: durch die
 Unterordner des über `MUSIC_LIBRARY_FOLDER` (`.env`, gleiches Muster wie
 `NEWS_MP3_FOLDER`) gemounteten Verzeichnisses klicken, statt einen Pfad
-einzutippen. Beide Felder (News-Break-Ordner, Musiksammlung-Root) nutzen
+einzutippen. Beide Felder (News-Break-Ordner, Player-Root) nutzen
 dieselbe Komponente, speichern aber unabhängig voneinander.
 
 ## STT-Sprachfilter
@@ -441,10 +456,10 @@ Erreichbar unter `http://<host>:5000/`:
   Player- und der Config-Seite.
 - **⚙ oben rechts** (fest positioniert, bleibt beim Scrollen sichtbar) —
   führt zur Config-Seite (`/config`).
-- **📻 Radio / 🎵 Musiksammlung** — Modus-Umschalter oben auf der Player-
-  und der Musiksammlung-Seite (siehe eigener Abschnitt weiter oben). Ein
-  Klick auf den jeweils anderen Modus schaltet um UND springt auf die
-  passende Seite (dort liegen die zugehörigen Bedienelemente).
+- **📻 Radio / 🎵 Player** — Modus-Umschalter oben auf der Radio- und der
+  Player-Seite (siehe eigener Abschnitt weiter oben). Ein Klick auf den
+  jeweils anderen Modus schaltet um UND springt auf die passende Seite
+  (dort liegen die zugehörigen Bedienelemente).
 - **Aktueller Sender + "Jetzt läuft"** — Titel/Interpret, falls der
   Sender ICY-Metadaten oder eine bekannte Alternativ-Quelle liefert
 - **Eingebetteter Player** — direkt im Browser mithören, ohne extra
@@ -781,11 +796,11 @@ auf die Konsole, `--log-file ""` schaltet die Datei ab.
 Optionaler Modus als Ergänzung zum Stream-Switching: lokale Musiksammlung
 scannen, taggen und nach Kategorien abspielbar machen.
 
-- ✅ **Umschaltbar per Toggle** (Radio-Modus vs. Musiksammlung-Modus,
-  STT/VAD im Musik-Modus komplett aus) **und ein minimaler Player**
-  (Play/Stop/Zurück/Nächster über einen konfigurierbaren Ordner, nicht
-  rekursiv, keine Kategorisierung) sind umgesetzt — siehe
-  "Musiksammlung-Modus (Grundgerüst)" weiter oben.
+- ✅ **Umschaltbar per Toggle** (Radio-Modus vs. Player-Modus, STT/VAD im
+  Musik-Modus komplett aus) **und ein minimaler Player** (Play/Stop/
+  Zurück/Nächster über einen konfigurierbaren Ordner, nicht rekursiv,
+  keine Kategorisierung) sind umgesetzt — siehe "Player-Modus
+  (Grundgerüst)" weiter oben.
 - ✅ **Format-Unterstützung erweitert** (seit 2026-08-12): Scan UND
   Playback laufen jetzt über MP3 hinaus auch für FLAC, OGG (Vorbis),
   M4A (MP4-Container), rohes ADTS-AAC, WAV und APE (Monkey's Audio,
@@ -1060,21 +1075,27 @@ detection (VAD/heuristic/fingerprint) is also paused — the MP3 itself
 may well contain speech, and that shouldn't be misread as "presenting"
 on the actual station.
 
-## Music library mode (foundation)
+## Player mode (foundation)
 
 First implementation step of the music library idea described further
 below under "Future features": a **standalone, persisted mode**
-alongside normal radio operation — switchable on both the player and
-the music library page via a clearly visible toggle ("📻 Radio" / "🎵
-Music library"). In music library mode, all automatic detection
-(VAD/heuristic/STT/fingerprint) is off, not just paused — only local
-music plays, nothing gets analyzed. The mode survives a container
-restart (stored in `settings.json`).
+alongside normal radio operation — switchable on both the radio and the
+player page via a clearly visible toggle ("📻 Radio" / "🎵 Player") (the
+feature was called "Music library" until 2026-08-13 — internally, in
+`settings.json`/code, the mode is still named `music`, only the
+web interface label was simplified). In player mode, all automatic
+detection (VAD/heuristic/STT/fingerprint) is off, not just paused —
+only local music plays, nothing gets analyzed. The mode survives a
+container restart (stored in `settings.json`).
 
-On the new `/musik` page:
+On the standalone `/musik` page ("🎵 Player"):
 
-- A read-only root folder display (container path, set under `/config`
-  — see below).
+- The selected music folder is displayed — since 2026-08-13 the **real
+  host path** (translated server-side from the container path, via
+  `MUSIC_LIBRARY_FOLDER` from `.env`), previously it showed the
+  technically correct but meaningless-to-the-user container path
+  (`/app/music_library/...`). A "Change path" button leads to the
+  actual folder picker on the config page (see below).
 - Two button groups, "Categories" (schnell/langsam/rock/klassik) and
   "Favorites" (Queen/Pavarotti) — currently pure placeholders with no
   function; real filtering (categories on metadata/tags like BPM/genre,
@@ -1082,9 +1103,17 @@ On the new `/musik` page:
   phase 1 below).
 - A big play/stop button plus back/next — plays the MP3s in the
   configured folder **non-recursively**, alphabetically, looping
-  forever until stop is pressed.
+  forever until stop is pressed. Since 2026-08-13 this single button is
+  also the only visible control for actually listening: a hidden
+  `<audio>` element (no control bar of its own) automatically follows
+  the playback state. Before, there was also a native browser player
+  with its own play button reacting independently from the big button —
+  two "play" buttons that didn't know about each other and got in each
+  other's way.
+- No more banner image on this page (since 2026-08-13, a tidier,
+  standalone look instead of the radio page's elements).
 
-The root folder is set on the config page, just like the news break MP3
+The music folder is set on the config page, just like the news break MP3
 folder, via a **breadcrumb folder picker**: click through the
 subfolders of the directory mounted via `MUSIC_LIBRARY_FOLDER` (`.env`,
 same pattern as `NEWS_MP3_FOLDER`) instead of typing a path. Both
@@ -1301,10 +1330,10 @@ Reachable at `http://<host>:5000/`:
   `CLAUDE.md`) — on both the player and config page.
 - **⚙ top right** (fixed position, stays visible while scrolling) —
   leads to the config page (`/config`).
-- **📻 Radio / 🎵 Music library** — mode toggle at the top of the player
-  and music library page (see the dedicated section further up).
-  Clicking the other mode switches to it AND jumps to the matching
-  page (that's where the corresponding controls live).
+- **📻 Radio / 🎵 Player** — mode toggle at the top of the radio and the
+  player page (see the dedicated section further up). Clicking the
+  other mode switches to it AND jumps to the matching page (that's
+  where the corresponding controls live).
 - **Current station + "now playing"** — title/artist, if the station
   provides ICY metadata or a known alternative source
 - **Embedded player** — listen right in the browser, no extra
@@ -1633,11 +1662,10 @@ accidentally start the container in the right mode beforehand.
 Optional mode alongside stream switching: scan a local music collection,
 tag it, and make it playable by category.
 
-- ✅ **Switchable via toggle** (radio mode vs. music library mode,
-  STT/VAD fully off in music mode) **and a minimal player** (play/stop/
-  back/next over a configurable folder, non-recursive, no
-  categorization) are implemented — see "Music library mode
-  (foundation)" further up.
+- ✅ **Switchable via toggle** (radio mode vs. player mode, STT/VAD fully
+  off in music mode) **and a minimal player** (play/stop/back/next over
+  a configurable folder, non-recursive, no categorization) are
+  implemented — see "Player mode (foundation)" further up.
 - ✅ **Expanded format support** (since 2026-08-12): scan AND playback
   now go beyond MP3 to FLAC, OGG (Vorbis), M4A (MP4 container), raw
   ADTS AAC, WAV, and APE (Monkey's Audio, text tags only — see below).
