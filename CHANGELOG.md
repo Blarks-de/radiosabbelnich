@@ -17,6 +17,9 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 
 ## 2026-08-14
 
+- Fix: `/musik` blieb auf einem frischen Browser-Origin stumm — der
+  Play-Knopf startet `player.play()` jetzt synchron als Teil der
+  Klick-Geste statt erst später aus dem Status-Poll (Autoplay-Policy).
 - Nachrichten-Pause-MP3-Ordner und Musik-Player durchsuchen jetzt auch
   Unterordner, bis zu 5 Ebenen tief (vorher nur der Ordner selbst).
 

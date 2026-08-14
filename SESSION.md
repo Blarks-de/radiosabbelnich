@@ -7068,3 +7068,63 @@ absteigen.
   `news_break.pick_random_mp3()` gegen dasselbe Verzeichnis liefert
   ebenfalls einen der gefundenen Pfade (inkl. Tiefe 5) als vollen
   absoluten Pfad.
+
+## 2026-08-14 (Fortsetzung) — `/musik`: Wiedergabe blieb auf einem frischen Origin stumm (Autoplay-Policy)
+
+Live vom Nutzer entdeckt (Live-Test der Unterordner-Rekursion oben): das
+Backend/Icecast lief nachweislich korrekt (echtes Audio im Stream
+verifiziert, siehe Chat), aber im Browser war nichts zu hören — erst ein
+manueller Klick auf den nativen Play-Knopf auf `/` brachte `/musik` zum
+Laufen.
+
+### Ursache
+
+`applyStatus()` auf `/musik` ruft `player.play()` NUR aus dem
+asynchronen Status-Poll (`refresh()`/`longPollLoop()`) auf, nie
+synchron aus einem Klick-Handler heraus — das `<audio>`-Element dort ist
+bewusst `controls`-los (ein einziger sichtbarer Play-Knopf, siehe
+Player-Modus-Abschnitt in CLAUDE.md), bot also gar keine Nutzer-Geste
+an, die der Browser als Autoplay-Freigabe akzeptiert. Das
+`.catch(() => {})` an der `player.play()`-Stelle verschluckte die
+resultierende `NotAllowedError` dabei lautlos — kein Fehler im Log,
+keine Meldung im UI, einfach Stille. Auf `/` funktionierte es trotzdem,
+weil dort ein natives `<audio controls>` existiert, dessen manueller
+Play-Klick eine echte Nutzer-Geste ist — und Chromes Media-Engagement-
+Index diese Freigabe pro ORIGIN merkt, nicht pro Element, weshalb ein
+späterer Aufruf auf `/musik` danach plötzlich klappte.
+
+### Umsetzung
+
+`btn-play-stop`- und die `.music-query-btn`-Klick-Handler (`webui.py`,
+`_MUSIC_PAGE_HTML`) rufen `document.getElementById('player').play()`
+jetzt SYNCHRON als erste Anweisung im Handler auf, noch vor dem
+`await fetch(...)` — das zählt für den Browser noch als Teil derselben
+Nutzer-Geste. `playerSrcSet` ist zu diesem Zeitpunkt bereits gesetzt
+(passiert beim ersten `refresh()` direkt beim Seitenload, lange vor
+einem möglichen Klick), das `src`-Attribut ist also schon befüllt.
+`.catch(() => {})` bleibt bewusst bestehen (kein zusätzlicher UI-Fehler
+nötig, wenn es diesmal klappt) — der eigentliche Fix ist der Zeitpunkt
+des Aufrufs, nicht die Fehlerbehandlung selbst.
+
+### Bewusst NICHT gemacht
+
+- Kein sichtbarer `<audio controls>` auf `/musik` als Alternative — der
+  einzige-Play-Knopf war eine bewusste 2026-08-13-Entscheidung (siehe
+  SESSION.md-Eintrag von dem Tag), die hier nicht zurückgenommen wird.
+- `btn-prev-track`/`btn-next-track` unverändert (nur aktivierbar, wenn
+  `musicActive` schon läuft, die Freigabe ist zu dem Zeitpunkt längst
+  passiert).
+
+### Verifiziert
+
+- `docker compose up -d --build radiosabbelnich`: sauberer Start,
+  `_check_i18n_coverage()` unauffällig.
+- `curl -sk https://localhost:5000/musik | grep player.play`: findet
+  jetzt 4 Stellen (großer Button + 3 Query-Button-Fälle sind derselbe
+  `forEach`-Handler + der bestehende Aufruf in `applyStatus()`) statt
+  vorher nur 1 — Code liegt wie vorgesehen im HTML.
+  Client-seitiges Autoplay-Verhalten selbst braucht einen echten
+  Browser ohne bestehende Media-Engagement-Historie für dieses Origin,
+  um die Behebung end-to-end zu bestätigen — nicht automatisiert
+  verifizierbar (siehe SESSION.md-Konvention "Autoplay-Policy lässt
+  sich nicht per curl prüfen"), vom Nutzer im Anschluss zu bestätigen.

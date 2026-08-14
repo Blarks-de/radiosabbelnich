@@ -2136,6 +2136,18 @@ document.getElementById('mode-radio-btn').addEventListener('click', () => setMod
 document.getElementById('mode-music-btn').addEventListener('click', () => setMode('music'));
 
 document.getElementById('btn-play-stop').addEventListener('click', async () => {
+  // player.play() MUSS synchron hier im Klick-Handler passieren (echte
+  // Nutzer-Geste), noch VOR dem await fetch() -- sonst bleibt das spätere
+  // programmatische player.play() aus applyStatus() (ausgelöst vom
+  // asynchronen Status-Poll, keine Nutzer-Geste mehr) auf einem frischen
+  // Origin ohne Autoplay-Freigabe stumm blockiert (.catch() dort
+  // verschluckt den Fehler, siehe applyStatus() oben) -- reproduziert:
+  // Wiedergabe lief laut Backend/Icecast einwandfrei, aber ohne vorherigen
+  // manuellen Play-Klick auf "/" (der das Origin für Audio "freischaltet")
+  // blieb der Browser auf /musik stumm.
+  if (!musicActive) {
+    document.getElementById('player').play().catch(() => {});
+  }
   try {
     await fetch(musicActive ? '/api/music/stop' : '/api/music/play', {method: 'POST'});
     setTimeout(refresh, 800);
@@ -2166,6 +2178,10 @@ document.getElementById('btn-next-track').addEventListener('click', async () => 
 // _handle_music_play()) -- die Fehlermeldung landet 1:1 im Action-Feld.
 document.querySelectorAll('.music-query-btn').forEach((btn) => {
   btn.addEventListener('click', async () => {
+    // Gleicher Grund wie beim großen Play-Button oben: player.play() muss
+    // synchron als Teil dieser Nutzer-Geste passieren, sonst bleibt die
+    // Wiedergabe auf einem frischen Origin stumm.
+    document.getElementById('player').play().catch(() => {});
     const query = {type: btn.dataset.queryType, value: btn.dataset.queryValue};
     try {
       const res = await fetch('/api/music/play', {
