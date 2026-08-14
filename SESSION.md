@@ -7128,3 +7128,57 @@ des Aufrufs, nicht die Fehlerbehandlung selbst.
   um die Behebung end-to-end zu bestätigen — nicht automatisiert
   verifizierbar (siehe SESSION.md-Konvention "Autoplay-Policy lässt
   sich nicht per curl prüfen"), vom Nutzer im Anschluss zu bestätigen.
+
+## 2026-08-14 (Fortsetzung 2) — Nutzer-Retest: Fix reicht nicht, Fehler bisher unsichtbar — Diagnose statt weiterer Blindkorrektur
+
+Nutzer-Feedback nach dem Deploy des vorigen Eintrags: frischer Ablauf
+(auf "/" → "🎵 Player"-Toggle → `/musik` lädt neu → direkt großer
+Play-Knopf) zeigt weiterhin "Track läuft" in der Statuszeile, aber
+KEIN Ton. Zertifikatsprüfung ausgeschlossen: `openssl s_client` gegen
+Port 5000 UND 8444 liefert für beide dasselbe gültige Let's-Encrypt-
+Zertifikat (`dockfish.icefish-ghost.ts.net`, kein Selbstsigniert-
+Sonderfall) — ein browserseitiges "Zertifikat noch nie akzeptiert"
+scheidet damit als Ursache aus. Der vorige Fix (synchrones
+`player.play()` im Klick-Handler) sollte laut Spezifikation ausreichen
+(Chrome erlaubt `play()` als direkte Folge einer Nutzer-Geste
+UNABHÄNGIG von der Media-Engagement-Historie) — reicht aber laut
+Nutzer-Test nicht. Ohne Zugriff auf einen echten Browser in dieser
+Session (Chrome-Erweiterung hier nicht verbunden) lässt sich die
+tatsächliche Fehlerursache nicht weiter blind eingrenzen.
+
+### Umsetzung
+
+Statt einer weiteren Vermutung: alle bisher stillschweigend
+verschluckten Fehlerpfade rund um `player.play()` sichtbar gemacht
+(Action-Feld + Browser-Konsole, 15s statt der üblichen 5s Anzeigedauer):
+
+- Neuer `error`-Event-Listener auf dem `<audio>`-Element selbst — deckt
+  Lade-/Netzwerkfehler ab (z.B. `MediaError`, falls die Stream-URL aus
+  irgendeinem Grund nicht geladen werden kann), die bisher GAR NICHT
+  behandelt wurden (nur `play()`-Ablehnungen wurden überhaupt
+  gefangen).
+- `.catch(() => {})` an den beiden Klick-Handler-`play()`-Aufrufen
+  (großer Button, Kategorie-/Favoriten-Buttons) meldet jetzt
+  `err.name` sichtbar statt zu schweigen.
+- Der `play()`-Aufruf in `applyStatus()` (asynchroner Status-Poll,
+  bewusst NICHT als Nutzer-Geste gedacht) loggt nur noch auf die
+  Konsole (`console.warn`), nicht ins UI — der läuft bei jedem Poll und
+  würde sonst das Action-Feld fluten bzw. den eigentlich relevanten
+  Klick-Handler-Fehler überschreiben.
+
+### Bewusst NICHT gemacht
+
+- Keine weitere Verhaltensänderung an der Play-Logik selbst (z.B.
+  `<audio controls>` doch sichtbar machen) — ohne die tatsächliche
+  Fehlermeldung wäre das weiteres Rätselraten statt einer gezielten
+  Korrektur.
+
+### Verifiziert
+
+- `docker compose up -d --build radiosabbelnich`: sauberer Start.
+- Injiziertes `<script>` von `/musik` extrahiert und mit
+  `node --check` auf Syntaxfehler geprüft — sauber.
+- Zertifikatsvergleich Port 5000 vs. 8444 wie oben beschrieben.
+- Die eigentliche Diagnose (welcher Fehlername/Code tatsächlich
+  auftritt) braucht den nächsten Retest durch den Nutzer in seinem
+  echten Browser — noch offen.

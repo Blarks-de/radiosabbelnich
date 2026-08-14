@@ -17,6 +17,11 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 
 ## 2026-08-14
 
+- `/musik`: bisher stillschweigend verschluckte Audio-Wiedergabefehler
+  (Ladefehler, abgelehntes `play()`) werden jetzt im Action-Feld und in
+  der Browser-Konsole angezeigt statt lautlos zu verschwinden — Fix aus
+  dem vorigen Punkt reichte laut Nutzer-Test allein nicht, Ursache noch
+  offen.
 - Fix: `/musik` blieb auf einem frischen Browser-Origin stumm — der
   Play-Knopf startet `player.play()` jetzt synchron als Teil der
   Klick-Geste statt erst später aus dem Status-Poll (Autoplay-Policy).

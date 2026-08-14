@@ -2014,11 +2014,26 @@ let lastVersion = 0;
 let musicActive = false;
 let playerSrcSet = false;
 
-function setActionMsg(text) {
+function setActionMsg(text, ms) {
   const el = document.getElementById('action-msg');
   el.textContent = text;
-  setTimeout(() => { if (el.textContent === text) el.textContent = ''; }, 5000);
+  setTimeout(() => { if (el.textContent === text) el.textContent = ''; }, ms || 5000);
 }
+
+// Diagnose für "Anzeige sagt 'läuft', aber kein Ton" (siehe SESSION.md):
+// bisher wurden sowohl play()-Ablehnungen als auch Lade-/Netzwerkfehler
+// des <audio>-Elements lautlos verschluckt (.catch(() => {})) -- dadurch
+// war von außen nicht unterscheidbar, ob der Browser Autoplay blockiert,
+// die Stream-URL/das TLS-Zertifikat nicht geladen werden konnte, oder
+// etwas anderes schiefging. Beides jetzt sichtbar (Action-Feld + Konsole),
+// 15s statt der üblichen 5s, weil das Melden eines Fehlers länger dauert
+// als das Lesen eines normalen Kurzhinweises.
+document.getElementById('player').addEventListener('error', () => {
+  const err = document.getElementById('player').error;
+  const msg = 'Audio-Ladefehler' + (err ? ' (Code ' + err.code + ')' : '');
+  console.error(msg, err, 'src=', document.getElementById('player').src);
+  setActionMsg(msg, 15000);
+});
 
 async function refresh() {
   let data;
@@ -2085,7 +2100,12 @@ function applyStatus(data) {
   // kannten -- Klick auf den einen ließ den anderen unverändert.
   const player = document.getElementById('player');
   if (musicMode && musicActive) {
-    if (player.paused) player.play().catch(() => {});
+    // Nur zur Diagnose auf der Konsole geloggt (kein setActionMsg) --
+    // dieser Aufruf läuft bei jedem Status-Poll (bis zu alle paar
+    // Sekunden), ohne Nutzer-Geste blockiert der Browser ihn evtl.
+    // erwartungsgemäß; die Klick-Handler unten sind die Stelle, die dem
+    // Nutzer tatsächlich etwas melden soll.
+    if (player.paused) player.play().catch((err) => console.warn('applyStatus(): player.play() abgelehnt:', err));
   } else if (!player.paused) {
     player.pause();
   }
@@ -2146,7 +2166,10 @@ document.getElementById('btn-play-stop').addEventListener('click', async () => {
   // manuellen Play-Klick auf "/" (der das Origin für Audio "freischaltet")
   // blieb der Browser auf /musik stumm.
   if (!musicActive) {
-    document.getElementById('player').play().catch(() => {});
+    document.getElementById('player').play().catch((err) => {
+      console.error('btn-play-stop: player.play() abgelehnt:', err);
+      setActionMsg('Wiedergabe blockiert (' + err.name + ')', 15000);
+    });
   }
   try {
     await fetch(musicActive ? '/api/music/stop' : '/api/music/play', {method: 'POST'});
@@ -2181,7 +2204,10 @@ document.querySelectorAll('.music-query-btn').forEach((btn) => {
     // Gleicher Grund wie beim großen Play-Button oben: player.play() muss
     // synchron als Teil dieser Nutzer-Geste passieren, sonst bleibt die
     // Wiedergabe auf einem frischen Origin stumm.
-    document.getElementById('player').play().catch(() => {});
+    document.getElementById('player').play().catch((err) => {
+      console.error('music-query-btn: player.play() abgelehnt:', err);
+      setActionMsg('Wiedergabe blockiert (' + err.name + ')', 15000);
+    });
     const query = {type: btn.dataset.queryType, value: btn.dataset.queryValue};
     try {
       const res = await fetch('/api/music/play', {
