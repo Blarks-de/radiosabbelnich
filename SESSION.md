@@ -7004,3 +7004,67 @@ des Text-Links "Ordner unter /config ändern".
   `player.play()`/`.pause()`-Sync selbst braucht einen echten Browser
   (Autoplay-Policy lässt sich nicht per `curl` prüfen) — nicht
   automatisiert verifiziert, Code-Review-geprüft.
+
+## 2026-08-14 — Nachrichten-Pause-Ordner und Musik-Player durchsuchen jetzt Unterordner (bis zu 5 Ebenen)
+
+Nutzeranfrage: sowohl die Nachrichten-Pause-MP3-Auswahl
+(`news_break.pick_random_mp3()`) als auch der Player-Modus-Grundgerüst-
+Player (`music_library.list_tracks()`) durchsuchten bisher NUR den
+konfigurierten Ordner selbst, keine Unterordner — bei einer nach Ordnern
+strukturierten Sammlung (z.B. Jahr/Interpret) blieb der Großteil der
+Dateien unsichtbar. Beide sollen jetzt bis zu 5 Verzeichnisebenen tief
+absteigen.
+
+### Umsetzung
+
+- Neuer gemeinsamer Baustein `music_library.iter_files_recursive(folder,
+  extensions, max_depth=MAX_SCAN_DEPTH)` (`MAX_SCAN_DEPTH = 5`): läuft
+  per `os.walk()`, bricht den Abstieg per `dirnames[:] = []` ab, sobald
+  die Tiefe erreicht ist (kein unbegrenzter Walk, keine Nachfilterung
+  eines kompletten Baums). Liefert Pfade relativ zum Wurzelordner, nicht
+  Basenames — sonst würden gleichnamige Dateien aus unterschiedlichen
+  Unterordnern sich gegenseitig verdrängen bzw. beim Abspielen nicht mehr
+  auffindbar sein (`os.path.join(folder, ...)` in `start_music_track()`/
+  `pick_random_mp3()` braucht den vollen relativen Anteil).
+- `music_library.list_tracks()` nutzt den neuen Helper mit
+  `AUDIO_EXTENSIONS` (alle unterstützten Formate) statt `os.listdir()` +
+  Filter. `start_music_track()`/die Anzeige in `radiosabbelnich.py`
+  brauchten KEINE Änderung — die nutzten schon vorher
+  `os.path.join(music_folder, track["filepath"])` und
+  `os.path.basename(track["filepath"])`, beides funktioniert mit einem
+  Unterordner-Anteil in `filepath` unverändert korrekt.
+- `news_break.pick_random_mp3()` importiert `music_library` und nutzt
+  denselben Helper mit `(".mp3",)` (bewusst weiterhin NUR MP3 für die
+  Nachrichten-Pause, wie schon vorher — keine stillschweigende
+  Format-Erweiterung nebenbei, die niemand angefragt hat). Der
+  Dedup-Vergleich gegen `recent` in `radiosabbelnich.py` (verhindert
+  Wiederholung der letzten `RECENT_HISTORY_SIZE` Dateien) speichert
+  jetzt den zu `mp3_folder` RELATIVEN Pfad statt nur des Basenames
+  (`os.path.relpath(path, cfg.get("mp3_folder"))` in
+  `start_news_break_mp3()`) — sonst hätten zwei gleichnamige Dateien in
+  verschiedenen Unterordnern sich beim Dedup-Vergleich fälschlich
+  gegenseitig blockiert/nicht blockiert. Das im Web-Interface
+  angezeigte "Jetzt läuft"-Feld (`set_news_break()`) zeigt dadurch
+  seit dieser Änderung den relativen Pfad statt nur des Dateinamens —
+  bei einer flachen Sammlung (kein Unterordner) unverändert identisch
+  zum vorherigen Basename.
+
+### Bewusst NICHT gemacht
+
+- Keine Konfigurierbarkeit der Tiefe (fest auf 5) — nicht angefragt,
+  ein fester, ausreichend großzügiger Wert vermeidet zusätzliche
+  Settings-Felder für einen Rand­fall.
+- `music_scan.py` (Phase-1-Scanner, ohnehin schon unbegrenzt rekursiv
+  über den ganzen Baum) bewusst unangetastet — der hat das Tiefenlimit
+  nie gebraucht, betrifft nur die beiden nicht-DB-gestützten Ordner-Player.
+
+### Verifiziert
+
+- Testverzeichnis mit Dateien in Tiefe 0, 1 (`x/`) und 5
+  (`a/b/c/d/e/`) sowie einer bewusst zu tiefen Datei in Tiefe 6
+  (`a/b/c/d/e/f/`) angelegt: `music_library.list_tracks()` findet alle
+  drei bis Tiefe 5 (`top.mp3`, `x/song1.mp3`, `a/b/c/d/e/song5.mp3`),
+  die Tiefe-6-Datei bleibt korrekt ausgeschlossen.
+  `news_break.pick_random_mp3()` gegen dasselbe Verzeichnis liefert
+  ebenfalls einen der gefundenen Pfade (inkl. Tiefe 5) als vollen
+  absoluten Pfad.

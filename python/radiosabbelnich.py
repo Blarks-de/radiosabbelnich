@@ -972,7 +972,12 @@ def main():
         # deque.append() mutiert nur das bestehende Objekt, kein Rebinding
         # des Namens -> kein "nonlocal" nötig (anders als bei der früheren
         # einzelnen news_break_last_file-Variable, die hier reassigned wurde).
-        news_break_recent_files.append(os.path.basename(path))
+        # Seit der Unterordner-Rekursion (siehe music_library.py) relativ
+        # zu mp3_folder statt nur Basename -- sonst würden gleichnamige
+        # Dateien aus unterschiedlichen Unterordnern beim Dedup-Vergleich
+        # in news_break.pick_random_mp3() fälschlich als dieselbe Datei
+        # gelten.
+        news_break_recent_files.append(os.path.relpath(path, cfg.get("mp3_folder")))
         # Playout-Deque leeren/unprimed: eine evtl. noch gefüllte Deque vom
         # PAUSIERTEN Sender darf nicht mit MP3-Fenstern vermischt werden
         # (siehe push_and_drain()). Während der Pause wird ohnehin nicht

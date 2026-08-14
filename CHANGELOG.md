@@ -15,6 +15,11 @@ umbenannt. Ältere Commit-Nachrichten/Dateinamen (z.B. `radio_switch`,
 wider — hier einheitlich mit dem aktuellen Namen beschrieben, sofern
 nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 
+## 2026-08-14
+
+- Nachrichten-Pause-MP3-Ordner und Musik-Player durchsuchen jetzt auch
+  Unterordner, bis zu 5 Ebenen tief (vorher nur der Ordner selbst).
+
 ## 2026-08-13
 
 - `/musik` aufgeräumt: nur noch ein Play-Knopf (der native Browser-

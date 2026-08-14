@@ -394,7 +394,8 @@ einmaliger Cleanup-Block direkt nach dem Lesen von `state.mode` das
 rückgängig (Quelle stoppen, Puffer leeren), falls nötig.
 
 Der Musik-Tick selbst (Play/Stop/Zurück/Nächster über
-`music_library.list_tracks()`, nicht rekursiv, zyklische Playlist)
+`music_library.list_tracks()`, seit 2026-08-14 rekursiv bis zu
+`MAX_SCAN_DEPTH` (5) Unterordner-Ebenen, zyklische Playlist)
 schreibt Audio **direkt** über `write_audio()`, nicht über
 `push_and_drain()`/die Playout-Deque — es gibt im Musik-Modus nichts zu
 erkennen, ein Delay hätte keinen Zweck (anders als beim aktuell
@@ -419,13 +420,17 @@ Ordner-Pickers.
 ### Musik-Library-Scan (`music_scan.py`, Phase 1, seit 2026-08-12)
 
 Bewusst eine **eigene Datei**, getrennt von `music_library.py`: Letzteres
-ist der PLAYER (`list_tracks()`, ein Ordner, nicht rekursiv, für den
-Play/Stop-Button — bleibt unverändert), `music_scan.py` ist der SCANNER
-(ganzer Baum, ID3-Metadaten via mutagen, eigene SQLite-DB
-`music_library.db`). Beide teilen sich nur `AUDIO_EXTENSIONS` (Import
-aus `music_library.py`), damit eine spätere Formaterweiterung (FLAC/
-OGG/…, siehe README-Roadmap) an einer einzigen Stelle passiert statt in
-zwei Kopien der Filterliste.
+ist der PLAYER (`list_tracks()`, ein Ordner samt Unterordnern bis zu
+`MAX_SCAN_DEPTH` Ebenen, seit 2026-08-14, siehe eigener Abschnitt oben,
+für den Play/Stop-Button), `music_scan.py` ist der SCANNER (ganzer Baum
+UNBEGRENZT tief, ID3-Metadaten via mutagen, eigene SQLite-DB
+`music_library.db`). Beide teilen sich `AUDIO_EXTENSIONS` (Import aus
+`music_library.py`), damit eine spätere Formaterweiterung (FLAC/OGG/…,
+siehe README-Roadmap) an einer einzigen Stelle passiert statt in zwei
+Kopien der Filterliste — `MAX_SCAN_DEPTH`/`iter_files_recursive()`
+braucht `music_scan.py` dagegen NICHT (der scannt ohnehin unbegrenzt
+tief in die DB, das Tiefenlimit ist eine Eigenschaft der beiden
+nicht-DB-gestützten Ordner-Player, nicht des Scanners).
 
 Läuft **ausschließlich aus dem Webserver-Thread** heraus (`POST
 /api/library/scan` in `webui.py`, gleiches Hintergrund-Thread- +
@@ -519,8 +524,9 @@ verifiziert statt aus der mutagen-Doku übernommen:
 ### Musik-Library-Query-Layer (`music_query.py`, Phase 2, seit 2026-08-12)
 
 Dritte Datei im Musik-Library-Dreiklang: `music_library.py` (PLAYER,
-ein Ordner, nicht rekursiv), `music_scan.py` (SCANNER, ganzer Baum →
-DB), `music_query.py` (QUERY, DB → Trackliste). Bewusst KEIN echter
+ein Ordner, seit 2026-08-14 bis zu `MAX_SCAN_DEPTH` Ebenen rekursiv),
+`music_scan.py` (SCANNER, ganzer Baum unbegrenzt tief → DB),
+`music_query.py` (QUERY, DB → Trackliste). Bewusst KEIN echter
 Query-Parser (Beets nur als Inspiration, nicht als Vorbild für die
 Syntax) — es gibt genau zwei Filterarten (`query_by_artist()`/
 `query_by_genre()`, beide simples `LIKE '%wert%'`, ASCII-case-
@@ -1056,11 +1062,13 @@ Phase 2 (`music_query.py`, siehe eigener Abschnitt oben) für
 rock/klassik/Queen/Pavarotti funktionsfähig (Genre-/Artist-Teilstring-
 Match gegen `music_library.db`), schnell/langsam bleiben bewusst
 deaktiviert (fehlende BPM-Daten, Phase 3, siehe README-Roadmap). Der
-PLAYER selbst (`music_library.py`, `list_tracks()`) bleibt weiterhin
-nicht-rekursiv, unterstützt aber seit der Format-Erweiterung (siehe
-eigener Abschnitt oben) dieselben Formate wie der Scan, nicht mehr nur
-`.mp3` — beide Module bedienen weiterhin bewusst unterschiedliche
-Zwecke (ein Ordner vs. rekursiver Scan+DB), siehe eigener Abschnitt
+PLAYER selbst (`music_library.py`, `list_tracks()`) durchsucht seit
+2026-08-14 auch Unterordner (bis zu `MAX_SCAN_DEPTH`=5 Ebenen, siehe
+eigener Abschnitt oben — vorher nur der Ordner selbst), unterstützt
+seit der Format-Erweiterung (siehe eigener Abschnitt oben) außerdem
+dieselben Formate wie der Scan, nicht mehr nur `.mp3` — beide Module
+bedienen weiterhin bewusst unterschiedliche Zwecke (Ordner-Player mit
+Tiefenlimit vs. unbegrenzt rekursiver Scan+DB), siehe eigener Abschnitt
 oben. Die APE-Unterstützung (Format-Erweiterung, siehe oben) ist mangels
 Encoder im Image NICHT gegen eine echte `.ape`-Datei verifiziert — nur
 Playback (ffmpeg-Decoder vorhanden) und die Text-Tag-Extraktion sind

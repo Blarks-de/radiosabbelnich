@@ -307,9 +307,11 @@ class SwitcherState:
 
     def set_news_break(self, active: bool, file_name: str = None):
         """Vom Hauptloop aufgerufen, sobald eine Nachrichten-Pause beginnt
-        oder endet (siehe news_break.py). `file_name` (Basename der
-        gerade laufenden MP3) füttert das "Jetzt läuft"-Feld im
-        Web-Interface — dieselbe Anzeige, die sonst ICY-Metadaten zeigt."""
+        oder endet (siehe news_break.py). `file_name` (Pfad der gerade
+        laufenden MP3 relativ zu mp3_folder, seit der Unterordner-
+        Rekursion kein reiner Basename mehr) füttert das "Jetzt läuft"-
+        Feld im Web-Interface — dieselbe Anzeige, die sonst ICY-Metadaten
+        zeigt."""
         with self._lock:
             self._news_break_active = active
             self._news_break_file = file_name

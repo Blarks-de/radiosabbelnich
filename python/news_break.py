@@ -20,6 +20,8 @@ import os
 import random
 from datetime import datetime, timedelta
 
+import music_library
+
 log = logging.getLogger("newsbreak")
 
 # Wie viele zuletzt gespielte Dateien pick_random_mp3() bei der
@@ -67,31 +69,35 @@ def active_slot(cfg: dict, now: datetime = None) -> str | None:
 
 
 def pick_random_mp3(folder: str, recent=None) -> str | None:
-    """Liefert einen zufälligen Pfad zu einer .mp3-Datei aus `folder`.
+    """Liefert einen zufälligen Pfad zu einer .mp3-Datei aus `folder` —
+    seit 2026-08-14 auch aus dessen Unterordnern, bis zu
+    music_library.MAX_SCAN_DEPTH Ebenen tief (Nutzervorgabe, dieselbe
+    Tiefenbegrenzung wie beim Musik-Player, siehe dortiges Modul).
 
     None (mit Log-Warnung, nicht mehr) falls der Ordner nicht konfiguriert,
     nicht lesbar ist oder keine .mp3-Dateien enthält — Anforderung ist
     "Feature still überspringen, ins Log schreiben, normal weiterlaufen",
     kein Fehler, der den Hauptloop stören dürfte.
 
-    `recent` (Iterable der zuletzt gespielten Dateinamen, siehe
-    RECENT_HISTORY_SIZE) wird bei der Auswahl vermieden, sofern danach noch
-    mindestens eine Datei übrig bleibt. Enthält der Ordner insgesamt nicht
-    mehr Dateien als `recent` (z.B. nur 1-2 MP3s insgesamt), lässt der
-    Ausschluss nichts mehr übrig -- dann lieber eine Wiederholung als eine
-    fehlschlagende Nachrichten-Pause."""
+    `recent` (Iterable der zuletzt gespielten, zu `folder` RELATIVEN Pfade,
+    siehe RECENT_HISTORY_SIZE) wird bei der Auswahl vermieden, sofern
+    danach noch mindestens eine Datei übrig bleibt. Enthält der Ordner
+    insgesamt nicht mehr Dateien als `recent` (z.B. nur 1-2 MP3s
+    insgesamt), lässt der Ausschluss nichts mehr übrig -- dann lieber eine
+    Wiederholung als eine fehlschlagende Nachrichten-Pause."""
     if not folder:
         log.warning("⚠ Nachrichten-Pause aktiv, aber kein mp3_folder konfiguriert — übersprungen.")
         return None
     try:
-        entries = os.listdir(folder)
+        os.listdir(folder)  # nur zur Fehlerprüfung, siehe unten
     except OSError as e:
         log.warning("⚠ Nachrichten-Pause: Ordner %s nicht lesbar (%s) — übersprungen.", folder, e)
         return None
 
-    files = [f for f in entries if f.lower().endswith(".mp3")]
+    files = list(music_library.iter_files_recursive(folder, (".mp3",)))
     if not files:
-        log.warning("⚠ Nachrichten-Pause: keine .mp3-Dateien in %s — übersprungen.", folder)
+        log.warning("⚠ Nachrichten-Pause: keine .mp3-Dateien in %s (auch nicht in bis zu %d "
+                    "Unterordner-Ebenen) — übersprungen.", folder, music_library.MAX_SCAN_DEPTH)
         return None
 
     recent = recent or ()

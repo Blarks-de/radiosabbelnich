@@ -155,8 +155,10 @@ Senderliste auf der Config-Seite (`/config`) oder direkt per API:
   Der eigentliche Host-Ordner wird über `NEWS_MP3_FOLDER` in `.env` von
   außen reingemountet (siehe `docker-compose.yml`), typischerweise ein
   SMB-Mount — dafür braucht es einen Container-Neustart, kein Feld auf der
-  Config-Seite. Ordner fehlt/ist leer/nicht lesbar → Feature wird für
-  dieses Zeitfenster einfach übersprungen, mit Logeintrag, kein Fehler.
+  Config-Seite. Die Auswahl durchsucht seit 2026-08-14 auch Unterordner,
+  bis zu 5 Ebenen tief. Ordner fehlt/ist leer/enthält (auch in den
+  Unterordnern) keine MP3s/nicht lesbar → Feature wird für dieses
+  Zeitfenster einfach übersprungen, mit Logeintrag, kein Fehler.
   Unter dem Feld zeigt die Config-Seite zur Orientierung read-only den
   echten Host-Pfad an (aus `NEWS_MP3_FOLDER` durchgereicht) — der
   Container kennt ihn sonst grundsätzlich nicht, Docker übersetzt
@@ -216,9 +218,10 @@ Auf der eigenständigen Seite `/musik` ("🎵 Player"):
   Funktion, echte Filterung (Kategorien auf Metadaten/Tags wie BPM/Genre,
   Favoriten auf den Künstler-Tag) kommt erst mit dem Musik-Scan (Phase 1
   der Roadmap unten).
-- Ein großer Play/Stop-Button und Zurück/Nächster — spielt die MP3s im
-  konfigurierten Ordner **nicht rekursiv**, alphabetisch, endlos im
-  Kreis, bis Stop gedrückt wird. Seit 2026-08-13 ist dieser eine Button
+- Ein großer Play/Stop-Button und Zurück/Nächster — spielt die Musikdateien
+  im konfigurierten Ordner samt Unterordnern (seit 2026-08-14, bis zu
+  5 Ebenen tief), alphabetisch, endlos im Kreis, bis Stop gedrückt wird.
+  Seit 2026-08-13 ist dieser eine Button
   auch der einzige sichtbare Knopf fürs tatsächliche Zuhören: ein
   unsichtbares `<audio>`-Element (ohne eigene Bedienleiste) folgt
   automatisch dem Wiedergabestatus. Vorher gab es zusätzlich einen
@@ -610,7 +613,7 @@ Signaturprüfung über die Debug-Signierung hinaus (siehe oben).
 | `python/webui.py` | Eingebettetes Web-Interface (Player-Seite + Config-Seite) |
 | `python/logging_setup.py` | Zentrale Logging-Konfiguration (Konsole + rotierende Logdatei) |
 | `python/news_break.py` | Nachrichten-Pause: Zeitfenster-Logik + zufällige MP3-Auswahl |
-| `python/music_library.py` | Musiksammlung-Modus: Dateien eines Ordners auflisten (nicht rekursiv) |
+| `python/music_library.py` | Musiksammlung-Modus: Dateien eines Ordners auflisten (rekursiv, bis zu 5 Ebenen) |
 | `python/music_scan.py` | Musik-Library-Scan (Phase 1): rekursiver ID3-Scan in eigene SQLite-DB |
 | `python/folder_browse.py` | Gemeinsame Breadcrumb-Ordnerauswahl (News-Break-Pfad + Musiksammlung-Root) |
 | `python/stt_filter.py` | STT-Sprachfilter: Vosk/Whisper-Engines, austauschbar, Zusatzsignal für die Switch-Entscheidung |
@@ -798,9 +801,9 @@ scannen, taggen und nach Kategorien abspielbar machen.
 
 - ✅ **Umschaltbar per Toggle** (Radio-Modus vs. Player-Modus, STT/VAD im
   Musik-Modus komplett aus) **und ein minimaler Player** (Play/Stop/
-  Zurück/Nächster über einen konfigurierbaren Ordner, nicht rekursiv,
-  keine Kategorisierung) sind umgesetzt — siehe "Player-Modus
-  (Grundgerüst)" weiter oben.
+  Zurück/Nächster über einen konfigurierbaren Ordner, seit 2026-08-14
+  rekursiv bis zu 5 Unterordner-Ebenen tief, keine Kategorisierung) sind
+  umgesetzt — siehe "Player-Modus (Grundgerüst)" weiter oben.
 - ✅ **Format-Unterstützung erweitert** (seit 2026-08-12): Scan UND
   Playback laufen jetzt über MP3 hinaus auch für FLAC, OGG (Vorbis),
   M4A (MP4-Container), rohes ADTS-AAC, WAV und APE (Monkey's Audio,
@@ -1040,9 +1043,11 @@ on the config page (`/config`), or directly via the API:
   subfolders of `/app/news_mp3` instead of typing the path). The
   actual host folder is mounted in from outside via `NEWS_MP3_FOLDER`
   in `.env` (see `docker-compose.yml`), typically an SMB mount — that
-  needs a container restart, not a field on the config page. Folder
-  missing/empty/unreadable → the feature is simply skipped for that
-  time window, with a log entry, no error. Below the field, the config
+  needs a container restart, not a field on the config page. Since
+  2026-08-14 the picker also searches subfolders, up to 5 levels deep.
+  Folder missing/empty/no MP3s (including in subfolders)/unreadable →
+  the feature is simply skipped for that time window, with a log entry,
+  no error. Below the field, the config
   page shows the real host path read-only for reference (passed
   through from `NEWS_MP3_FOLDER`) — the container otherwise has no way
   to know it, Docker translates host→container path only once at
@@ -1101,9 +1106,10 @@ On the standalone `/musik` page ("🎵 Player"):
   function; real filtering (categories on metadata/tags like BPM/genre,
   favorites on the artist tag) arrives with the music scan (roadmap
   phase 1 below).
-- A big play/stop button plus back/next — plays the MP3s in the
-  configured folder **non-recursively**, alphabetically, looping
-  forever until stop is pressed. Since 2026-08-13 this single button is
+- A big play/stop button plus back/next — plays the music files in the
+  configured folder including subfolders (since 2026-08-14, up to
+  5 levels deep), alphabetically, looping forever until stop is pressed.
+  Since 2026-08-13 this single button is
   also the only visible control for actually listening: a hidden
   `<audio>` element (no control bar of its own) automatically follows
   the playback state. Before, there was also a native browser player
@@ -1482,7 +1488,7 @@ beyond the debug signing (see above).
 | `python/webui.py` | Embedded web interface (player page + config page) |
 | `python/logging_setup.py` | Central logging config (console + rotating log file) |
 | `python/news_break.py` | News break: time-window logic + random MP3 selection |
-| `python/music_library.py` | Music library mode: list a folder's files (non-recursive) |
+| `python/music_library.py` | Music library mode: list a folder's files (recursive, up to 5 levels) |
 | `python/music_scan.py` | Music library scan (phase 1): recursive ID3 scan into its own SQLite DB |
 | `python/folder_browse.py` | Shared breadcrumb folder picker (news break path + music library root) |
 | `python/stt_filter.py` | STT speech filter: interchangeable Vosk/Whisper engines, additional signal for the switch decision |
@@ -1664,8 +1670,9 @@ tag it, and make it playable by category.
 
 - ✅ **Switchable via toggle** (radio mode vs. player mode, STT/VAD fully
   off in music mode) **and a minimal player** (play/stop/back/next over
-  a configurable folder, non-recursive, no categorization) are
-  implemented — see "Player mode (foundation)" further up.
+  a configurable folder, recursive up to 5 subfolder levels since
+  2026-08-14, no categorization) are implemented — see "Player mode
+  (foundation)" further up.
 - ✅ **Expanded format support** (since 2026-08-12): scan AND playback
   now go beyond MP3 to FLAC, OGG (Vorbis), M4A (MP4 container), raw
   ADTS AAC, WAV, and APE (Monkey's Audio, text tags only — see below).
