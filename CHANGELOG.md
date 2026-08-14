@@ -17,6 +17,10 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 
 ## 2026-08-14
 
+- Fix: `/musik`-Play-Knopf warf `NotSupportedError`, wenn er geklickt
+  wurde, bevor der erste Status vom Server geladen war (Wettlauf mit
+  `player.src`) — alle Wiedergabe-Buttons sind jetzt bis dahin
+  deaktiviert.
 - `/musik`: bisher stillschweigend verschluckte Audio-Wiedergabefehler
   (Ladefehler, abgelehntes `play()`) werden jetzt im Action-Feld und in
   der Browser-Konsole angezeigt statt lautlos zu verschwinden — Fix aus

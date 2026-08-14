@@ -1970,26 +1970,32 @@ _MUSIC_PAGE_HTML = """<!doctype html>
 <div class="category-group">
   <div class="category-group-heading" data-i18n="music_categories_heading">Kategorien</div>
   <div class="category-row">
-    <button class="music-query-btn" data-query-type="tempo" data-query-value="fast">schnell</button>
-    <button class="music-query-btn" data-query-type="tempo" data-query-value="slow">langsam</button>
-    <button class="music-query-btn" data-query-type="genre" data-query-value="rock">rock</button>
-    <button class="music-query-btn" data-query-type="genre" data-query-value="klassik">klassik</button>
+    <button class="music-query-btn" data-query-type="tempo" data-query-value="fast" disabled>schnell</button>
+    <button class="music-query-btn" data-query-type="tempo" data-query-value="slow" disabled>langsam</button>
+    <button class="music-query-btn" data-query-type="genre" data-query-value="rock" disabled>rock</button>
+    <button class="music-query-btn" data-query-type="genre" data-query-value="klassik" disabled>klassik</button>
   </div>
 </div>
 <div class="category-group">
   <div class="category-group-heading" data-i18n="music_favorites_heading">Favoriten</div>
   <div class="category-row">
-    <button class="music-query-btn" data-query-type="artist" data-query-value="Queen">Queen</button>
-    <button class="music-query-btn" data-query-type="artist" data-query-value="Pavarotti">Pavarotti</button>
+    <button class="music-query-btn" data-query-type="artist" data-query-value="Queen" disabled>Queen</button>
+    <button class="music-query-btn" data-query-type="artist" data-query-value="Pavarotti" disabled>Pavarotti</button>
   </div>
 </div>
 
 <div class="play-stop-row">
-  <button id="btn-play-stop" title="Play" data-i18n-title="music_play_title">▶</button>
+  <!-- disabled per Default: verhindert einen Klick, bevor der erste
+       refresh() (siehe Skript unten) player.src gesetzt hat -- sonst
+       wirft player.play() ein NotSupportedError (leere Quelle), live
+       reproduziert bei einem schnellen Klick direkt nach der Navigation
+       von "/" auf "/musik" (siehe SESSION.md). applyStatus() aktiviert
+       den Knopf wieder, NACHDEM player.src gesetzt ist. -->
+  <button id="btn-play-stop" title="Play" data-i18n-title="music_play_title" disabled>▶</button>
 </div>
 <div class="zap-nav">
-  <button id="btn-prev-track" title="Vorheriger Track" data-i18n-title="music_prev_title">⏮</button>
-  <button id="btn-next-track" title="Nächster Track" data-i18n-title="music_next_title">⏭</button>
+  <button id="btn-prev-track" title="Vorheriger Track" data-i18n-title="music_prev_title" disabled>⏮</button>
+  <button id="btn-next-track" title="Nächster Track" data-i18n-title="music_next_title" disabled>⏭</button>
 </div>
 <div id="track-status"></div>
 <div id="action-msg"></div>

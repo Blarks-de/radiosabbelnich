@@ -7182,3 +7182,49 @@ verschluckten Fehlerpfade rund um `player.play()` sichtbar gemacht
 - Die eigentliche Diagnose (welcher Fehlername/Code tatsächlich
   auftritt) braucht den nächsten Retest durch den Nutzer in seinem
   echten Browser — noch offen.
+
+## 2026-08-14 (Fortsetzung 3) — Ursache gefunden: `NotSupportedError` — Play-Knopf war klickbar, bevor `player.src` gesetzt war
+
+Diagnose aus dem vorigen Eintrag zahlte sich aus: Nutzer meldete
+konkret `NotSupportedError` beim Klick auf den großen Play-Knopf —
+genau die Fehlermeldung, die `HTMLMediaElement.play()` wirft, wenn das
+`<audio>`-Element noch KEINE (unterstützte) Quelle hat. `player.src`
+wird aber erst gesetzt, wenn der erste `refresh()`-Aufruf (asynchroner
+`fetch('/api/status')`, im Skript ganz unten gestartet) zurückkommt —
+ein Wettlauf, den ein schneller Klick direkt nach der
+"/"→"/musik"-Navigation verlieren kann, besonders bei spürbarer
+Netzwerk-Latenz (Tailscale-VPN-Pfad statt localhost). Vorher waren
+weder der große Play-Knopf noch die Kategorie-/Favoriten-/Zurück-
+Weiter-Knöpfe standardmäßig deaktiviert -- klickbar, bevor überhaupt
+ein Status vom Server da war.
+
+### Umsetzung
+
+Alle Wiedergabe-auslösenden Buttons (`btn-play-stop`,
+`btn-prev-track`, `btn-next-track`, alle `.music-query-btn`) bekommen
+im HTML jetzt das `disabled`-Attribut per Default. Kein zusätzlicher
+JS-Code nötig, um sie wieder zu aktivieren: `applyStatus()` setzt
+`playBtn.disabled`/die anderen `.disabled`-Zuweisungen bei JEDEM
+Status-Update ohnehin schon (Zeilen unverändert) — und das passiert
+erst NACHDEM im selben Funktionsdurchlauf `player.src` gesetzt wurde
+(Code-Reihenfolge in `applyStatus()`), der Wettlauf ist damit
+strukturell ausgeschlossen statt nur unwahrscheinlicher gemacht.
+
+### Bewusst NICHT gemacht
+
+- Kein serverseitiges Vorab-Setzen von `player.src` direkt im HTML
+  (z.B. per Template-Platzhalter) als Alternative — hätte den Stream-
+  Scheme/Port (http vs. https, siehe Kommentar in `applyStatus()`)
+  clientseitig dupliziert bestimmen müssen, während die jetzige Lösung
+  mit der bestehenden Architektur (ein einziger Ort, der die Quelle
+  bestimmt) auskommt.
+
+### Verifiziert
+
+- `docker compose up -d --build radiosabbelnich`: sauberer Start.
+- `curl -sk https://localhost:5000/musik`: alle vier Play-Knopf-Typen
+  tragen jetzt `disabled` im ausgelieferten HTML.
+- Client-seitige Bestätigung (Knopf reagiert nach kurzer Verzögerung,
+  kein `NotSupportedError` mehr beim sofortigen Klick) noch vom Nutzer
+  zu bestätigen — dieselbe Einschränkung wie bei den vorigen beiden
+  Einträgen (kein echter Browser in dieser Session verfügbar).
