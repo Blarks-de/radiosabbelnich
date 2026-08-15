@@ -188,7 +188,11 @@ während der Pause bricht sie sofort ab (eigene Entscheidung schlägt
 Automatik, wie überall sonst in RadioSabbelNich auch). Während der Pause
 pausiert auch die automatische Sprache-Erkennung (VAD/Heuristik/
 Fingerprint) — die MP3 selbst enthält u.U. Sprache, das soll nicht als
-"Moderation" auf dem eigentlichen Sender fehlgedeutet werden.
+"Moderation" auf dem eigentlichen Sender fehlgedeutet werden. Auf der
+Radio-Startseite zeigt eine Tag-Anzeige (seit 2026-08-15, per mutagen,
+format-übergreifend) währenddessen Titel/Interpret/Album/Jahr der
+laufenden MP3 statt nur des Dateinamens — Details siehe "Player-Modus"
+unten (dieselbe Anzeige, gleiches Fallback-Verhalten).
 
 ## Player-Modus (Grundgerüst)
 
@@ -202,7 +206,13 @@ Bezeichnung im Web-Interface wurde vereinfacht). Im Player-Modus ist die
 komplette automatische Erkennung (VAD/Heuristik/STT/Fingerprint) aus,
 nicht nur pausiert — es läuft ausschließlich lokale Musik, nichts wird
 analysiert. Der Modus übersteht einen Container-Neustart (in
-`settings.json` gespeichert).
+`settings.json` gespeichert) — seit 2026-08-15 startet dabei außerdem
+**automatisch die Wiedergabe** (erster Track des konfigurierten Ordners),
+sowohl nach einem Neustart mit bereits gespeichertem Player-Modus als
+auch bei einem manuellen Wechsel Radio→Player. Vorher blieb die
+Wiedergabe in beiden Fällen inaktiv, bis manuell auf ▶ getippt wurde —
+der Modus selbst war zwar korrekt gemerkt, aber es kam kein Ton, bis
+jemand aktiv Play drückte.
 
 Auf der eigenständigen Seite `/musik` ("🎵 Player"):
 
@@ -230,6 +240,14 @@ Auf der eigenständigen Seite `/musik` ("🎵 Player"):
   nicht kannten und sich dadurch in die Quere kamen.
 - Kein Banner-Bild mehr auf dieser Seite (seit 2026-08-13, aufgeräumtere
   eigenständige Optik statt der Radio-Seiten-Elemente).
+- **Tag-Anzeige** (seit 2026-08-15): unter dem Dateinamen/Fortschritt
+  ("Track (i/total)") zeigt eine zweite/dritte Zeile die per mutagen
+  ausgelesenen Metadaten — "Interpret – Titel" und "Album (Jahr)",
+  format-übergreifend (MP3, FLAC, OGG, M4A/AAC, WAV, APE). Kein Titel-Tag
+  vorhanden → Dateiname als Fallback; fehlt Album/Jahr, entfällt die
+  zweite Zeile komplett statt Platzhaltern wie "Album: –". Dieselbe
+  Anzeige läuft auf der Radio-Startseite mit, sobald eine
+  Nachrichten-Pause-MP3 läuft (siehe "Nachrichten-Pause" oben).
 
 Der Musik-Ordner wird — wie der News-Break-MP3-Ordner — auf der
 Config-Seite gesetzt, per **Breadcrumb-Ordnerauswahl**: durch die
@@ -613,6 +631,7 @@ Signaturprüfung über die Debug-Signierung hinaus (siehe oben).
 | `python/webui.py` | Eingebettetes Web-Interface (Player-Seite + Config-Seite) |
 | `python/logging_setup.py` | Zentrale Logging-Konfiguration (Konsole + rotierende Logdatei) |
 | `python/news_break.py` | Nachrichten-Pause: Zeitfenster-Logik + zufällige MP3-Auswahl |
+| `python/audio_tags.py` | Format-übergreifende Tag-Anzeige (Titel/Interpret/Album/Jahr) via mutagen, geteilt zwischen News-Break/Musik-Player-Live-Anzeige und dem Musik-Scan |
 | `python/music_library.py` | Musiksammlung-Modus: Dateien eines Ordners auflisten (rekursiv, bis zu 5 Ebenen) |
 | `python/music_scan.py` | Musik-Library-Scan (Phase 1): rekursiver ID3-Scan in eigene SQLite-DB |
 | `python/folder_browse.py` | Gemeinsame Breadcrumb-Ordnerauswahl (News-Break-Pfad + Musiksammlung-Root) |
@@ -1078,7 +1097,10 @@ cancels it immediately (a manual decision beats automation, as
 everywhere else in RadioSabbelNich). During the break, automatic speech
 detection (VAD/heuristic/fingerprint) is also paused — the MP3 itself
 may well contain speech, and that shouldn't be misread as "presenting"
-on the actual station.
+on the actual station. On the radio home page, a tag display (since
+2026-08-15, via mutagen, format-agnostic) shows the playing MP3's
+title/artist/album/year instead of just the filename — see "Player
+mode" below for details (same display, same fallback behavior).
 
 ## Player mode (foundation)
 
@@ -1091,7 +1113,13 @@ feature was called "Music library" until 2026-08-13 — internally, in
 web interface label was simplified). In player mode, all automatic
 detection (VAD/heuristic/STT/fingerprint) is off, not just paused —
 only local music plays, nothing gets analyzed. The mode survives a
-container restart (stored in `settings.json`).
+container restart (stored in `settings.json`) — since 2026-08-15 it also
+**automatically starts playback** (first track of the configured
+folder), both after a restart with the player mode already saved and on
+a manual switch from radio to player. Before, playback stayed inactive
+in both cases until ▶ was tapped manually — the mode itself was
+correctly remembered, but no sound played until someone actively hit
+play.
 
 On the standalone `/musik` page ("🎵 Player"):
 
@@ -1118,6 +1146,14 @@ On the standalone `/musik` page ("🎵 Player"):
   other's way.
 - No more banner image on this page (since 2026-08-13, a tidier,
   standalone look instead of the radio page's elements).
+- **Tag display** (since 2026-08-15): below the filename/progress line
+  ("Track (i/total)"), a second/third line shows the metadata read via
+  mutagen — "Artist – Title" and "Album (Year)", format-agnostic (MP3,
+  FLAC, OGG, M4A/AAC, WAV, APE). No title tag → falls back to the
+  filename; missing album/year → that second line is omitted entirely
+  instead of a placeholder like "Album: –". The same display runs on the
+  radio home page whenever a news-break MP3 is playing (see "News break"
+  above).
 
 The music folder is set on the config page, just like the news break MP3
 folder, via a **breadcrumb folder picker**: click through the
@@ -1488,6 +1524,7 @@ beyond the debug signing (see above).
 | `python/webui.py` | Embedded web interface (player page + config page) |
 | `python/logging_setup.py` | Central logging config (console + rotating log file) |
 | `python/news_break.py` | News break: time-window logic + random MP3 selection |
+| `python/audio_tags.py` | Format-agnostic tag display (title/artist/album/year) via mutagen, shared between the news-break/music-player live display and the music scan |
 | `python/music_library.py` | Music library mode: list a folder's files (recursive, up to 5 levels) |
 | `python/music_scan.py` | Music library scan (phase 1): recursive ID3 scan into its own SQLite DB |
 | `python/folder_browse.py` | Shared breadcrumb folder picker (news break path + music library root) |

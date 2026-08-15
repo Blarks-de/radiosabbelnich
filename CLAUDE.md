@@ -393,6 +393,30 @@ Startpfad ist weniger fehleranfällig als zwei), stattdessen macht ein
 einmaliger Cleanup-Block direkt nach dem Lesen von `state.mode` das
 rückgängig (Quelle stoppen, Puffer leeren), falls nötig.
 
+**Autoresume beim (Wieder-)Eintritt in den Player-Modus (seit
+2026-08-15)**: bis dahin blieb die Wiedergabe nach diesem Cleanup-Block
+UND nach einem manuellen Radio→Musik-Wechsel bewusst inaktiv, bis
+jemand aktiv auf ▶ tippte — der Modus selbst war zwar über
+`current_mode` korrekt persistiert, aber ohne einen laufenden Track kam
+aus dem Icecast-Mount schlicht kein Ton. Das wurde von einem Nutzer als
+"Modus wird nicht gemerkt" wahrgenommen (er hatte fälschlich
+clientseitiges `localStorage` vermutet — es gibt im ganzen Repo KEINE
+einzige Verwendung davon, der Modus lief schon vorher zu 100%
+serverseitig über `/api/status`). Behoben durch einen gemeinsamen
+`start_folder_playback()`-Helper (löst `state.music_library_path` auf,
+listet Tracks, startet Track 0), aufgerufen an drei Stellen: dem
+Programmstart-Cleanup-Block oben, dem manuellen Play-Klick
+(`music_index < 0`-Zweig, ersetzt dort den vorher inline stehenden
+Code) und direkt nach `state.set_mode("music")` im Radio→Musik-
+Moduswechsel-Zweig. Kein Persistieren der exakten Track-Position —
+jeder (Wieder-)Eintritt beginnt alphabetisch beim ersten Track
+(Nutzervorgabe: "ersten Track bzw. weiterlaufend", nicht "exakte letzte
+Stelle merken"). Wichtig für das Verständnis: das serverseitige
+Schreiben in den Icecast-Mount ist von der Browser-Autoplay-Problematik
+(siehe SESSION.md, mehrere Einträge um den `/musik`-Play-Knopf) komplett
+unabhängig — die betrifft nur das lokale `<audio>`-Element im Browser
+des Hörers, nicht die Erzeugung des Streams durch den Hauptloop.
+
 Der Musik-Tick selbst (Play/Stop/Zurück/Nächster über
 `music_library.list_tracks()`, seit 2026-08-14 rekursiv bis zu
 `MAX_SCAN_DEPTH` (5) Unterordner-Ebenen, zyklische Playlist)
@@ -496,10 +520,12 @@ verifiziert statt aus der mutagen-Doku übernommen:
 - **WAV wird von mutagen NICHT "easy"-gewrappt** (kein `EasyWAVE`) —
   `WAVE(pfad).get("artist")` liefert IMMER `None`, obwohl ID3-Tags
   durchaus vorhanden sein können (unter rohen Frame-IDs wie `TPE1`).
-  `_RawId3EasyAdapter` in `music_scan.py` liest deshalb für WAV (und
-  AAC, siehe unten) die ID3-Frames direkt und bietet dieselbe
-  `.get(key)`-Schnittstelle wie mutagens "easy"-Wrapper, damit
-  `scan_library()`s Aufrufcode unverändert bleibt.
+  `audio_tags.RawId3EasyAdapter` (seit 2026-08-15 dorthin verschoben,
+  siehe eigener Abschnitt unten — vorher `_RawId3EasyAdapter`, privat
+  in `music_scan.py`) liest deshalb für WAV (und AAC, siehe unten) die
+  ID3-Frames direkt und bietet dieselbe `.get(key)`-Schnittstelle wie
+  mutagens "easy"-Wrapper, damit `scan_library()`s Aufrufcode
+  unverändert bleibt.
 - **Rohes ADTS-AAC ist der überraschendste Fund, kein aus der Doku
   ableitbares Detail**: mutagens `mutagen.File()`-Auto-Erkennung
   erkennt eine getaggte `.aac`-Datei FÄLSCHLICH als MP3 (wegen des
@@ -508,9 +534,9 @@ verifiziert statt aus der mutagen-Doku übernommen:
   Die Exception ist zwar eine `MutagenError`-Unterklasse (dadurch kein
   Absturz des gesamten Scans), aber OHNE Sonderbehandlung wäre JEDE
   getaggte `.aac`-Datei bei JEDEM Scan als Fehler markiert und NIE
-  eingelesen worden. `_open_tags()` umgeht deshalb für `.aac` bewusst
-  die Auto-Erkennung komplett: Tags direkt über `ID3()`, Stream-Info
-  (BPM-Duration-Hint) separat über `AAC().info`.
+  eingelesen worden. `audio_tags.open_tags()` umgeht deshalb für `.aac`
+  bewusst die Auto-Erkennung komplett: Tags direkt über `ID3()`,
+  Stream-Info (BPM-Duration-Hint) separat über `AAC().info`.
 - **APE (Monkey's Audio) hat kein standardisiertes Cover-Feld** — nur
   eine informelle, nicht durchgängig unterstützte Tool-Konvention ohne
   mutagen-API dafür. Cover-Extraktion wird für APE deshalb bewusst
@@ -520,6 +546,68 @@ verifiziert statt aus der mutagen-Doku übernommen:
   Monkey's-Audio-DECODER (Playback also unproblematisch), aber keinen
   Encoder, um eine Testdatei zu erzeugen — offener Punkt, bis eine
   echte `.ape`-Datei zum Testen verfügbar ist.
+
+### Tag-Anzeige während der Wiedergabe (`audio_tags.py`, seit 2026-08-15)
+
+Die format-übergreifende Tag-Abstraktion aus dem Abschnitt oben
+(`RawId3EasyAdapter`, `open_tags()`, `extract_year()`) wurde aus
+`music_scan.py` in ein eigenes, gemeinsames Modul `audio_tags.py`
+verschoben (öffentliche statt private Namen) — Grund: die **Live-Anzeige
+während der Wiedergabe** (News-Break-MP3 UND Musik-Player-Track) braucht
+exakt dieselbe, an echten Testdateien verifizierte Format-Weiche, und
+sollte sie nicht ein zweites Mal implementieren. `music_scan.py`
+importiert diese drei Namen jetzt von dort, statt sie selbst zu
+definieren — seine `_read_cover_bytes()`-Cover-Extraktion bleibt bewusst
+dort (die Live-Anzeige zeigt (noch) kein Cover, siehe README-Roadmap).
+
+`audio_tags.read_display_tags(full_path)` liefert
+`{"title", "artist", "album", "year"}` mit der Fallback-Kaskade
+(Nutzervorgabe): fehlt der Titel-Tag, wird der Dateiname (ohne Endung)
+als `title` verwendet; fehlende `artist`/`album`/`year` bleiben `None`
+statt eines Platzhalterwerts — die Darstellung (Zeile 2 komplett
+weglassen, wenn Album UND Jahr fehlen) entscheidet erst der Aufrufer
+(`_build_status()` in `webui.py`). Nicht lesbare/nicht unterstützte
+Dateien liefern denselben Dateiname-Fallback statt einer Exception —
+gleiches Toleranz-Muster wie `news_break.pick_random_mp3()`/
+`music_library.list_tracks()`.
+
+**Aufruf passiert im Hauptloop, einmal PRO TRACK-START** (`start_music_track()`/
+`start_news_break_mp3()` in `radiosabbelnich.py`), NICHT im ~1s-
+Analysetakt — ein einzelner mutagen-Tag-Read ist dafür unproblematisch
+teuer, anders als z.B. ein Klassifikations-Fenster. Für Musik-Player-
+Tracks passiert das bewusst EINHEITLICH für Ordner- UND Query-Modus
+(Phase 2, `music_query.py`) — also ein frischer Read von der Datei
+statt der in `music_query.py`s `_rows_to_tracks()` bereits vorhandenen
+artist/title/album-DB-Werte (die dortige `_SELECT` hat ohnehin kein
+`year`). Ein einziger Codepfad statt zweier divergierender (DB-Snapshot
+vs. Live-Read) war hier wichtiger als die gesparten paar Millisekunden.
+
+`SwitcherState` bekommt dafür zwei neue, rein additive Felder:
+`news_break_tags` (via `set_news_break(..., tags=...)`) und
+`music_status()["tags"]` (via `set_music_status(..., tags=...)`) — beide
+unabhängig vom bestehenden `file_name`/`label`, kein Ersatz. In
+`_build_status()` speist ein neues Response-Feld `now_playing_tags`
+(Dict oder `null`) NUR die zwei lokalen Wiedergabefälle (News-Break
+aktiv bzw. Musik-Modus mit laufendem Track) — der bestehende
+ICY-Metadaten-Pfad für Live-Radio (`_fetch_now_playing()`) bleibt
+unverändert und liefert weiterhin nur `now_playing`, kein
+`now_playing_tags` (Feature war laut Vorgabe auf News-Break/Musik-
+Player beschränkt). In diesen zwei Zweigen wird das alte
+`now_playing`-Feld bewusst auf `None` gesetzt, statt parallel zum neuen
+`now_playing_tags` denselben Dateinamen ein zweites Mal zu transportieren.
+
+Frontend (beide Templates in `webui.py`, `_PAGE_HTML`/
+`_MUSIC_PAGE_HTML`): je zwei zusätzliche `<div>`s
+(`#now-playing-title`/`#now-playing-subtitle` bzw. `#track-title`/
+`#track-subtitle`), die per `:empty { display: none; }` automatisch
+verschwinden, wenn eine Zeile leer bleibt — dasselbe bereits etablierte
+Idiom wie beim vorhandenen `#now-playing`. Auf der Startseite wurde
+dafür `#current`/`#now-playing` in einen gemeinsamen
+`#now-playing-box`-Wrapper mit EINER Rundung/Hintergrundfarbe gezogen
+(`overflow: hidden`), statt jedem der bis zu vier Elemente einzeln
+Eck-Radien zuzuweisen — bei dynamisch ein-/ausgeblendeten mittleren
+Zeilen hätte eine Radius-pro-Element-Lösung sichtbare Notch-Artefakte
+am Übergang zwischen zwei sichtbaren, gleichfarbigen Boxen erzeugt.
 
 ### Musik-Library-Query-Layer (`music_query.py`, Phase 2, seit 2026-08-12)
 
@@ -1081,4 +1169,21 @@ bewusste Grenze, kein Bug. Die Preflight-/Start-Checks in
 `MUSIC_LIBRARY_FOLDER` bislang NICHT wie `NEWS_MP3_FOLDER` (Existenz/
 Lesbarkeit/Dateianzahl) — aus Zeitgründen zurückgestellt, das Feature
 funktioniert auch ohne, ein leerer/fehlender Ordner liefert beim
-Play-Klick nur keine Tracks statt eines Fehlers.
+Play-Klick nur keine Tracks statt eines Fehlers. Seit 2026-08-15 startet
+der Player-Modus beim (Wieder-)Eintritt (Prozessstart mit persistiertem
+`current_mode="music"` bzw. manueller Radio→Musik-Wechsel) automatisch
+den ersten Track des konfigurierten Ordners (`start_folder_playback()`,
+siehe eigener Abschnitt oben) — vorher blieb die Wiedergabe in beiden
+Fällen inaktiv, bis manuell auf ▶ getippt wurde, was fälschlich als
+"Modus wird nicht gemerkt" wahrgenommen wurde. Kein Persistieren der
+exakten Track-Position (Nutzervorgabe) — jeder Wiedereinstieg beginnt
+alphabetisch beim ersten Track.
+
+Die Tag-Anzeige während der Wiedergabe (`audio_tags.py`, siehe eigener
+Abschnitt oben, seit 2026-08-15) deckt bewusst nur Titel/Interpret/
+Album/Jahr ab, kein Cover und keine Restzeit/Dauer — beides als
+Nice-to-have vorgeschlagen, aber zurückgestellt: Cover bräuchte einen
+neuen Endpoint samt On-the-fly-Extraktion für Dateien außerhalb der
+gescannten `music_library.db` (News-Break-Ordner wird nie gescannt),
+Restzeit bräuchte zusätzlich einen tickenden Client-Timer, nicht nur
+den rohen `mutagen`-Dauerwert.

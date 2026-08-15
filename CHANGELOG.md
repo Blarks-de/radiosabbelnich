@@ -15,6 +15,19 @@ umbenannt. Ältere Commit-Nachrichten/Dateinamen (z.B. `radio_switch`,
 wider — hier einheitlich mit dem aktuellen Namen beschrieben, sofern
 nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 
+## 2026-08-15
+
+- Neu: Tag-Anzeige (Titel & Interpret / Album & Jahr) beim Abspielen
+  einer News-Break-MP3 oder eines Musik-Player-Tracks, format-
+  übergreifend via mutagen (MP3, FLAC, OGG, M4A/AAC, WAV, APE) —
+  gemeinsamer Baustein `audio_tags.py`, kein Titel-Tag → Dateiname als
+  Fallback, fehlendes Album/Jahr → Zeile entfällt statt Platzhalter.
+- Fix: Player-Modus startete nach einem Container-Neustart mit
+  gespeichertem Modus (bzw. nach einem manuellen Wechsel Radio→Player)
+  keine Wiedergabe automatisch — Modus war zwar korrekt gemerkt, aber es
+  kam kein Ton, bis manuell auf ▶ getippt wurde. Startet jetzt
+  automatisch den ersten Track des konfigurierten Ordners.
+
 ## 2026-08-14
 
 - Fix: `/musik`-Play-Knopf warf `NotSupportedError`, wenn er geklickt

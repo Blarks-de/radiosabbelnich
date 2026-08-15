@@ -48,6 +48,7 @@ import time
 import wave
 import numpy as np
 
+import audio_tags
 import fingerprint
 import logging_setup
 import music_library
@@ -990,7 +991,8 @@ def main():
         # alte Verbindung (den pausierten Sender bzw. die vorige MP3)
         # selbst auf.
         source.start(path, realtime=True)
-        state.set_news_break(True, news_break_recent_files[-1])
+        state.set_news_break(True, news_break_recent_files[-1],
+                              tags=audio_tags.read_display_tags(path))
         quick_forward()
         return True
 
@@ -1011,16 +1013,21 @@ def main():
     music_tracks = []
     music_index = -1          # -1 = idle, nichts läuft
 
-    if current_mode == "music":
-        # current_mode kann direkt beim Start schon "music" sein (aus
-        # settings.json persistiert, siehe settings_store.py) -- der
-        # Hauptloop ist oben (source.start()/sync_prebuffer()) aber IMMER
-        # erst als Radio hochgefahren, unabhängig vom Modus. Das hier
-        # macht das einmalig rückgängig, statt die Transition-Logik im
-        # Loop unten zu duplizieren oder den Radio-Start oben bedingt zu
-        # machen (der bleibt bewusst unverändert/unbedingt, siehe CLAUDE.md
-        # "Ein Prozess, zwei Akteure" -- ein einzelner Startpfad ist
-        # weniger fehleranfällig als zwei).
+    # needs_music_autostart: current_mode kann direkt beim Start schon
+    # "music" sein (aus settings.json persistiert, siehe settings_store.py)
+    # -- der eigentliche Autostart-Aufruf (start_folder_playback() unten)
+    # braucht aber erst dessen def, deshalb hier nur gemerkt, nicht
+    # sofort ausgeführt (siehe Aufruf direkt nach den drei def-Blöcken
+    # unten).
+    needs_music_autostart = current_mode == "music"
+    if needs_music_autostart:
+        # Der Hauptloop ist oben (source.start()/sync_prebuffer()) aber
+        # IMMER erst als Radio hochgefahren, unabhängig vom Modus. Das
+        # hier macht das einmalig rückgängig, statt die Transition-Logik
+        # im Loop unten zu duplizieren oder den Radio-Start oben bedingt
+        # zu machen (der bleibt bewusst unverändert/unbedingt, siehe
+        # CLAUDE.md "Ein Prozess, zwei Akteure" -- ein einzelner Startpfad
+        # ist weniger fehleranfällig als zwei).
         source.stop()
         for pb in prebuffer.values():
             pb.stop()
@@ -1034,8 +1041,37 @@ def main():
         source.start(path, realtime=True)  # realtime=True PFLICHT, siehe oben
         music_index = idx
         file_name = os.path.basename(track["filepath"])
-        state.set_music_status(True, file_name, idx, len(music_tracks), label=track.get("label"))
+        state.set_music_status(True, file_name, idx, len(music_tracks), label=track.get("label"),
+                                tags=audio_tags.read_display_tags(path))
         log.info("🎵 Spiele: %s (%d/%d)", track.get("label") or file_name, idx + 1, len(music_tracks))
+
+    def start_folder_playback() -> bool:
+        """Löst den konfigurierten Musiksammlung-Ordner auf, listet dessen
+        Tracks und startet den ersten -- gemeinsamer Baustein für den
+        manuellen Play-Klick UND das automatische (Fort-)Starten der
+        Wiedergabe beim (Wieder-)Eintritt in den Player-Modus (Prozess-
+        start mit persistiertem current_mode="music" bzw. manueller
+        Wechsel Radio→Musik, siehe die beiden Aufrufstellen unten/im
+        Moduswechsel-Zweig). Kein Persistieren von Track/Position -- jeder
+        (Wieder-)Eintritt beginnt alphabetisch beim ersten Track, die
+        Playlist läuft danach wie gewohnt zyklisch weiter (Nutzervorgabe:
+        "ersten Track bzw. weiterlaufend", nicht die exakte letzte
+        Position). Gibt False zurück (mit Log-Warnung, kein Fehler), falls
+        der Ordner leer/nicht konfiguriert/nicht lesbar ist -- gleiches
+        Toleranz-Muster wie music_library.list_tracks() selbst."""
+        nonlocal music_folder, music_tracks
+        music_folder = state.music_library_path
+        tracks = music_library.list_tracks(music_folder)
+        if not tracks:
+            log.warning("🎵 Musiksammlung: keine Wiedergabe gestartet "
+                        "(Ordner leer/nicht lesbar: %s).", music_folder)
+            return False
+        music_tracks = [{"filepath": f, "label": None} for f in tracks]
+        start_music_track(0)
+        return True
+
+    if needs_music_autostart:
+        start_folder_playback()
 
     def stop_music_track():
         nonlocal music_index
@@ -1181,6 +1217,10 @@ def main():
                     state.set_mode("music")
                     current_mode = "music"
                     log.info("🎵 Wechsel in Musiksammlung-Modus (Radio pausiert).")
+                    # Autoresume (Nutzervorgabe): Wiedergabe startet sofort,
+                    # nicht erst nach einem manuellen Play-Klick -- siehe
+                    # start_folder_playback()-Docstring oben.
+                    start_folder_playback()
                 else:
                     stop_music_track()
                     active_now = state.active_stations
@@ -1234,14 +1274,7 @@ def main():
                         # selbst mit einer Fehlermeldung und schickt in dem
                         # Fall gar keinen Request (siehe dort).
                     elif music_index < 0:
-                        music_folder = state.music_library_path
-                        tracks = music_library.list_tracks(music_folder)
-                        if not tracks:
-                            log.warning("🎵 Musiksammlung: keine Wiedergabe gestartet "
-                                        "(Ordner leer/nicht lesbar: %s).", music_folder)
-                        else:
-                            music_tracks = [{"filepath": f, "label": None} for f in tracks]
-                            start_music_track(0)
+                        start_folder_playback()
                     continue
                 skip_dir = state.pop_music_skip_request()
                 if skip_dir and music_index >= 0 and music_tracks:

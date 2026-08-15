@@ -162,6 +162,7 @@ class SwitcherState:
         self._news_break_cfg = dict(settings_store.DEFAULTS["news_break"])
         self._news_break_active = False
         self._news_break_file = None
+        self._news_break_tags = None  # {"title","artist","album","year"}, siehe set_news_break()
         # Radio/Musiksammlung-Modus (siehe radiosabbelnich.py main(),
         # Modus-Fork ganz oben) -- request/pop wie beim manuellen
         # Senderwechsel, weil player-kritisch (nur der Hauptloop darf
@@ -175,6 +176,7 @@ class SwitcherState:
         self._music_index = -1
         self._music_total = 0
         self._music_label = None  # "Artist – Titel" bei Query-Wiedergabe (Phase 2), sonst None
+        self._music_tags = None  # {"title","artist","album","year"}, siehe set_music_status()
         self._music_play_requested = False
         self._music_play_tracks = None  # None=Ordner-Modus, sonst bereits aufgelöste Query-Trackliste
         self._music_stop_requested = False
@@ -305,16 +307,19 @@ class SwitcherState:
                     return s
             return None
 
-    def set_news_break(self, active: bool, file_name: str = None):
+    def set_news_break(self, active: bool, file_name: str = None, tags: dict = None):
         """Vom Hauptloop aufgerufen, sobald eine Nachrichten-Pause beginnt
         oder endet (siehe news_break.py). `file_name` (Pfad der gerade
         laufenden MP3 relativ zu mp3_folder, seit der Unterordner-
         Rekursion kein reiner Basename mehr) füttert das "Jetzt läuft"-
         Feld im Web-Interface — dieselbe Anzeige, die sonst ICY-Metadaten
-        zeigt."""
+        zeigt. `tags` (seit 2026-08-15, siehe audio_tags.read_display_tags())
+        füttert die Zwei-Zeilen-Tag-Anzeige (Titel & Interpret / Album &
+        Jahr) in _build_status()."""
         with self._lock:
             self._news_break_active = active
             self._news_break_file = file_name
+            self._news_break_tags = tags
             if active:
                 self._current_id = NEWS_BREAK_STATION_ID
             self._version += 1
@@ -329,6 +334,11 @@ class SwitcherState:
     def news_break_file(self):
         with self._lock:
             return self._news_break_file
+
+    @property
+    def news_break_tags(self):
+        with self._lock:
+            return self._news_break_tags
 
     def request_switch(self, station_id):
         with self._lock:
@@ -715,20 +725,26 @@ class SwitcherState:
             return direction
 
     def set_music_status(self, active: bool, file_name: str = None,
-                          index: int = -1, total: int = 0, label: str = None):
+                          index: int = -1, total: int = 0, label: str = None,
+                          tags: dict = None):
         """Vom Hauptloop nach jedem Track-Start/-Stop aufgerufen -- fürs
         "Jetzt läuft"-Feld und den Play/Stop-Button-Zustand auf der
         Musiksammlung-Seite (und den now_playing-Override in
         _build_status(), analog zum News-Break-Muster). label:
         "Artist – Titel" bei Query-Wiedergabe (Phase 2, aus
         music_query.py) -- None im Ordner-Modus (Grundgerüst), das
-        Frontend zeigt dann weiterhin nur den Dateinamen."""
+        Frontend zeigt dann weiterhin nur den Dateinamen. tags (seit
+        2026-08-15, siehe audio_tags.read_display_tags()): füttert die
+        Zwei-Zeilen-Tag-Anzeige, unabhängig von label -- wird für BEIDE
+        Modi (Ordner UND Query) einheitlich frisch von der Datei gelesen,
+        siehe start_music_track() in radiosabbelnich.py."""
         with self._lock:
             self._music_active = active
             self._music_file = file_name
             self._music_index = index
             self._music_total = total
             self._music_label = label
+            self._music_tags = tags
             self._version += 1
             self._version_cond.notify_all()
 
@@ -741,6 +757,7 @@ class SwitcherState:
                 "label": self._music_label,
                 "index": self._music_index,
                 "total": self._music_total,
+                "tags": self._music_tags,
             }
 
 
@@ -1094,24 +1111,28 @@ def _build_status(state: SwitcherState, icecast_cfg: dict, host_paths: dict = No
     )
     music = state.music_status
     if state.news_break_active:
-        # Kein Grund, hier ICY-Metadaten vom pausierten Sender abzufragen —
-        # der Dateiname der laufenden MP3 ist die korrekte Antwort auf
-        # "was läuft gerade", nicht dessen letzter Titel.
-        now_playing = f"🎵 {state.news_break_file}" if state.news_break_file else None
+        # now_playing (Dateiname-Fallback) tritt seit der Tag-Anzeige
+        # (2026-08-15) hinter now_playing_tags zurück -- kein Grund mehr,
+        # hier ICY-Metadaten vom pausierten Sender abzufragen ODER den
+        # reinen Dateinamen separat anzuzeigen, wenn now_playing_tags
+        # (mit Dateiname-Fallback in title, siehe audio_tags.py) dieselbe
+        # Information bereits abdeckt.
+        now_playing = None
+        now_playing_tags = state.news_break_tags
     elif state.mode == "music" and music["active"]:
         # Gleiches Muster wie News-Break direkt oben, nur für den
         # persistenten Musiksammlung-Modus statt eines einzelnen
-        # pausierten Radiosenders. label (Artist – Titel) hat Vorrang vor
-        # dem reinen Dateinamen, wenn aus einer Query-Wiedergabe bekannt
-        # (Phase 2, siehe music_query.py) -- sonst wie bisher der Dateiname.
-        display = music["label"] or music["file"]
-        now_playing = f"🎵 {display}" if display else None
+        # pausierten Radiosenders.
+        now_playing = None
+        now_playing_tags = music["tags"]
     else:
         now_playing = _fetch_now_playing(current) if current else None
+        now_playing_tags = None
     return {
         "current_id": current["id"] if current else None,
         "current_name": current["name"] if current else None,
         "now_playing": now_playing,
+        "now_playing_tags": now_playing_tags,
         "stations": [{"id": s["id"], "name": s["name"]} for s in active],
         "listeners": listeners,
         "stream_port": icecast_cfg.get("public_port"),
@@ -1157,15 +1178,16 @@ _PAGE_HTML = """<!doctype html>
   }
   h1 { font-size: 1.4rem; margin-bottom: 1rem; }
   h2 { font-size: 1.05rem; margin-top: 2rem; }
+  #now-playing-box {
+    border-radius: .5rem; background: #eee; overflow: hidden; padding-bottom: .6rem;
+  }
   #current {
-    font-size: 1.1rem; padding: .75rem 1rem; border-radius: .5rem .5rem 0 0;
-    background: #eee;
+    font-size: 1.1rem; padding: .75rem 1rem 0 1rem;
   }
-  #now-playing {
-    font-size: .9rem; padding: 0 1rem .6rem 1rem; border-radius: 0 0 .5rem .5rem;
-    background: #eee; color: #555; min-height: 1.1em;
+  #now-playing, #now-playing-title, #now-playing-subtitle {
+    font-size: .9rem; padding: .15rem 1rem 0 1rem; color: #555; min-height: 1.1em;
   }
-  #now-playing:empty { display: none; }
+  #now-playing:empty, #now-playing-title:empty, #now-playing-subtitle:empty { display: none; }
   #address-row { display: flex; gap: .6rem; margin-top: .6rem; }
   #address-row button {
     flex: 1; padding: .5rem; font-size: 1.3rem; border-radius: .5rem;
@@ -1176,8 +1198,8 @@ _PAGE_HTML = """<!doctype html>
   #address-row button:active { opacity: .7; }
   #address-row .icon-label { font-size: .65rem; color: #888; }
   @media (prefers-color-scheme: dark) {
-    #current, #now-playing { background: #2a2a2a; }
-    #now-playing { color: #aaa; }
+    #now-playing-box { background: #2a2a2a; }
+    #now-playing, #now-playing-title, #now-playing-subtitle { color: #aaa; }
   }
   .modal-overlay {
     position: fixed; inset: 0; background: #0009; display: flex;
@@ -1307,8 +1329,16 @@ _PAGE_HTML = """<!doctype html>
   <button id="mode-music-btn" data-i18n="mode_music_btn">🎵 Player</button>
 </div>
 <h1 class="sr-only">RadioSabbelNich</h1>
-<div id="current" data-i18n="common_loading">Lade …</div>
-<div id="now-playing"></div>
+<div id="now-playing-box">
+  <div id="current" data-i18n="common_loading">Lade …</div>
+  <div id="now-playing"></div>
+  <!-- Zwei-Zeilen-Tag-Anzeige (News-Break/Musik-Player, seit 2026-08-15,
+       siehe audio_tags.py): Titel & Interpret / Album & Jahr. Bleiben
+       für Live-Radio (ICY-now_playing-Fall) immer leer -> per :empty
+       ausgeblendet, siehe CSS oben. -->
+  <div id="now-playing-title"></div>
+  <div id="now-playing-subtitle"></div>
+</div>
 <div class="zap-nav">
   <button id="btn-prev-station" title="Vorheriger Sender" data-i18n="idx_prev_btn" data-i18n-title="idx_prev_title">⏮ Zurück</button>
   <button id="btn-next-station" title="Nächster Sender" data-i18n="idx_next_btn" data-i18n-title="idx_next_title">Weiter ⏭</button>
@@ -1485,6 +1515,19 @@ function applyStatus(data) {
     : (data.current_name ? t('idx_current_playing', {name: data.current_name}) : t('idx_no_station_active'));
   document.getElementById('now-playing').textContent = data.now_playing ? '🎵 ' + data.now_playing : '';
 
+  // Zwei-Zeilen-Tag-Anzeige (News-Break/Musik-Player, seit 2026-08-15) --
+  // now_playing_tags ist nur in diesen beiden Fällen gesetzt (siehe
+  // _build_status() in webui.py), sonst null -> beide Zeilen bleiben leer
+  // und werden per :empty ausgeblendet (siehe CSS). Zeile 1: "Interpret –
+  // Titel" (nur Titel, falls kein Interpret-Tag). Zeile 2: "Album (Jahr)",
+  // nur Album bzw. nur Jahr falls jeweils das andere fehlt, komplett leer
+  // falls beide fehlen -- keine Platzhalter wie "Album: – / Jahr: –".
+  const npTags = data.now_playing_tags;
+  document.getElementById('now-playing-title').textContent =
+    npTags ? (npTags.artist ? `${npTags.artist} – ${npTags.title}` : npTags.title) : '';
+  document.getElementById('now-playing-subtitle').textContent =
+    npTags ? (npTags.album && npTags.year ? `${npTags.album} (${npTags.year})` : (npTags.album || (npTags.year ? String(npTags.year) : ''))) : '';
+
   const filterBtn = document.getElementById('btn-filter-toggle');
   if (data.filter_enabled === false) {
     filterBtn.textContent = t('idx_filter_enable_btn');
@@ -1653,6 +1696,8 @@ function applyOptimistic(station) {
   if (!station) return;
   document.getElementById('current').textContent = t('idx_current_playing', {name: station.name});
   document.getElementById('now-playing').textContent = '';
+  document.getElementById('now-playing-title').textContent = '';
+  document.getElementById('now-playing-subtitle').textContent = '';
   if (lastStatus) lastStatus.current_id = station.id;
   document.querySelectorAll('#stations li button').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.id === station.id);
@@ -1937,6 +1982,10 @@ _MUSIC_PAGE_HTML = """<!doctype html>
   .zap-nav button:active { background: #1abc9c33; }
   .zap-nav button:disabled { opacity: .5; cursor: default; }
   #track-status { text-align: center; font-size: .9rem; color: #888; margin-top: 1rem; min-height: 1.2em; }
+  #track-title { text-align: center; font-size: 1rem; font-weight: 600; margin-top: .3rem; min-height: 1.2em; }
+  #track-title:empty { display: none; }
+  #track-subtitle { text-align: center; font-size: .85rem; color: #888; min-height: 1.1em; }
+  #track-subtitle:empty { display: none; }
   #action-msg { font-size: .85rem; margin-top: .4rem; min-height: 1.2em; color: #888; text-align: center; }
   a.config-link { display: inline-block; margin-top: 1.5rem; font-size: .9rem; }
 </style>
@@ -1998,6 +2047,11 @@ _MUSIC_PAGE_HTML = """<!doctype html>
   <button id="btn-next-track" title="Nächster Track" data-i18n-title="music_next_title" disabled>⏭</button>
 </div>
 <div id="track-status"></div>
+<!-- Zwei-Zeilen-Tag-Anzeige (seit 2026-08-15, siehe audio_tags.py):
+     Titel & Interpret / Album & Jahr, format-übergreifend via mutagen.
+     Bleibt leer -> per :empty ausgeblendet, wenn nichts läuft. -->
+<div id="track-title"></div>
+<div id="track-subtitle"></div>
 <div id="action-msg"></div>
 
 <a class="config-link" href="/">← <span data-i18n="music_back_link">zurück zum Radio-Player</span></a>
@@ -2095,7 +2149,7 @@ function applyStatus(data) {
   document.getElementById('root-path').textContent =
     data.music_library_host_path || data.music_library_path || t('common_unknown');
 
-  const m = data.music || {active: false, file: null, label: null, index: -1, total: 0};
+  const m = data.music || {active: false, file: null, label: null, index: -1, total: 0, tags: null};
   musicActive = !!m.active;
 
   // Einziger sichtbarer Play/Pause-Knopf ist der große Button unten --
@@ -2137,6 +2191,16 @@ function applyStatus(data) {
   } else {
     statusEl.textContent = t('music_idle');
   }
+
+  // Zwei-Zeilen-Tag-Anzeige (seit 2026-08-15) -- m.tags ist nur gesetzt,
+  // solange ein Track läuft (siehe set_music_status() in webui.py),
+  // sonst null -> beide Zeilen leer, per :empty ausgeblendet. Gleiche
+  // Formatierung wie auf "/" (dort ausführlich begründet).
+  const tags = musicActive ? m.tags : null;
+  document.getElementById('track-title').textContent =
+    tags ? (tags.artist ? `${tags.artist} – ${tags.title}` : tags.title) : '';
+  document.getElementById('track-subtitle').textContent =
+    tags ? (tags.album && tags.year ? `${tags.album} (${tags.year})` : (tags.album || (tags.year ? String(tags.year) : ''))) : '';
 }
 
 // redirectTo: die Radio-Sender-Steuerung lebt nur auf "/", nicht hier --

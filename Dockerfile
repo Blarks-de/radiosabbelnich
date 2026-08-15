@@ -62,6 +62,7 @@ COPY python/settings_store.py .
 COPY python/station_import.py .
 COPY python/logging_setup.py .
 COPY python/news_break.py .
+COPY python/audio_tags.py .
 COPY python/music_library.py .
 COPY python/music_bpm.py .
 COPY python/music_query.py .

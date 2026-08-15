@@ -65,7 +65,7 @@ Testdateien verifiziert, nicht nur aus der mutagen-Doku übernommen:
 - WAV wird von mutagen NICHT easy-gewrappt (kein EasyWAVE) -- ein rohes
   `WAVE(pfad).get("artist")` liefert IMMER None, auch wenn ID3-Tags
   vorhanden sind (die Datei trägt sie unter rohen Frame-IDs wie "TPE1").
-  _RawId3EasyAdapter unten liest deshalb die Frames direkt.
+  `audio_tags.RawId3EasyAdapter` liest deshalb die Frames direkt.
 - Rohes ADTS-AAC (NICHT der MP4-Container M4A) ist der überraschendste
   Fund: mutagen.File()s Auto-Erkennung erkennt eine getaggte .aac-Datei
   fälschlich als MP3 (weil ein ID3v2-Header vorhanden ist) und crasht
@@ -73,9 +73,13 @@ Testdateien verifiziert, nicht nur aus der mutagen-Doku übernommen:
   die Exception ist zwar eine MutagenError-Unterklasse und wird
   dadurch nicht zum Absturz des gesamten Scans, aber OHNE Sonderbehandlung
   würde JEDE getaggte .aac-Datei bei JEDEM Scan als "Fehler" markiert
-  und nie eingelesen. `_open_tags()` unten umgeht deshalb für .aac
+  und nie eingelesen. `audio_tags.open_tags()` umgeht deshalb für .aac
   bewusst die Auto-Erkennung: Tags direkt über `ID3()`, Stream-Info
-  (für den BPM-Duration-Hint) separat über `AAC().info`.
+  (für den BPM-Duration-Hint) separat über `AAC().info`. Seit 2026-08-15
+  liegt diese Format-Weiche (WAV/.aac-Sonderfälle, `extract_year()`) in
+  `audio_tags.py` -- geteilt mit der Live-Tag-Anzeige während der
+  Wiedergabe (News-Break/Musik-Player, siehe dortiges Moduldoc und
+  CLAUDE.md), statt hier dupliziert zu sein.
 - APE (Monkey's Audio) hat KEIN standardisiertes Cover-Art-Feld (nur
   eine informelle, nicht durchgängig unterstützte Tool-Konvention ohne
   mutagen-API dafür) -- Cover-Extraktion wird für APE bewusst NICHT
@@ -93,9 +97,7 @@ import os
 import sqlite3
 import time
 
-import mutagen
 from mutagen import MutagenError
-from mutagen.aac import AAC
 from mutagen.flac import FLAC, Picture
 from mutagen.id3 import ID3, ID3NoHeaderError
 from mutagen.mp4 import MP4, MP4Cover
@@ -103,6 +105,7 @@ from mutagen.oggvorbis import OggVorbis
 from mutagen.wave import WAVE
 
 import music_bpm
+from audio_tags import extract_year, open_tags
 from music_library import AUDIO_EXTENSIONS
 
 log = logging.getLogger("musicscan")
@@ -142,59 +145,6 @@ def _init_schema(conn: sqlite3.Connection):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tracks_genre ON tracks(genre)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tracks_bpm ON tracks(bpm)")
     conn.commit()
-
-
-def _extract_year(easy_tags) -> int | None:
-    """easyid3 liefert das Datum (falls vorhanden) als 'YYYY' oder
-    'YYYY-MM-DD' im 'date'-Feld -- nur die ersten 4 Ziffern interessieren."""
-    values = easy_tags.get("date") if easy_tags else None
-    if not values:
-        return None
-    raw = str(values[0])[:4]
-    return int(raw) if raw.isdigit() else None
-
-
-# easy-Key -> ID3-Frame-ID, für _RawId3EasyAdapter unten (WAV/.aac, siehe
-# Moduldoc) -- deckt exakt die Felder ab, die scan_library() tatsächlich
-# ausliest (artist/title/album/genre/date), keine vollständige ID3-Map.
-_EASY_KEY_TO_ID3_FRAME = {"artist": "TPE1", "title": "TIT2", "album": "TALB",
-                          "genre": "TCON", "date": "TDRC"}
-
-
-class _RawId3EasyAdapter:
-    """Bietet dieselbe .get(key) -> list|None -Schnittstelle wie mutagens
-    "easy"-Wrapper (EasyID3/EasyMP3/EasyMP4/...), für die zwei Formate, bei
-    denen mutagen.File(pfad, easy=True) das NICHT von sich aus liefert --
-    siehe Moduldoc, Abschnitte zu WAV und rohem ADTS-AAC. Liest die
-    Standard-Textframes direkt aus einem mutagen.id3.ID3-Objekt (oder
-    liefert für jeden Key None, falls gar keine ID3-Tags vorhanden sind)."""
-
-    def __init__(self, id3_tags, info=None):
-        self._tags = id3_tags
-        self.info = info
-
-    def get(self, key):
-        if self._tags is None:
-            return None
-        frame = self._tags.get(_EASY_KEY_TO_ID3_FRAME.get(key))
-        return list(frame.text) if frame is not None else None
-
-
-def _open_tags(full_path: str, ext: str):
-    """Liefert ein Objekt mit derselben .get(key)/.info-Schnittstelle wie
-    mutagen.File(pfad, easy=True) -- für die meisten Formate ist das
-    tatsächlich mutagen.File() selbst, für .wav und .aac (siehe Moduldoc)
-    wird bewusst ein anderer Lesepfad genommen."""
-    if ext == ".aac":
-        try:
-            id3_tags = ID3(full_path)
-        except ID3NoHeaderError:
-            id3_tags = None
-        return _RawId3EasyAdapter(id3_tags, AAC(full_path).info)
-    if ext == ".wav":
-        wav = WAVE(full_path)
-        return _RawId3EasyAdapter(wav.tags, wav.info)
-    return mutagen.File(full_path, easy=True)
 
 
 def _read_cover_bytes(full_path: str, ext: str):
@@ -326,14 +276,14 @@ def scan_library(root: str, db_path: str = MUSIC_LIBRARY_DB_FILE,
 
         ext = os.path.splitext(rel_path)[1].lower()
         try:
-            easy = _open_tags(full_path, ext)
+            easy = open_tags(full_path, ext)
             if easy is None:
                 raise MutagenError(f"kein unterstütztes Audioformat ({rel_path})")
             artist = (easy.get("artist") or [None])[0]
             album = (easy.get("album") or [None])[0]
             title = (easy.get("title") or [None])[0] or os.path.splitext(os.path.basename(rel_path))[0]
             genre = (easy.get("genre") or [None])[0]
-            year = _extract_year(easy)
+            year = extract_year(easy)
             cover_path = _extract_cover(full_path, rel_path, covers_dir, ext)
         except (MutagenError, OSError) as e:
             log.warning("⚠ Musik-Scan: Metadaten von %s nicht lesbar (%s) — übersprungen.", rel_path, e)

@@ -7228,3 +7228,140 @@ strukturell ausgeschlossen statt nur unwahrscheinlicher gemacht.
   kein `NotSupportedError` mehr beim sofortigen Klick) noch vom Nutzer
   zu bestätigen — dieselbe Einschränkung wie bei den vorigen beiden
   Einträgen (kein echter Browser in dieser Session verfügbar).
+
+## 2026-08-15 — Tag-Anzeige beim Abspielen (News-Break/Musik-Player) + Player-Modus-Autoresume
+
+Nutzeranfrage, zwei Punkte:
+
+1. Beim Abspielen einer News-Break-MP3 oder eines Musik-Library-Tracks
+   sollte die Web-UI Titel/Interpret/Album/Jahr anzeigen (per mutagen),
+   format-übergreifend (MP3/FLAC/OGG/M4A-AAC/WAV/APE), mit einer
+   Fallback-Kaskade (kein Titel → Dateiname, fehlendes Album/Jahr →
+   Zeile weglassen statt Platzhalter).
+2. Beobachtung: Seite frisch geöffnet, Player-Modus war noch aktiv, aber
+   es kam kein Ton — erst ein Wechsel zu Radio brachte wieder Ton.
+   Vermutung des Nutzers: der Modus werde nur clientseitig
+   (Browser/localStorage) gemerkt, nicht serverseitig.
+
+### Diagnose zu Punkt 2 (vor der Umsetzung)
+
+Recherche ergab: im gesamten Repo gibt es KEINE einzige Verwendung von
+`localStorage`/`sessionStorage`. `current_mode` wird bereits vollständig
+serverseitig in `settings.json` persistiert und über
+`SwitcherState._mode`/`state.mode` in jede `/api/status`-Antwort
+geschrieben; sowohl `/` als auch `/musik` lesen den Modus ausschließlich
+aus dieser Antwort. Server-seitiges "Merken" war also bereits
+vollständig vorhanden — kein Bug. Die tatsächliche Ursache: im
+Player-Modus wurde nach einem Neustart/Moduswechsel NIE automatisch ein
+Track gestartet (bewusste Grundgerüst-Entscheidung von 2026-08-11) — die
+Seite zeigte korrekt "Bereit — auf ▶ tippen", aber es floss tatsächlich
+kein Audio durch den Icecast-Mount, bis aktiv auf Play getippt wurde.
+Rückfrage an den Nutzer (drei Optionen: automatisch starten / nur
+Hinweistext verdeutlichen / exakte Position merken) ergab: automatisch
+starten (erster Track bzw. weiterlaufend, keine exakte Positions-
+Persistierung).
+
+### Umsetzung Teil 1 — `audio_tags.py`
+
+Neues, gemeinsames Modul: verschiebt die bereits in `music_scan.py`
+bestehende, an echten Testdateien verifizierte Format-Abstraktion
+(`_RawId3EasyAdapter`/`_open_tags()`/`_extract_year()`, siehe
+SESSION.md-Eintrag zur Format-Erweiterung 2026-08-12) dorthin, umbenannt
+zu öffentlichen Namen (`RawId3EasyAdapter`/`open_tags()`/
+`extract_year()`). `music_scan.py` importiert diese drei Namen jetzt von
+dort statt sie selbst zu definieren — Cover-Extraktion
+(`_read_cover_bytes()`) bleibt bewusst in `music_scan.py`, die
+Live-Anzeige zeigt (noch) kein Cover.
+
+Neue Funktion `read_display_tags(full_path)` liefert `{"title", "artist",
+"album", "year"}` mit der geforderten Fallback-Kaskade. Wiring:
+
+- `start_news_break_mp3()` (`radiosabbelnich.py`): `tags=` an
+  `state.set_news_break(...)` übergeben.
+- `start_music_track()` (`radiosabbelnich.py`): `tags=` an
+  `state.set_music_status(...)` übergeben — bewusst EINHEITLICH für
+  Ordner- UND Query-Modus (Phase 2), also immer ein frischer Read von
+  der Datei statt der in `music_query.py` bereits vorhandenen DB-Felder
+  (die kein `year` selektieren) — ein Codepfad statt zweier
+  divergierender.
+
+`SwitcherState` bekommt zwei rein additive Felder (`news_break_tags`,
+`music_status()["tags"]`). `_build_status()` liefert ein neues Feld
+`now_playing_tags` (nur für News-Break/Musik-Modus befüllt, sonst
+`null`) — das alte `now_playing`-Feld wird in diesen zwei Zweigen auf
+`None` gesetzt (ersetzt inhaltlich, keine doppelte Anzeige), der
+ICY-Metadaten-Pfad für Live-Radio bleibt unverändert.
+
+Frontend (`/` und `/musik`): je zwei neue `<div>`s
+(`#now-playing-title`/`#now-playing-subtitle` bzw. `#track-title`/
+`#track-subtitle`) mit `:empty { display: none; }` — dasselbe Idiom wie
+das bestehende `#now-playing`. Auf der Startseite wurden `#current`/
+`#now-playing` dafür in einen gemeinsamen `#now-playing-box`-Wrapper mit
+EINER Rundung/Hintergrundfarbe gezogen (`overflow: hidden`) statt jedes
+der bis zu vier Elemente einzeln zu runden — bei dynamisch
+ein-/ausgeblendeten mittleren Zeilen hätte eine Radius-pro-Element-
+Lösung sichtbare Notch-Artefakte erzeugt.
+
+### Umsetzung Teil 2 — Player-Modus-Autoresume
+
+Gemeinsamer Helper `start_folder_playback()` in `radiosabbelnich.py`
+(löst `state.music_library_path` auf, listet Tracks, startet Track 0) —
+ersetzt den vorher inline stehenden Code im manuellen Play-Klick-Zweig
+und wird zusätzlich an zwei neuen Stellen aufgerufen: dem
+Programmstart-Cleanup-Block (`current_mode` bereits `"music"` aus
+`settings.json`) und direkt nach `state.set_mode("music")` im
+Radio→Musik-Moduswechsel-Zweig. Da der Cleanup-Block vor den
+`def start_music_track()`/`start_folder_playback()`-Definitionen im
+Quelltext steht, wird dort nur ein Flag (`needs_music_autostart`)
+gemerkt und der eigentliche Aufruf direkt nach den `def`s nachgeholt.
+Kein Persistieren der exakten Track-Position (Nutzervorgabe).
+
+### Bewusst NICHT gemacht
+
+- Kein Restzeit-/Dauer-Feld (mutagen liefert `.info.length` im Grunde
+  kostenlos mit, aber eine TICKENDE Restzeit bräuchte zusätzlich einen
+  Client-Timer) — als Nice-to-have im Plan vermerkt, nicht umgesetzt.
+- Keine Cover-Art-Anzeige — bräuchte einen neuen Endpoint samt
+  On-the-fly-Extraktion für Dateien außerhalb der gescannten
+  `music_library.db` (News-Break-Ordner wird nie gescannt), deutlich
+  größerer Schnitt, als separater Folgepunkt vermerkt.
+- Keine Änderung an `music_query.py`s `_SELECT` (fehlendes `year` dort
+  bleibt ungenutzt) — durch den einheitlichen Live-Read in
+  `start_music_track()` nicht mehr nötig.
+- Kein Persistieren der exakten Player-Track-Position über einen
+  Neustart hinweg (dritte Option der Nutzer-Rückfrage) — bewusst
+  abgelehnt zugunsten der einfacheren "ersten Track"-Variante.
+
+### Verifiziert
+
+- `docker compose up -d --build radiosabbelnich`: sauberer Start, keine
+  Import-Fehler durch `audio_tags.py`, `_check_i18n_coverage()`
+  unauffällig.
+- Live gegen die echte laufende Instanz (zum Testzeitpunkt lief zufällig
+  gerade eine Nachrichten-Pause): `GET /api/status` lieferte
+  `now_playing_tags` mit korrektem Titel/Interpret/Album/Jahr
+  ("Over the Hills and Far Away" / "Gary Moore" / "Wild Frontier" /
+  1987) einer echten getaggten MP3 aus dem News-Break-Ordner.
+- `POST /api/mode {"mode":"music"}`: Log zeigt sofort
+  "🎵 Wechsel in Musiksammlung-Modus" gefolgt von "🎵 Spiele: 01 Falling,
+  Catching.mp3 (1/12)" ohne jeden weiteren Klick; `GET /api/status`
+  direkt danach bestätigt `music.active: true` samt korrekten Tags
+  (Agnes Obel — Falling, Catching / Philharmonics / 2011).
+- `docker compose restart radiosabbelnich` bei persistiertem
+  `current_mode: "music"`: `GET /api/status` unmittelbar nach dem Start
+  zeigt bereits `music.active: true`, Track 1/12 läuft — der
+  gemeldete Bug (Stille nach Neustart im Player-Modus) reproduziert
+  sich nicht mehr.
+- Beide injizierten `<script>`-Blöcke (`/` und `/musik`) mit
+  `node --check` auf Syntaxfehler geprüft — sauber.
+- Zurück auf `radio`-Modus geschaltet, um den laufenden Nutzer-Betrieb
+  nicht in einem Test-Zustand zu hinterlassen; `git diff` bestätigt,
+  dass `current_mode` in `data/settings.json` dadurch unverändert bei
+  `"radio"` liegt (andere, bereits vor dieser Session lokal geänderte
+  Felder wie `music_library.path`/`news_break.mp3_folder` stammen
+  nachweislich aus einer früheren, eigenen Nutzer-Session und wurden
+  hier nicht angefasst).
+- Nicht gegen eine echte `.ape`-Datei verifiziert (gleiche Einschränkung
+  wie beim ursprünglichen APE-Support, siehe SESSION.md 2026-08-12) —
+  Cover-Ausschluss für APE war ohnehin unverändert, Text-Tags laufen
+  über denselben "easy"-Pfad wie zuvor.
