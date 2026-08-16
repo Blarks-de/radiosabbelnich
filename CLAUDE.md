@@ -4,7 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 RadioSabbelNich hört mehrere Internetradio-Sender mit, schaltet bei Sprache
 (Moderation/Werbung/Jingles) automatisch weiter und strahlt das Ergebnis per
-Icecast neu aus. Überblick und Feature-Beschreibung: `README.md`.
+Icecast neu aus. Überblick und Feature-Beschreibung: `README.md`. Kompakte,
+grafische Architektur-Gesamtübersicht (Diagramme pro Subsystem): `ARCHITECTURE.md`
+— die Details/Begründungen im Abschnitt "Architektur" unten bleiben trotzdem
+die Quelle der Wahrheit beim Bearbeiten dieses Codes und müssen bei
+architektur-relevanten Änderungen weiter hier UND in `ARCHITECTURE.md`
+nachgezogen werden.
 
 ## Android-Prototyp (separates Projekt)
 

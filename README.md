@@ -620,6 +620,8 @@ Signaturprüfung über die Debug-Signierung hinaus (siehe oben).
 
 ## Architektur
 
+Grafische Gesamtübersicht mit Diagrammen pro Subsystem: `ARCHITECTURE.md`.
+
 | Datei | Zweck |
 |---|---|
 | `python/radiosabbelnich.py` | Hauptprozess: Stream holen, klassifizieren, umschalten, Icecast-Output |

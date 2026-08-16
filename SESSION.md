@@ -7365,3 +7365,52 @@ Kein Persistieren der exakten Track-Position (Nutzervorgabe).
   wie beim ursprünglichen APE-Support, siehe SESSION.md 2026-08-12) —
   Cover-Ausschluss für APE war ohnehin unverändert, Text-Tags laufen
   über denselben "easy"-Pfad wie zuvor.
+
+## 2026-08-16 — Neues `ARCHITECTURE.md`: konzentrierte, grafische Architektur-Gesamtübersicht
+
+Nutzer fragte, ob es schon Doku auf Architekturlevel gibt (ja, verteilt
+in `CLAUDE.md`s "Architektur"-Abschnitt) und bat darum, diese
+Informationen in einer eigenen `ARCHITECTURE.md` zu bündeln — inklusive
+grafischer Übersicht.
+
+### Umsetzung
+
+- Neue Datei `ARCHITECTURE.md` am Repo-Root: destilliert (nicht
+  verbatim kopiert) den "Architektur"-Abschnitt aus `CLAUDE.md` in ein
+  eigenständiges, menschenlesbares Dokument mit acht Mermaid-Diagrammen
+  (Prozess-/Thread-Gesamtbild, Audio-Pfad, Prebuffering/Playout-Delay,
+  Radio/Musik-Fork, Musik-Library-Baukasten, STT-Sprachfilter-Datenfluss,
+  Docker Host-/Container-Layout) plus knappen Fließtext-Abschnitten zu
+  Watchdog, i18n, TLS/HTTPS und Sicherheitsmodell.
+- Bewusst KEIN Ersatz für `CLAUDE.md`: dort bleiben die vollen,
+  hart erarbeiteten Begründungen ("warum X nachweislich nicht
+  funktioniert hat") als Quelle der Wahrheit für Codeänderungen stehen
+  — `ARCHITECTURE.md` ist der schnelle grafische Einstieg, `CLAUDE.md`
+  die Referenz beim tatsächlichen Bearbeiten. Cross-Links in beide
+  Richtungen ergänzt: `CLAUDE.md`-Intro verweist auf `ARCHITECTURE.md`
+  (mit Hinweis, dass architektur-relevante Änderungen künftig in BEIDEN
+  Dateien nachgezogen werden müssen), `README.md`s "Architektur"-Abschnitt
+  verweist ebenfalls dorthin.
+- Mermaid gewählt statt ASCII-Art, weil sowohl Forgejo (`origin`-Remote)
+  als auch GitHub (`github`-Remote, siehe Memory) Mermaid-Codeblöcke in
+  Markdown nativ rendern.
+
+### Bewusst NICHT gemacht
+
+- Kein Kürzen/Entfernen des "Architektur"-Abschnitts in `CLAUDE.md` —
+  Duplikat-Risiko zwischen beiden Dateien wird bewusst in Kauf genommen
+  (Cross-Link statt Single-Source), weil `CLAUDE.md`s Detailtiefe für
+  künftige Codeänderungen unverzichtbar ist und ein Wegkürzen genau die
+  in `CLAUDE.md` selbst verbotene Praxis wäre ("harte Begründungen nicht
+  wegkürzen").
+
+### Verifiziert
+
+- Alle acht Mermaid-Blöcke visuell auf Syntaxfehler durchgesehen
+  (Knoten-Labels konsequent in Anführungszeichen wegen Sonderzeichen wie
+  `/`, `()`, Zeilenumbrüchen via `<br/>`).
+- Datei-/Modulnamen und Datenfluss-Beschreibungen in den Diagrammen
+  gegen den aktuellen "Architektur"-Abschnitt in `CLAUDE.md` sowie die
+  Datei-Tabelle in `README.md` abgeglichen (u.a. Musik-Library-Vierklang
+  `music_library.py`/`music_scan.py`/`music_query.py`/`music_bpm.py`,
+  Bind-Mount-Layout `data/`↔`/app/`).
