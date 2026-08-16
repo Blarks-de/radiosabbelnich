@@ -8,17 +8,22 @@ und Messwerte hinter den einzelnen Punkten stehen in `SESSION.md`
 (Docker) bzw. `android-app/SESSION.md` (Android); dies hier ist die
 verdichtete Übersicht.
 
-## 2026-08-16
-
-- Neu: `ARCHITECTURE.md` — grafische Architektur-Gesamtübersicht mit
-  Mermaid-Diagrammen, verlinkt aus `CLAUDE.md`/`README.md`.
-
 **Namenshistorie**: das Projekt hieß ursprünglich *RadioZapper*, wurde am
 2026-08-08 zu *KeinSabbelRadio* und am 2026-08-09 zu *RadioSabbelNich*
 umbenannt. Ältere Commit-Nachrichten/Dateinamen (z.B. `radio_switch`,
 `check-radiozapper.sh`) spiegeln den jeweils zur Zeit gültigen Namen
 wider — hier einheitlich mit dem aktuellen Namen beschrieben, sofern
 nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
+
+## 2026-08-16
+
+- Doku: Architekturwissen konsolidiert — `ARCHITECTURE.md` ist jetzt die
+  alleinige, vollständige Quelle (Diagramme + Begründungen), `CLAUDE.md`s
+  vorherige "Architektur"/"Docker-Besonderheiten"/"Bekannte offene
+  Punkte"-Abschnitte sind auf Kurzverweise dorthin geschrumpft (1194 →
+  174 Zeilen), keine Doppelpflege mehr nötig.
+- Neu: `ARCHITECTURE.md` — grafische Architektur-Gesamtübersicht mit
+  Mermaid-Diagrammen, verlinkt aus `CLAUDE.md`/`README.md`.
 
 ## 2026-08-15
 

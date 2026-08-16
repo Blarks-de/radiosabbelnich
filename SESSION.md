@@ -7414,3 +7414,70 @@ grafischer Übersicht.
   Datei-Tabelle in `README.md` abgeglichen (u.a. Musik-Library-Vierklang
   `music_library.py`/`music_scan.py`/`music_query.py`/`music_bpm.py`,
   Bind-Mount-Layout `data/`↔`/app/`).
+
+## 2026-08-16 (Fortsetzung) — Architektur-Doku konsolidiert: `ARCHITECTURE.md` wird alleinige Quelle, `CLAUDE.md` schrumpft auf Verweise
+
+Nutzer bestätigte, dass die neue `ARCHITECTURE.md` gut aussieht, bat aber
+darum, die Architekturinfos in den anderen Doku-Dateien aufzuräumen, damit
+Pflege nicht mehr an mehreren Stellen nötig ist — Ziel: hierarchische
+Dokumentation statt Doppelung.
+
+### Umsetzung
+
+- `ARCHITECTURE.md` deutlich erweitert (von acht knappen Abschnitten auf
+  eine vollständige Übernahme des Inhalts, der vorher in `CLAUDE.md`s
+  "Architektur"/"Docker-Besonderheiten"/"Bekannte offene Punkte"-
+  Abschnitten stand): neu ergänzt u.a. Fingerprinting, Logging,
+  Sender-Import, ein eigener Nachrichten-Pause-Abschnitt (inkl. neuem
+  Mermaid-Diagramm für den Slot-Lebenszyklus), die Format-Erweiterung-
+  Gotchas (WAV ohne Easy-Wrapper, AAC-Fehlerkennung durch mutagen,
+  APE ohne Cover-Feld), Duplikat-Erkennung, Musik-BPM (aubio/numpy-Patch),
+  die vollständige STT-Mehrsprachigkeit inkl. Kalibrierungs-Wizard und
+  Engine-Asymmetrie, die i18n-Regex-Lookbehind-Falle, sowie die
+  TLS/icegen-Gruppen-Bug-Details. Neuer Abschnitt "Offene Punkte" am Ende
+  übernimmt vollständig, was vorher in `CLAUDE.md`s "Bekannte offene
+  Punkte" stand.
+- `CLAUDE.md` von ~1194 auf ~170 Zeilen gekürzt: der komplette
+  "Architektur"-Abschnitt (Zeilen 133–1022 vorher), "Docker-Besonderheiten"
+  inkl. TLS/HTTPS-Unterabschnitt und "Bekannte offene Punkte" sind jetzt
+  je ein kurzer Verweisabsatz auf `ARCHITECTURE.md` — keine Inhalte
+  doppelt gepflegt. "Kein Auth, nur hinter VPN" bleibt als Verhaltens-
+  Direktive für Claude in `CLAUDE.md` stehen (kurz, ändert sich kaum,
+  gehört als Regel für Codeänderungen eher zu den Meta-Instruktionen als
+  zur Architekturbeschreibung); `ARCHITECTURE.md`s "Sicherheitsmodell"-
+  Abschnitt verweist umgekehrt dorthin statt die Direktive zu duplizieren.
+  Die "Doku gehört zur Änderung"-Checkliste in "Sprache und Konventionen"
+  wurde von vier auf fünf Pflicht-Dateien erweitert (`ARCHITECTURE.md`
+  neu aufgenommen, `CLAUDE.md`s Zuständigkeit auf Arbeitsabläufe/
+  Konventionen/Testmuster präzisiert, nicht mehr Architektur).
+- `README.md`: die zwei kurzen Absätze direkt nach der Datei-Tabelle
+  ("laufen im selben Prozess" / "Audio läuft intern als Stereo-PCM")
+  restated bereits, was jetzt in `ARCHITECTURE.md`s erstem Diagramm
+  steht — durch einen einzigen Verweissatz ersetzt.
+- Artifact (aus dem vorherigen Arbeitsschritt, gleiche URL) mit dem
+  erweiterten Inhalt neu deployed.
+
+### Bewusst NICHT gemacht
+
+- `Betrieb und Deployment` (inkl. "Testen ohne das laufende Deployment
+  anzufassen") bleibt vollständig in `CLAUDE.md` — das ist Workflow-/
+  Test-Anleitung für Claude, keine Architekturbeschreibung, gehört nicht
+  nach `ARCHITECTURE.md`.
+- Keine rückwirkende Korrektur älterer `SESSION.md`-Einträge, die noch
+  auf den alten, langen "Architektur"-Abschnitt in `CLAUDE.md` verweisen
+  (z.B. der Eintrag von vor wenigen Stunden im selben Arbeitsschritt) —
+  per Konvention werden ältere Einträge nicht nachträglich korrigiert.
+
+### Verifiziert
+
+- `grep -n "^## \|^### " CLAUDE.md` vor und nach dem Umbau verglichen:
+  genau die vorgesehenen drei Abschnitte (Architektur, Docker-
+  Besonderheiten, Bekannte offene Punkte) wurden auf Kurzverweise
+  reduziert, alle anderen Abschnitte (Android-Prototyp, Sprache und
+  Konventionen, Betrieb und Deployment, Kein Auth) sind unverändert an
+  derselben Stelle erhalten.
+- `CLAUDE.md` nach dem Umbau komplett gelesen: keine toten internen
+  Verweise (z.B. "siehe Architektur-Abschnitt oben" existiert nicht mehr
+  im gekürzten Text), Intro-Absatz und Checkliste konsistent mit der
+  neuen Aufteilung.
+- Zeilenzahl `CLAUDE.md`: 1194 → 174 Zeilen.

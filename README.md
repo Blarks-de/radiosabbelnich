@@ -657,13 +657,8 @@ Grafische Gesamtübersicht mit Diagrammen pro Subsystem: `ARCHITECTURE.md`.
 | `radiosabbelnich.sh` | Alles-in-einem-Wrapper: `check`/`start`/`stop`/`restart`/`status` (Default) |
 | `CHANGELOG.md` | Verdichtete Versionshistorie, neueste zuerst (Details in `SESSION.md`) |
 
-RadioSabbelNich und das Web-Interface laufen im selben Prozess (Web-Server
-als Hintergrund-Thread) — kein separater Service, keine IPC nötig, nur
-geteilter In-Memory-Zustand.
-
-Audio läuft intern als Stereo-PCM durch (Icecast-Ausgabe), die
-Analyse-Pipeline (VAD/Heuristik/Fingerprint) rechnet bewusst nur auf
-einem Mono-Downmix, um Rechenzeit zu sparen.
+Wie Prozess-Modell, Audio-Pfad und die einzelnen Module zusammenspielen
+(inklusive Diagrammen): siehe `ARCHITECTURE.md`.
 
 ## Setup
 

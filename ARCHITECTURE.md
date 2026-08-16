@@ -1,12 +1,26 @@
 # Architektur
 
-Dieses Dokument bündelt die Architektur von RadioSabbelNich an einer Stelle,
-mit grafischen Übersichten. Es ersetzt nicht die Detailtiefe in `CLAUDE.md`
-(dort stehen zusätzlich die harten Begründungen "warum genau so und nicht
-anders", relevant beim Ändern von Code) und nicht `SESSION.md` (dort steht
-die chronologische Historie samt Messwerten). Nutzerorientierte Bedienung/
-Konfiguration steht in `README.md`. Dieses Dokument ist der Einstiegspunkt,
-wenn man sich einen Überblick verschaffen will, bevor man in Details geht.
+Dieses Dokument ist die **einzige, vollständige** Beschreibung der
+RadioSabbelNich-Architektur — Diagramme und die dazugehörigen
+Begründungen ("warum genau so, warum ein naheliegender Ansatz
+nachweislich nicht funktioniert hat") stehen **nur hier**, nicht mehr
+zusätzlich in `CLAUDE.md`. Wer an einem der unten genannten Module
+arbeitet, liest den passenden Abschnitt **vor** der Änderung.
+
+Abgrenzung zu den anderen Doku-Dateien (hierarchisch, keine
+Doppelung — jede Information hat genau einen Ort):
+
+- **`README.md`** — Nutzersicht: was das Projekt tut, Setup, Bedienung,
+  Konfigurationswerte, vollständige Datei-Tabelle. Kein Architektur-Wissen.
+- **`ARCHITECTURE.md`** (dieses Dokument) — wie und warum das System so
+  gebaut ist, inklusive aller offenen/bekannten Baustellen.
+- **`CLAUDE.md`** — Meta-Regeln fürs Arbeiten in diesem Repo (Sprache,
+  Doku-Pflege, Versionierung, Test-Muster ohne Live-Deployment
+  anzufassen, Sicherheitspolicy). Verweist für Architektur hierher,
+  enthält selbst keine architekturbeschreibenden Inhalte mehr.
+- **`SESSION.md`** — chronologisches Arbeitsprotokoll mit echten
+  Messwerten pro Arbeitseinheit; die Historie *hinter* den hier
+  beschriebenen Entscheidungen.
 
 ## Gesamtbild
 
@@ -42,18 +56,37 @@ flowchart TB
 
 **Kommunikationsmuster request/pop**: der Webserver-Thread setzt ein Flag
 (`request_switch`, `request_reload`, `request_skip`,
-`request_music_play/_stop/_skip`, …), der Hauptloop holt es einmal pro
-Durchlauf ab (`pop_*`) und führt die Aktion aus. Grund: nur der Hauptloop
-darf `source`/`current` und die Streak-Buchhaltung anfassen — direktes
+`request_music_play/_stop/_skip`, `request_filter_toggle`,
+`request_mode_change`, …), der Hauptloop holt es einmal pro Durchlauf ab
+(`pop_*`) und führt die Aktion aus. Grund: nur der Hauptloop darf
+`source`/`current` und die Streak-Buchhaltung anfassen — direktes
 Umschalten aus dem Webserver-Thread würde Puffer-Übergabe und Sprach-Streak
-inkonsistent machen. Reine Status-Werte (STT-Status, Sprachwahrscheinlichkeit
-fürs "Bullshitometer") laufen einfacher als Setter/Property in die
-Gegenrichtung, weil dort keine Aktion ausgelöst wird, nur eine Anzeige
-gefüttert wird.
+inkonsistent machen. Reine Status-/Info-Werte, die nur der Hauptloop kennt
+und die Web-UI nur anzeigt (kein Auslösen einer Aktion), laufen dagegen
+einfach als Setter/Property in die Gegenrichtung — `set_stt_status()`,
+`set_speech_probability()` (Rohwert der Klassifikation fürs
+"Bullshitometer" auf der Startseite). Ein dritter, noch einfacherer Fall
+ist `host_paths` (Konstruktor-Parameter von `webui.start_server()`, NICHT
+Teil von `SwitcherState`): rein statische Werte aus `.env`
+(`NEWS_MP3_FOLDER_HOST`/`VOSK_MODEL_FOLDER_HOST`), einmalig beim Start
+durchgereicht, damit die Config-Seite den echten Host-Pfad neben dem
+Container-Pfad anzeigen kann — der Container kennt den Host-Pfad sonst
+grundsätzlich nicht (Docker übersetzt Host→Container-Pfad nur einmalig
+beim Anlegen des Containers). Deshalb gibt es dafür bewusst keinen
+Auswahl-/Browse-Dialog: der könnte ohnehin nur Container-Pfade zeigen,
+echter Host-Zugriff gäbe es nur über volle Host-Filesystem- oder
+Docker-Socket-Freigabe — beides ein Sicherheitsrückschritt angesichts des
+authlosen Web-Interfaces (siehe "Sicherheitsmodell" unten).
 
-`stations.json`/`settings.json` sind die Quelle der Wahrheit, `SwitcherState`
-ist nur ein Cache für die laufende Rotation. Sender werden immer über ihre
-stabile `id` referenziert, nie über eine Listenposition.
+`stations.json`/`settings.json` sind die Quelle der Wahrheit,
+`SwitcherState` ist nur ein Cache für die laufende Rotation. Deshalb liest
+die Config-Seite bewusst frisch von der Platte
+(`GET /api/config/stations` → `stations_store.load_all()`), während der
+Hauptloop erst beim nächsten `pop_reload_request()` nachzieht. Sender
+werden immer über ihre stabile `id` referenziert, nie über eine
+Listenposition — Rotationsreihenfolge ist "aktivierte Sender alphabetisch
+nach Name". Hinzufügen/Löschen/Deaktivieren darf die laufende Wiedergabe
+nicht durcheinanderbringen.
 
 ## Audio-Pfad
 
@@ -70,19 +103,30 @@ flowchart LR
 ```
 
 `read_window()` liest beide Pipes parallel per `select` — läuft eine voll,
-blockiert ffmpeg und die andere bekommt auch nichts mehr. `IcecastOutput`
-besteht über Senderwechsel hinweg (Hörer merkt keinen Verbindungsabbruch),
-nur die `StreamSource` wird getauscht. Audio verlässt den Prozess
-ausschließlich über `write_audio()` — `output.write()` direkt aufzurufen
-würde die Playout-Deque umgehen.
+blockiert ffmpeg und die andere bekommt auch nichts mehr (der Timeout dort
+verhindert nur, dass eine tote Quelle den einzelnen Read blockiert; gegen
+die Endlosschleife drumherum hilft der Watchdog, siehe unten).
+`IcecastOutput` besteht über Senderwechsel hinweg (Hörer merkt keinen
+Verbindungsabbruch), nur die `StreamSource` wird getauscht. Analyse ist
+mono, Ausstrahlung stereo — wer am Audio-Pfad arbeitet, muss beide Seiten
+bedienen. Audio verlässt den Prozess ausschließlich über `write_audio()`
+(aufgerufen aus `push_and_drain()` bzw. direkt aus `quick_forward()` im
+Passthrough-Fall) — `output.write()` direkt aufzurufen würde die
+Playout-Deque komplett umgehen.
 
 ## Prebuffering + Playout-Delay
 
-Klassifikation passiert **vor** der Ausgabe, nicht danach: ein frisches
-Fenster wird hinten an die `playout`-Deque angehängt, sofort klassifiziert,
-und erst wenn die Deque über `prebuffer_seconds` hinausgewachsen ist, wird
-vorne das älteste Fenster ausgegeben. Ein Push, höchstens ein Pop pro
-Durchlauf — dadurch bleibt die Ausgabe im Realzeit-Takt.
+`PrebufferedSource` hält pro Sender eine eigene `StreamSource` plus
+Reader-Thread und einen Ringpuffer der letzten `prebuffer_seconds`
+Sekunden (fenstergenau: zwei parallele Deques mit `maxlen`, kein
+konkateniertes Array). Seit 2026-08-06 ist dieser Puffer nicht nur ein
+Vorrat für die Wechsel-Übergabe, sondern gleichzeitig ein echtes
+**Playout-Delay** für den GERADE laufenden Sender: Klassifikation passiert
+dadurch **vor** der Ausgabe, nicht danach — ein frisches Fenster wird
+hinten an die `playout`-Deque angehängt, klassifiziert, und erst wenn die
+Deque über `prebuffer_seconds` hinausgewachsen ist, wird vorne das älteste
+Fenster ausgegeben. Ein Push, höchstens ein Pop pro Durchlauf — dadurch
+bleibt die Ausgabe im Realzeit-Takt.
 
 ```mermaid
 flowchart TB
@@ -98,33 +142,132 @@ flowchart TB
 
 Wechsel zu einem **vorgewärmten** Kandidaten übernimmt dessen komplette
 Fensterliste auf einen Schlag (`adopt_windows()`) — sofort auf Zieltiefe,
-kein Bridge-Timing nötig. Wechsel zu einem **nicht vorgewärmten** Sender
-(`reset_playout()`) schaltet auf reinen Passthrough (kein Delay) — ein
-lückenloser Sprung von 0 auf volle Verzögerung ist ohne Zeitdehnung nicht
-möglich, deshalb bewusst als Grenze akzeptiert (selten: nur außerhalb der
-nächsten `prebuffer_count` Sender oder im Notfall). Regeln, die dabei
-niemals gebrochen werden dürfen: genau ein Leser pro Pipe (sonst wird die
-Quelle als `dead` verworfen), `pb.stop()` blockiert den Hauptloop bis zu
-~9 s (deshalb keine weiteren blockierenden Operationen in
-`sync_prebuffer()`), und Audio verlässt den Prozess ausschließlich über
-`write_audio()`.
+Drain läuft ab dem nächsten Fenster ohne Lücke weiter, kein Bridge-Timing
+nötig (die frühere `promote_bridge()`/`stereo_tail()`-Mechanik ist damit
+komplett entfallen). Wechsel zu einem **nicht vorgewärmten** Sender
+(`reset_playout()`) schaltet auf reinen Passthrough (kein Delay, sofortige
+Ausgabe) — ein lückenloser Sprung von 0 auf volle Verzögerung ist ohne
+Zeitdehnung nicht möglich, deshalb bewusst als Grenze akzeptiert. Diese
+Fälle sind selten (nur außerhalb der nächsten `prebuffer_count` Sender in
+der Rotation oder im Notfall, wenn alle Kandidaten-Puffer selbst tot sind).
+
+Drei harte Regeln bei `PrebufferedSource`:
+
+1. **Eine Pipe hat genau einen Leser.** `promote()`/`stop()` joinen den
+   Reader-Thread; überlebt er den Join, wird die Quelle als `dead`
+   markiert und verworfen statt übernommen.
+2. **`pb.stop()` blockiert den Hauptloop** (bis ~9 s pro Quelle, weil es
+   auf ein laufendes `read_window()` wartet). `sync_prebuffer()` läuft
+   einmal pro Durchlauf — dort keine weiteren blockierenden Operationen
+   einbauen.
+3. **Audio verlässt den Prozess ausschließlich über `write_audio()`**
+   (siehe Audio-Pfad oben).
+
+`sync_prebuffer()` startet gestorbene Puffer **nicht** selbst neu, sondern
+gibt deren IDs zurück; der Hauptloop sperrt sie (siehe Watchdog) — sonst
+gäbe es bei einer dauerhaft toten URL einen ffmpeg-Spawn pro Sekunde.
+
+Ändert sich `prebuffer_seconds`/`prebuffer_count` über `/config` während
+die `playout`-Deque primed ist, wird sie verworfen (Reset auf Passthrough)
+statt auf die neue Zieltiefe umgerechnet — aus demselben Grund wie oben
+(kein gapless Übergang zwischen zwei Zieltiefen). Die Nachrichten-Pause
+resettet die Deque ebenfalls explizit (siehe unten).
 
 ## Watchdog gegen tote Sender
 
-`dead_until` (Sender-ID → Ablaufzeitpunkt) wird aus drei Quellen gespeist:
-zu viele leere Reads des laufenden Senders, ein im Hintergrund gestorbener
-Puffer, oder ein Kandidat, der beim Durchprobieren nichts liefert. Gesperrte
-Sender fallen aus Rotation und Pufferzielen raus, der laufende Sender bleibt
-aber immer drin, damit Pufferpositionen nicht verrutschen. Manuelles
-Umschalten hebt eine Sperre auf; sind alle Sender gesperrt, werden alle
-Sperren verworfen statt hängenzubleiben. Ohne diesen Mechanismus legte
-historisch ein einziger toter Sender den Player für 8,5 Stunden still.
+`dead_until` (Sender-ID → Ablaufzeitpunkt) im Hauptloop wird aus drei
+Quellen gespeist: `STREAM_FAILURE_LIMIT` leere Reads des laufenden
+Senders, ein im Hintergrund gestorbener Puffer, oder ein Kandidat, der
+beim Durchprobieren nichts liefert. `alive_stations()` filtert gesperrte
+Sender aus Rotation und Pufferzielen; `keep_id` hält den laufenden Sender
+drin, damit nicht alle Pufferpositionen verrutschen. Manuelles Umschalten
+hebt die Sperre auf, und sind *alle* Sender gesperrt, werden die Sperren
+verworfen statt hängenzubleiben.
+
+Ohne diesen Mechanismus legte historisch ein einziger toter Sender den
+Player für 8,5 Stunden still — Grund, warum Switch-Logik und Pufferung
+diese Pfade immer mitdenken müssen.
+
+## Fingerprinting
+
+`fingerprint.py` lernt jeden Sprach-Clip, der keinen Treffer erzeugt — die
+DB wächst also im Betrieb (kein Pruning, siehe "Offene Punkte" unten).
+Matching läuft per Constellation-Map mit Delta-Konsistenz;
+`MIN_HASH_MATCHES` trennt echte Treffer (gemessen: hunderte) von
+Zufallstreffern (gemessen: ≤7). Die `FingerprintDB`-Connection gehört dem
+Hauptloop; `delete_clip()`/`clear_all()` öffnen aus dem Webserver-Thread
+bewusst eigene kurzlebige Connections, weil sqlite3-Connections nicht
+thread-übergreifend sicher sind — dasselbe Muster wie bei
+`music_query.py`/`music_scan.py` (siehe Musik-Library-Baukasten unten).
+
+## Logging
+
+`logging_setup.setup()` wird **in `main()`** aufgerufen, also nach dem
+Modul-Import — Log-Aufrufe auf Modulebene (z.B. beim Banner-Laden in
+`webui.py`) landen deshalb noch beim `lastResort`-Handler und nicht in der
+Datei. Konsole = INFO (mit `--verbose` DEBUG), Datei = **immer** DEBUG,
+rotierend. Neue Diagnose-Ausgaben gehören auf DEBUG: die Datei ist dafür
+da, dass ein Vorfall im Nachhinein rekonstruierbar ist, ohne den Container
+vorher zufällig im richtigen Modus gestartet zu haben. Geloggt wird mit
+`%s`-Platzhaltern, nicht mit f-Strings.
+
+## Sender-Import
+
+`station_import.check_reachable()` prüft nicht "kommt Audio", sondern
+"kommt am **Ende** eines Zeitfensters noch Audio" — DASH/HLS-Quellen
+schütten sonst einen Fragment-Vorrat aus, bestehen jeden kurzen Check und
+verstummen danach für immer. Importierte Sender landen **deaktiviert** in
+"Unsortiert".
+
+## Nachrichten-Pause (news_break.py)
+
+Reine Domänenlogik (Zeitfenster-Berechnung, MP3-Auswahl), getrennt vom
+Hauptloop, der die eigentliche Audio-Umschaltung übernimmt —
+`news_break.py` kennt weder `StreamSource` noch `SwitcherState`.
+
+```mermaid
+flowchart LR
+    Slot["news_break.active_slot()<br/>Zeitfenster erreicht?"] -->|ja, Slot noch nicht bedient| Start["start_news_break_mp3()<br/>(realtime=True, -re-Flag)"]
+    Start --> Play["news_break_active = true<br/>current bleibt der PAUSIERTE Sender"]
+    Play -->|"MP3 zu Ende (pcm.size == 0)"| Next{"aktiver Slot noch derselbe?"}
+    Next -->|ja| Start
+    Next -->|nein| Resume["switch_to_station(current)<br/>= normaler Wechsel"]
+```
+
+Zwei Punkte, an denen sich das lokale Verhalten von einem Live-Sender
+unterscheidet:
+
+- **`current` bleibt während der Pause bewusst der pausierte Sender**,
+  nicht ein synthetisches "News"-Objekt — dadurch laufen
+  `sync_prebuffer()` und Watchdog mit korrekten Daten weiter, und der
+  Resume nutzt einfach `switch_to_station(current)`. Die Web-UI zeigt
+  trotzdem korrekt "📰 Nachrichten-Pause": `SwitcherState.current_station()`
+  liefert währenddessen eine virtuelle Station (`NEWS_BREAK_STATION_ID`).
+- **Lokale Dateien werden von ffmpeg NICHT in Echtzeit gelesen** — anders
+  als eine Radio-URL dekodiert ffmpeg eine lokale Datei so schnell wie
+  CPU/Disk erlauben. `StreamSource.start(path, realtime=True)` (`-re`) ist
+  deshalb für die MP3 PFLICHT (live gemessen: ohne das landet ein 35s-Clip
+  in 0,1s statt 35s komplett in den Pipes).
+
+Ein Zeitfenster wird per Slot-ID (`news_break.active_slot()`) höchstens
+einmal bedient — MP3-Ende, Fensterablauf und manueller Interrupt markieren
+den Slot alle gleichermaßen als "schon dran". **Seit 2026-08-12 bricht ein
+Fensterablauf eine laufende MP3 nicht mehr mitten in der Wiedergabe ab**:
+`news_break_active` ist ausschließlich dann `True`, wenn bereits
+erfolgreich eine MP3 gestartet wurde, der Übergang zurück passiert
+ausschließlich noch im `pcm.size == 0`-Zweig (MP3 zu Ende) — eine laufende
+MP3 spielt dadurch immer bis zum natürlichen Ende, auch wenn das die Pause
+über `window_minutes` hinaus verlängert. Der Nachlade-Check dabei vergleicht
+Slot-Identität (`active_slot(cfg) == news_break_served_slot`), nicht nur
+einen Wahrheitswert — sonst würde eine ungewöhnlich lange MP3-Kette, die
+zufällig ins nächste Halbe-Stunde-Fenster hineinreicht, fälschlich als
+"noch dasselbe Fenster" durchgehen.
 
 ## Radio-/Musik-Modus (Top-Level-Fork)
 
-Der Musik-Modus ist **kein** Sonderfall der Nachrichten-Pause (die pausiert
-nur einen einzelnen Sender kurz und kehrt automatisch zurück), sondern ein
-persistenter Top-Level-Zustand ganz oben im Hauptloop:
+Der Musik-Modus ist **kein** Sonderfall der Nachrichten-Pause (die
+pausiert nur einen einzelnen Sender kurz und kehrt automatisch zurück),
+sondern ein persistenter Top-Level-Zustand ganz oben im Hauptloop:
 
 ```mermaid
 flowchart TB
@@ -137,17 +280,46 @@ flowchart TB
 
 Solange `current_mode == "music"` ist, laufen VAD/STT/Fingerprint/
 News-Break-Prüfung/Watchdog schlicht nicht — nicht nur pausiert, komplett
-aus. Der Wechsel radio→music stoppt die Radio-Quelle und räumt alle
-Hintergrund-Puffer ab; music→radio verbindet frisch zum letzten
-`current`-Sender. Der Modus wird in `settings.json` persistiert, bevor die
-Bestätigung an die Web-UI geht (kein Fenster für "UI zeigt neuen Modus,
-Neustart würde aber alten wiederherstellen"). Programmstart fährt immer erst
-bedingungslos als Radio hoch und räumt danach einmalig auf, falls
-`current_mode` bereits `"music"` war — ein einzelner Startpfad ist weniger
-fehleranfällig als zwei. Beim (Wieder-)Eintritt in den Player-Modus startet
-automatisch Track 0 des konfigurierten Ordners (`start_folder_playback()`) —
-kein Persistieren der exakten Position, jeder Einstieg beginnt alphabetisch
-vorn.
+aus (Anforderung war "STT/VAD im Musik-Modus komplett aus", nicht nur
+pausiert; die beiden Zweige durchflechten zu wollen wäre deutlich
+fehleranfälliger gewesen als ein sauberer Fork). Der Übergang radio→music
+stoppt `source`, räumt alle Hintergrund-Puffer ab und setzt
+`reset_playout()` — eine laufende Nachrichten-Pause wird dabei sauber
+beendet. Der Übergang music→radio verbindet frisch zum letzten
+`current`-Sender (bleibt während des gesamten Musik-Modus unverändert).
+Beide Richtungen persistieren `current_mode` per `settings_store.update()`
+**vor** `state.set_mode()` — kein Fenster für "UI zeigt neuen Modus,
+Neustart würde aber den alten wiederherstellen".
+
+Programmstart fährt immer erst bedingungslos als Radio hoch
+(`source.start()`/`sync_prebuffer()` passieren unabhängig vom Modus), ein
+einmaliger Cleanup-Block direkt nach dem Lesen von `state.mode` macht das
+danach rückgängig, falls `current_mode` bereits `"music"` war — ein
+einzelner Startpfad ist weniger fehleranfällig als zwei.
+
+**Autoresume (seit 2026-08-15)**: beim (Wieder-)Eintritt in den
+Player-Modus (Programmstart mit persistiertem `current_mode="music"` ODER
+manueller Radio→Musik-Wechsel) startet automatisch Track 0 des
+konfigurierten Ordners über einen gemeinsamen `start_folder_playback()`-
+Helper (löst `music_library_path` auf, listet Tracks, startet Track 0),
+aufgerufen an drei Stellen: Programmstart-Cleanup, manueller Play-Klick
+und direkt nach `state.set_mode("music")`. Vorher blieb die Wiedergabe in
+beiden Fällen inaktiv, bis manuell auf ▶ getippt wurde — vom Nutzer
+fälschlich als "Modus wird nicht gemerkt" wahrgenommen (der Modus lief
+schon vorher zu 100% serverseitig über `/api/status`, es gibt im ganzen
+Repo keine einzige Verwendung von `localStorage`). Kein Persistieren der
+exakten Track-Position — jeder (Wieder-)Eintritt beginnt alphabetisch beim
+ersten Track (Nutzervorgabe: "ersten Track bzw. weiterlaufend", nicht
+"exakte letzte Stelle merken"). Wichtig: das serverseitige Schreiben in
+den Icecast-Mount ist von der Browser-Autoplay-Problematik des
+`/musik`-Play-Knopfs (siehe SESSION.md) komplett unabhängig — die betrifft
+nur das lokale `<audio>`-Element im Browser, nicht die Streamerzeugung.
+
+Der Musik-Tick selbst (Play/Stop/Zurück/Nächster über
+`music_library.list_tracks()`, rekursiv bis zu `MAX_SCAN_DEPTH`=5
+Unterordner-Ebenen, zyklische Playlist) schreibt Audio **direkt** über
+`write_audio()`, nicht über die Playout-Deque — es gibt im Musik-Modus
+nichts zu erkennen, ein Delay hätte keinen Zweck.
 
 ## Musik-Library-Baukasten
 
@@ -163,21 +335,118 @@ flowchart LR
     Query -->|"fertig aufgelöste Trackliste"| Player
 ```
 
-Scan und Query laufen **ausschließlich aus dem Webserver-Thread** (eigene,
-kurzlebige SQLite-Connections — sqlite3 ist nicht thread-übergreifend
-sicher); der Hauptloop bekommt beim Query-Play nur die fertige Trackliste
-durchgereicht, der ~1s-Analysetakt darf nie auf eine Query warten. Cover
-werden als Dateien gecacht (Dateiname = SHA1 des relativen Pfads), nicht als
-Blob in der DB. `audio_tags.py` ist eine format-übergreifende
-Tag-Abstraktion (MP3/FLAC/OGG/M4A/AAC/WAV/APE), gemeinsam genutzt von
-`music_scan.py` (Scan) und dem Hauptloop (Live-Anzeige "gerade läuft" für
-News-Break und Musik-Player).
+**Scan** (`music_scan.py`, Phase 1) läuft ausschließlich aus dem
+Webserver-Thread (`POST /api/library/scan`, Hintergrund-Thread +
+Progress-Poll wie `station_import.py`, zweiter Start während eines
+laufenden Scans wird mit 409 abgelehnt). Eigene DB
+(`music_library.db`, getrennt von `fingerprints.db` — andere Domäne, eine
+gemeinsame DB wäre nur zufällige Kopplung). Cover werden als Dateien in
+einem eigenen beschreibbaren Mount (`music_library_covers/`) gecacht,
+Dateiname = SHA1-Hash des relativen Track-Pfads (kein DB-Lookup nötig, um
+zu wissen, wohin ein Re-Scan das Cover schreibt). **Inkrementell per
+mtime+Größe**: nur bei Änderung wird tatsächlich mutagen/ID3-APIC gelesen
+(teurer Teil) — der erste Scan einer Sammlung bleibt zwangsläufig
+langsam, jeder folgende wird massiv billiger. Ein "Gefunden"-Set schützt
+vor Fehlbereinigung: eine Datei, die zwar noch auf der Platte liegt aber
+gerade nicht lesbar ist (kaputte MP3, kurzer SMB-Hänger), wird trotzdem
+zum "gefunden"-Set hinzugefügt (nur das Parsing wird übersprungen) — sonst
+würde die Aufräum-Phase einen gültigen DB-Eintrag für eine nur
+VORÜBERGEHEND defekte Datei fälschlich als "gelöscht" werten und
+entfernen. Upsert läuft über `filepath` (UNIQUE-Constraint).
 
-## STT-Sprachfilter
+**Query** (`music_query.py`, Phase 2) läuft ebenfalls nie im Hauptloop —
+gleiche Kurzlebige-Connection-Begründung wie bei `fingerprint.py`
+(sqlite3 nicht thread-sicher). Bewusst **kein echter Query-Parser**: nur
+zwei Filterarten (`query_by_artist()`/`query_by_genre()`, simples
+`LIKE '%wert%'`) für eine Handvoll fester Buttons, kein freies
+Eingabefeld — Genre-Tags sind ID3-Freitext ohne feste Taxonomie ("Rock"
+vs. "Classic Rock"), Teilstring-Match ist die einzige praktikable
+Näherung ohne eigene Genre-Normalisierung. "klassik" matcht deshalb NICHT
+automatisch "Classical" (keine Synonym-Liste, bewusste Grenze). Ein
+Query-Play **ersetzt** eine laufende Wiedergabe sofort (Klick = "ab jetzt
+DIESE Playlist"), anders als der große Play-Button, der nur bei Idle
+wirkt. Filepath-Auflösung setzt voraus, dass `music_library_path` seit
+dem letzten Scan unverändert ist (die DB speichert `filepath` relativ zum
+damaligen Root, nicht absolut) — ein Re-Scan nach einer Root-Änderung
+behebt das.
 
-Zusätzliches Signal per Speech-to-Text, unabhängig von VAD/Fingerprint —
-wo VAD nur "menschliche Stimme" erkennt (Gesang zählt mit), prüft STT den
-Inhalt (kommt zusammenhängender Text in der erwarteten Sprache?):
+**Duplikat-Erkennung** (`music_query.find_duplicates()`) ist reiner
+**Metadaten**-Abgleich (normalisiertes Artist+Titel-Paar: klein
+geschrieben, Whitespace getrimmt+kollabiert in Python, SQLite kennt kein
+eingebautes "mehrere Leerzeichen kollabieren"), KEIN Audio-Fingerprint-
+Vergleich (bräuchte eigenen Analyse-Code, bewusst zurückgestellt).
+Erkennt dadurch z.B. denselben Song als MP3 UND FLAC, aber NICHT
+inhaltlich identisches Audio mit abweichenden/fehlenden Tags. Tracks ohne
+Artist ODER Titel werden von der Gruppierung ausgeschlossen (sonst würden
+alle untaggten Dateien fälschlich als eine riesige Gruppe erscheinen);
+nur Gruppen mit ≥2 Treffern werden zurückgegeben, inklusive Dateigröße
+als Entscheidungshilfe. `GET /api/library/duplicates` ist reiner
+Lese-Endpoint, bewusst ohne UI-Anschluss (nur Anzeige/Meldung, keine
+Lösch-Aktion).
+
+**BPM** (`music_bpm.py`, Phase 3) liefert die Datengrundlage für
+`query_by_tempo(db, "fast"|"slow")` mit festen Schwellwerten
+(`FAST_BPM_MIN=120`, `SLOW_BPM_MAX=90` in `music_query.py`) — der Bereich
+dazwischen fällt bei beiden raus, eine grobe, nachjustierbare Konvention,
+keine Musikwissenschaft. **aubio statt librosa** (Nutzer-Entscheidung):
+librosa zieht einen sehr schweren Dependency-Baum (numba+llvmlite allein
+>100 MB); aubio ist zur Laufzeit sehr leicht (~0,25s pro Track inkl.
+ffmpeg-Decode eines 60s-Schnipsels). **aubio 0.4.9 (PyPI, 2019) baut
+nicht sauber gegen aktuelles numpy** (live aufgetreten:
+`PyUFuncGenericFunction` erwartet seit numpy>=1.22 `const npy_intp*`) —
+das Dockerfile lädt den Source-Tarball per `curl` direkt von PyPI
+(`pip download` hängt sich in diesem Image an einer isolierten
+Build-Umgebung auf), patcht die zwei betroffenen Funktionssignaturen per
+`sed` und installiert mit `pip install --no-build-isolation`. Nur ein
+60s-Schnipsel wird dekodiert, nicht der komplette Track. BPM-Analyse
+läuft im selben Scan-Durchlauf wie das ID3-Parsing; ein dritter Zweig in
+`scan_library()` (unverändert + `bpm IS NULL` → nur `UPDATE ... SET bpm`
+statt vollem Reparse) sorgt dafür, dass die BPM-Migration auch bereits
+gescannte, unveränderte Dateien nachträglich befüllt (`bpm_backfilled`-
+Zähler), ohne sie als "unverändert, also überspringen" dauerhaft bei
+`bpm=NULL` zu belassen.
+
+**Format-Erweiterung**: `AUDIO_EXTENSIONS` (geteilt zwischen
+`music_library.py` und `music_scan.py`) deckt MP3, FLAC, OGG, M4A, rohes
+ADTS-AAC, WAV und APE ab. Playback brauchte keine Änderung (ffmpeg ist
+container-/codec-agnostisch), die Arbeit steckt in der Metadaten-/
+Cover-Extraktion, an echten Testdateien verifiziert:
+
+- FLAC/OGG/MP4 liefern über `mutagen.File(pfad, easy=True)` normalisierte
+  Text-Tags; nur die Cover-Extraktion braucht Format-spezifischen Code
+  (`_read_cover_bytes()`: FLACs `.pictures`, OGGs Base64-`metadata_block_picture`,
+  MP4s `covr`-Atom) — kein gemeinsames mutagen-API dafür.
+- **WAV wird von mutagen NICHT "easy"-gewrappt** — `WAVE(pfad).get("artist")`
+  liefert IMMER `None`, obwohl ID3-Tags unter rohen Frame-IDs (`TPE1`)
+  durchaus vorhanden sein können.
+- **Rohes ADTS-AAC**: mutagens Auto-Erkennung erkennt eine getaggte
+  `.aac`-Datei FÄLSCHLICH als MP3 (wegen des ID3v2-Headers) und crasht am
+  MPEG-Frame-Sync (`HeaderNotFoundError`, live reproduziert) — ohne
+  Sonderbehandlung wäre jede getaggte AAC-Datei bei jedem Scan als Fehler
+  markiert und nie eingelesen worden.
+- **APE hat kein standardisiertes Cover-Feld** — Cover-Extraktion wird
+  dafür bewusst nicht versucht. **Nicht gegen eine echte `.ape`-Datei
+  verifiziert** (siehe "Offene Punkte" unten): das Image-ffmpeg hat einen
+  Decoder, aber keinen Encoder für Monkey's Audio.
+
+`audio_tags.py` bündelt die dafür nötige format-übergreifende Weiche
+(`RawId3EasyAdapter` für WAV/AAC, `open_tags()`, `extract_year()`) und
+wird von zwei Seiten genutzt: `music_scan.py` (Scan) UND dem Hauptloop
+(`radiosabbelnich.py`s `start_music_track()`/`start_news_break_mp3()`) für
+die **Live-Tag-Anzeige während der Wiedergabe** — Titel/Interpret/Album/
+Jahr, mit Fallback-Kaskade (fehlender Titel-Tag → Dateiname; fehlende
+weitere Felder → `None`, Darstellung entscheidet der Aufrufer). Aufruf
+passiert einmal PRO TRACK-START, nicht im ~1s-Analysetakt. Bewusst EIN
+Codepfad für Ordner- UND Query-Modus (frischer Read von der Datei statt
+der in `music_query.py` bereits vorhandenen DB-Werte) statt zweier
+divergierender Pfade. Kein Cover, keine Restzeit/Dauer in der Anzeige
+(siehe "Offene Punkte" unten).
+
+## STT-Sprachfilter (stt_filter.py)
+
+Zusätzliches Signal per Speech-to-Text, komplett unabhängig von
+`fingerprint.py`: wo VAD/Heuristik nur "menschliche Stimme" erkennen
+(Gesang zählt da mit), prüft `stt_filter.py` den Inhalt.
 
 ```mermaid
 flowchart LR
@@ -191,32 +460,110 @@ flowchart LR
     Combine --> SwitchLogik["Switch-/Streak-Logik"]
 ```
 
-Die erwartete Sprache hängt an der **Kategorie** des laufenden Senders
-(`settings_store.resolve_stt_language()`), nicht am einzelnen Sender.
-Sampling läuft kontinuierlich (nicht nur bei VAD-Label "speech"), sonst wäre
-`combine_mode="or"` wirkungslos — pausiert nur während `news_break_active`
-und wenn der Filter global deaktiviert ist. Ohne (passenden/frischen) Befund
-ist `combine_label()` ein reines No-Op und gibt das VAD-Label unverändert
-zurück — dadurch deaktiviert sich das Feature bei einem Modell-Ladefehler
-faktisch selbst. Konfidenzwerte sind Best-Effort-Proxys, kein kalibriertes
-Wahrscheinlichkeitsmaß; ein geführter Kalibrierungs-Wizard
-(`_calibration`-Session in `SwitcherState`) hilft bei der Schwellwertwahl
-pro Sprache.
+Die einzige Kopplungsstelle mit der bestehenden Switch-Logik ist
+`stt_filter.combine_label()`, eingehängt in die `classify()`-Closure in
+`main()` — Streak-Zählung/Fingerprint-Trigger/`do_switch()` bleiben
+dadurch unverändert, Fingerprint merkt von alldem nichts.
 
-## Mehrsprachiges Web-Interface
+**Mehrsprachigkeit**: die erwartete Sprache hängt an der **Kategorie**
+des laufenden Senders (`settings_store.resolve_stt_language()`), nicht am
+einzelnen Sender — der Hauptloop reicht dasselbe `stt_lang` an
+`stt.sample_async()` (Sampling-Ziel) UND `classify()` (Verdict-
+Interpretation) weiter, sonst würde z.B. im ersten Fenster nach einem
+Kategoriewechsel mit falscher Sprache gesampelt. `_fresh_verdict()` prüft
+neben dem Alter auch, ob das Sprach-Tag des Verdicts zu
+`expected_language` passt — sonst würde ein noch nicht abgelaufener
+Befund einer VORHERIGEN Sprache fälschlich mit der Schwelle der neuen
+Sprache bewertet.
+
+**Engine-Asymmetrie bestimmt die Architektur**: Whisper ist multilingual
+(ein geladenes Modell, Sprachcode nur pro `transcribe()`-Aufruf) — eine
+zusätzliche Sprache kostet dort kein zusätzliches RAM. Vosk braucht ein
+komplett eigenes Modell PRO Sprache, deshalb Lazy-Load
+(`_get_vosk_engine()`) plus `MAX_LOADED_VOSK_LANGUAGES` (Default 2) als
+LRU-Cache. Sowohl Erfolg ALS AUCH Fehlschlag werden gecacht
+(Fehlertext statt `_VoskEngine`-Objekt), damit ein kaputter Modellpfad
+nicht bei jedem Sample-Tick erneut das Dateisystem anfasst.
+Engine-Reload bei laufendem Sample ist sicher: `sample_async()` kopiert
+die Engine-Referenz lokal in den Thread, bevor `reload()` sie austauschen
+kann — ein bereits laufender Sample läuft sauber zu Ende.
+
+Sampling läuft kontinuierlich (nicht nur bei VAD-Label "speech"), sonst
+wäre `combine_mode="or"` wirkungslos — pausiert nur während
+`news_break_active` und wenn der Filter global deaktiviert ist. Ohne
+(passenden/frischen) Befund ist `combine_label()` ein reines No-Op und
+gibt das VAD-Label unverändert zurück — dadurch deaktiviert sich das
+Feature bei einem Modell-Ladefehler faktisch selbst.
+
+Konfidenzwerte sind **Best-Effort-Proxys, keine kalibrierten
+Wahrscheinlichkeiten** (Vosk: echte Wort-Konfidenz nur bei manchen
+Modellen, sonst Wortanzahl-Proxy; Whisper: gar keine Sprache-Konfidenz,
+nur `1 - no_speech_prob` als Näherung). Gemessen am
+`vosk-model-small-de-0.15`-Default gegen echte Sender:
+Deutschlandfunk-Sprache nie unter 0.83, Schlager-Gesang im Schnitt 0.38 —
+`confidence_threshold=0.75` (Default) liegt mit Marge dazwischen. Klar/
+langsam gesungener Schlager erzeugt aber gelegentlich kurze, grammatisch
+plausible Wortfetzen mit hoher Konfidenz (~20% der gemessenen
+Schlager-Clips lagen trotzdem über 0.75) — `combine_mode="and"`
+reduziert das deutlich, ist aber kein Allheilmittel (siehe "Offene
+Punkte" unten).
+
+Ein geführter **Kalibrierungs-Wizard** hilft bei der Schwellwertwahl pro
+Sprache: `SwitcherState` hält dafür `_calibration` (Sprache/Stufe/beide
+Sample-Listen) bewusst OHNE request/pop, weil eine Kalibrierungs-Session
+keinen der Player-kritischen Zustände berührt — der Webserver-Thread
+schreibt direkt lock-geschützt, der Hauptloop hängt per
+`add_calibration_sample()` an. Ist eine Session aktiv, erzwingt der
+Hauptloop ihre Sprache als STT-Ziel UND pausiert die komplette Switch-/
+Streak-Logik für den Tick — sonst könnte ein durch die Kalibrierungssprache
+verfälschtes `combine_label()`-Ergebnis mitten in der Kalibrierung einen
+automatischen Wechsel auslösen. `add_calibration_sample()` verwirft
+Samples ohne erkannten Text (leerer Text = "keine Wort-Hypothese",
+semantisch etwas anderes als "niedrige Konfidenz" — beides ungefiltert
+zieht `speech_min` künstlich auf 0). `suggest_confidence_threshold()`
+schlägt die Grenze zwischen `max(music_samples)` und `min(speech_samples)`
+vor (`_THRESHOLD_MARGIN_RATIO=0.7` Richtung Sprache gewichtet); der Wizard
+schaltet selbst NIEMALS einen Sender um.
+
+## Mehrsprachiges Web-Interface (i18n.py)
 
 `i18n.py` ist reine Domänenlogik, übersetzt ausschließlich das, was der
-Nutzer im Browser sieht — Logs/Fehlermeldungen bleiben deutsch. Englisch ist
-seit 2026-08-12 die im Code eingebettete Basissprache (`_BASE_STRINGS`,
-immer vollständig); weitere Sprachen kommen als externe `.lng`-Sprachpakete
-aus `language/` (Key=Value, muss nicht vollständig sein — fehlende Keys
-fallen pro Key auf Englisch zurück). Beide Templates (`_PAGE_HTML`/
-`_CONFIG_PAGE_HTML`) bleiben je ein Quelltext mit `data-i18n*`-Attributen,
-einmal pro Sprache beim Modul-Import vorgerendert (`_render_i18n_variants()`)
-statt pro Request neu ersetzt. Eine Start-Prüfung
-(`_check_i18n_coverage()`) gleicht alle im Markup verwendeten Keys gegen
-`i18n.STRINGS` ab und wirft beim Start, falls ein Key fehlt — ersetzt das
-fehlende Test-Framework für diesen einen Aspekt.
+Nutzer im Browser sieht (Labels, Buttons, `alert()`/`confirm()`) — Logs,
+Code-Kommentare und die von den `*_store.py`-Modulen geworfenen
+`ValueError`-Texte bleiben deutsch.
+
+Englisch ist die im Code eingebettete Basissprache (`_BASE_STRINGS`,
+immer vollständig). Weitere Sprachen kommen als externe `.lng`-
+Sprachpakete aus `language/` (Key=Value, `#!code=`/`#!name=`-Metazeilen)
+— gewählt statt JSON, weil alle Strings Ein-Zeiler ohne echte
+Zeilenumbrüche sind und Key=Value ohne Anführungszeichen-Escaping von
+Hand editierbar bleibt. Eine `.lng`-Datei muss NICHT vollständig sein:
+`_discover_languages()` merged pro Sprache `_BASE_STRINGS` mit den in der
+Datei gefundenen Keys, ein fehlender Key fällt für GENAU diesen Key auf
+Englisch zurück statt die ganze Sprache scheitern zu lassen.
+
+Beide Templates (`_PAGE_HTML`/`_CONFIG_PAGE_HTML`) bleiben je ein
+Quelltext mit `data-i18n*`-Attributen, einmal PRO SPRACHE beim
+Modul-Import vorgerendert (`_render_i18n_variants()`, drei Platzhalter
+ersetzt) statt pro Request neu — `do_GET` wählt nur per
+`state.language`-Lookup aus den fertigen `_PAGE_HTML_BYTES`.
+`_check_i18n_coverage()` läuft beim selben Modul-Import: ein Regex
+sammelt alle verwendeten `data-i18n*`/`t('key'`-Keys und gleicht sie
+gegen `i18n.STRINGS` ab — wirft sofort beim Start bei einem fehlenden/
+vertippten Key (übernimmt hier die Rolle des fehlenden Test-Frameworks).
+Der Regex für `t('key'` braucht zwingend ein Lookbehind
+(`(?<![A-Za-z0-9_])t\('`), sonst matcht er in jedem Bezeichner, der
+zufällig auf "t(" endet (`document.createElemen`**`t('`**`div')`, real
+aufgetreten).
+
+`language` läuft über denselben request/pop-Zyklus wie andere
+`settings_store`-Felder, aber OHNE Neustart (reiner Dict-Lookup statt
+Socket-Rewrap wie bei `tls_enabled`) — die Config-Seite lädt sich nach
+dem Speichern trotzdem per `location.reload()` neu, weil ein
+Sprachwechsel ohne Reload nur die bereits injizierten `I18N`-Strings der
+aktuell offenen Seite treffen würde. `DEFAULT_LANGUAGE` (aus
+`UI_LANGUAGE` in `.env`) wirkt nur bei einer Neuinstallation ohne
+bestehende `settings.json`.
 
 ## Docker: Host- vs. Container-Layout
 
@@ -241,40 +588,128 @@ flowchart LR
     H4 -->|"Bind-Mount, Verzeichnis"| C3
 ```
 
-Wichtige Konsequenz der Einzeldatei-Bind-Mounts: `stations_store._write()`
-schreibt direkt statt über `os.replace()` — ein Rename über einen
-Mountpoint scheitert mit "Device or resource busy" ("atomares Schreiben"
-ist hier also bewusst NICHT umgesetzt). Neue `.py`-Module müssen einzeln in
-den Dockerfile-`COPY`-Zeilen eingetragen werden, sonst fehlen sie im Image.
+`_load_static()`/`STATIONS_FILE`/`SETTINGS_FILE`/`FINGERPRINT_DB_FILE`/
+`DEFAULT_LOG_FILE` sind alle `__file__`-relativ zum jeweiligen
+`.py`-Modul — wer eine neue Datei hinzufügt, muss nur den **Host-Pfad**
+(Dockerfile-`COPY`-Quelle bzw. linke Seite eines Volume-Mounts) der
+Ordnerstruktur folgen lassen, das Container-interne Ziel bleibt immer
+flach.
 
-## TLS/HTTPS (optional)
+- `stations.json`/`settings.json`/`fingerprints.db` sind als **einzelne
+  Dateien** gebindmountet. Deshalb schreibt `stations_store._write()`
+  direkt statt über `os.replace()` — ein Rename über einen Mountpoint
+  scheitert mit "Device or resource busy". Nicht auf "atomares
+  Schreiben" umbauen.
+- Der Dockerfile kopiert jede `.py`-Datei **einzeln**: neue Module dort
+  eintragen, sonst fehlen sie im Image. `language/` (siehe i18n oben) ist
+  die eine bewusste Ausnahme (`COPY language/ language/`) — `i18n.py`
+  durchsucht den Ordner zur Laufzeit per `glob`, eine neue Sprachdatei
+  soll durch bloßes Ablegen + Rebuild wirken, ohne eine eigene COPY-Zeile
+  zu brauchen (sonst fehlt die Sprache im Image lautlos statt mit Fehler).
+- `fix_silero_execstack.py` patcht zur Build-Zeit das PT_GNU_STACK-Bit der
+  silero-vad-lite-`.so`. Ohne den Patch verweigert der Kernel dieses
+  Hosts das `dlopen()` und die Spracherkennung fällt dauerhaft auf die
+  Heuristik zurück.
+- Der Icecast-Service überschreibt den Entrypoint des Basis-Images
+  (`icegen` kennt `<location>`/`<admin>` nicht, und ohne
+  `rm -f icecast.xml` hängt es bei jedem Neustart eine zweite Kopie an →
+  ungültiges XML, Absturzschleife).
+- `news_break.mp3_folder`/`music_library.path` in `settings.json` sind
+  **Container-interne** Pfade (Default `/app/news_mp3` bzw.
+  `/app/music_library`), nicht die Host-Pfade — letztere kommen über
+  `NEWS_MP3_FOLDER`/`MUSIC_LIBRARY_FOLDER` in `.env` rein. Beide Mounts
+  sind zusätzlich die festen Roots für die Breadcrumb-Ordnerauswahl
+  (`webui._BROWSE_ROOTS`, `folder_browse.py`) — ein neuer dritter
+  "Browse-Root" bräuchte dort einen weiteren Eintrag plus Bind-Mount.
+  `folder_browse.py` selbst kennt keinen der beiden Config-Keys, nur
+  einen festen Root und einen relativen Unterpfad; `rel_path` wird per
+  `realpath()` + Prefix-Check gegen Verzeichnis-Traversal abgesichert und
+  fällt bei einem Versuch (geloggt) auf den Root zurück.
 
-Web-Interface und Icecast bekommen TLS auf grundverschiedene Art: das
-Web-Interface liest `tls_enabled` aus `settings.json` und wickelt sein
-Server-Socket beim Start optional in `ssl.SSLContext` ein (wirkt erst nach
-Container-Neustart, kein Parallelbetrieb Klartext+TLS auf demselben Port).
-Icecast läuft in einem separaten Drittanbieter-Container ohne Python-Code —
-gesteuert rein über `.env` (`TLS_CERT_FILE`/`TLS_KEY_FILE`), die
-`docker-compose.yml`-Startzeile patcht bei Bedarf einen **zusätzlichen**
-SSL-`<listen-socket>` in die generierte `icecast.xml`, der bestehende
-Klartext-Port bleibt unverändert bestehen.
+## TLS/HTTPS (optional, `TLS_CERT_FILE`/`TLS_KEY_FILE` in `.env`)
+
+Beide Dienste bekommen bei Bedarf HTTPS, aber auf grundverschiedene Art:
+
+- **Web-Interface** (`webui.start_server()`): `settings.json`-Feld
+  `tls_enabled` entscheidet, ob das Server-Socket in
+  `ssl.SSLContext.wrap_socket()` eingewickelt wird — nur beim Start
+  gelesen (ein `ThreadingHTTPServer` kann sein Socket nicht live neu
+  einwickeln, wirkt also erst nach Container-Neustart). Kein
+  Parallelbetrieb: sobald aktiv, läuft nur noch HTTPS. Fehlt das
+  Zertifikat trotz `tls_enabled=true`, fängt `start_server()` den
+  `ssl.SSLError` ab und bleibt bei HTTP statt abzustürzen.
+- **Icecast**: kein Python-Code, kein `settings.json`-Bezug — separater
+  Drittanbieter-Container, gesteuert über `.env`. Sind
+  `TLS_CERT_FILE`/`TLS_KEY_FILE` gesetzt, patcht das `command:`-Skript in
+  `docker-compose.yml` einen **zusätzlichen** SSL-`<listen-socket>` in
+  die generierte `icecast.xml` (Port `ICECAST_SSL_PORT`, Default 8443) —
+  der bestehende Klartext-Port bleibt unverändert. Icecast braucht dafür
+  kurz Root, um die 0600-Zertifikatsdatei zu lesen, gibt die Rechte
+  danach über `<security><changeowner>` selbst wieder ab. **Der
+  icegen-Generator hat dabei einen Bug**: er trägt `<group>icecast2</group>`
+  ein, tatsächlich heißt im Image die Gruppe `icecast` (nur der User
+  heißt `icecast2`, uid/gid sind zufällig beide 101) — ohne `sed`-Fix
+  verweigert Icecast als root generell den Start, unabhängig davon, ob
+  überhaupt ein Zertifikat konfiguriert ist. Zusätzlich reicht Icecast
+  eine `<ssl-certificate>` mit getrennten Cert-/Key-Dateien nicht: beide
+  werden zu einer PEM-Datei zusammengefügt (`cat cert key >
+  icecast-tls.pem`) und explizit auf `icecast2:icecast` gechownt, weil
+  Icecast diese Datei nachweislich erst **nach** dem internen
+  Privilegien-Drop liest, nicht währenddessen als root (per isoliertem
+  Testcontainer verifiziert) — root-only 0600 hätte dort nicht gereicht.
+- Beide Mounts fallen ohne gesetzte `TLS_CERT_FILE`/`TLS_KEY_FILE` auf
+  `/dev/null` zurück statt auf eine Repo-Platzhalterdatei — `/dev/null`
+  ist auf jedem Host ein gültiges Bind-Mount-Ziel und liefert 0 Byte,
+  genau das, was die jeweiligen "ist überhaupt ein Zertifikat
+  da?"-Prüfungen erwarten.
 
 ## Sicherheitsmodell
 
-**Kein Auth, nur hinter VPN.** Web-Interface und Config-Seite haben keinerlei
-Authentifizierung, der Restream ist urheberrechtlich nur privat tragbar.
-Keine Änderungen, die auf öffentliche Erreichbarkeit hinauslaufen
-(Port-Forwarding, öffentlicher Reverse-Proxy).
+Web-Interface und Config-Seite haben keinerlei Authentifizierung. Die
+volle Begründung und die daraus folgende Verhaltensregel für
+Codeänderungen stehen als Direktive in `CLAUDE.md` ("Kein Auth, nur
+hinter VPN") — hier nur der architekturelle Fakt: es gibt keinen
+Auth-Layer vor `webui.py`, jeder mit Netzwerkzugriff auf Port 5000/8000
+hat vollen Zugriff.
 
-## Weiterführend
+## Offene Punkte
 
-- **`README.md`** — Nutzersicht: Setup, Bedienung, Konfigurationswerte,
-  vollständige Datei-Tabelle.
-- **`CLAUDE.md`** — dieselben Themen in voller Tiefe samt der harten
-  Begründungen, warum ein naheliegender Ansatz nachweislich nicht
-  funktioniert hat; Pflichtlektüre vor Codeänderungen an diesen Bereichen.
-- **`SESSION.md`** — chronologisches Arbeitsprotokoll mit echten
-  Messwerten pro Arbeitseinheit.
-- **"Bekannte offene Punkte"** in `CLAUDE.md` — aktueller Stand offener
-  Baustellen (Prebuffering-Blockierung, fehlender Stream-Health-Status,
-  ungeprunte Fingerprint-DB, u.a.).
+- `sync_prebuffer()`/`pb.stop()` können den Hauptloop blockieren (bis
+  ~9 s pro Quelle, siehe Prebuffering oben).
+- Das Web-Interface zeigt keinen Stream-Health-Status.
+- `SpeechDetector.leftover` wird beim Senderwechsel nicht zurückgesetzt.
+- Die Fingerprint-DB wächst ohne Pruning.
+- Die Config-Seite skaliert nicht auf mehrere hundert Sender (keine
+  Suche, kein Bulk-Delete).
+- STT-Sprachfilter: `confidence_threshold=0.75` ist an einem kleinen
+  echten Sample (Deutschlandfunk + 3 Schlager-Sender) kalibriert, klar/
+  langsam gesungener Schlager bleibt eine bekannte Schwachstelle (~20%
+  falsch-positive Konfidenz trotz Schwelle). Whisper wurde noch gar
+  nicht gegen echtes Audio getestet. `suggest_confidence_threshold()`s
+  Formel ist bislang nur an den ursprünglichen DE-Messwerten
+  plausibilisiert, nicht an einer zweiten Sprache in echtem Betrieb
+  verifiziert — bei sehr kleinen Sample-Zahlen bleibt der Vorschlag
+  entsprechend grob (die Web-UI warnt bei überlappenden Verteilungen).
+- Das Playout-Delay schützt Hörer nur bei Wechseln zu vorgewärmten
+  Sendern — bei einem frischen Wechsel läuft der Sender bis zum
+  nächsten warmen Wechsel ohne Delay/Vorausschau, bewusst in Kauf
+  genommen statt eines gapless-Übergangs, der ohne Zeitdehnung nicht
+  möglich ist.
+- Musik-Modus: schnell/langsam-Buttons sind seit Phase 3 (BPM) nutzbar,
+  rock/klassik/Queen/Pavarotti seit Phase 2 (Query). Die APE-
+  Unterstützung ist mangels Encoder im Image NICHT gegen eine echte
+  `.ape`-Datei verifiziert — nur Playback (ffmpeg-Decoder vorhanden) und
+  Text-Tag-Extraktion sind plausibilisiert. Eine während des Musik-Modus
+  eigentlich fällige Nachrichten-Pause wird beim Rückweg zu Radio NICHT
+  nachgeholt (die Slot-Prüfung läuft im Musik-Modus nicht mit) —
+  bewusste Grenze, kein Bug. Die Preflight-/Start-Checks in
+  `radiosabbelnich.sh` prüfen `MUSIC_LIBRARY_FOLDER` bislang NICHT wie
+  `NEWS_MP3_FOLDER` (Existenz/Lesbarkeit/Dateianzahl) — ein leerer/
+  fehlender Ordner liefert beim Play-Klick nur keine Tracks statt eines
+  Fehlers.
+- Die Tag-Anzeige während der Wiedergabe deckt bewusst nur Titel/
+  Interpret/Album/Jahr ab, kein Cover und keine Restzeit/Dauer — Cover
+  bräuchte einen neuen Endpoint samt On-the-fly-Extraktion für Dateien
+  außerhalb der gescannten `music_library.db` (News-Break-Ordner wird
+  nie gescannt), Restzeit bräuchte zusätzlich einen tickenden
+  Client-Timer, nicht nur den rohen `mutagen`-Dauerwert.
