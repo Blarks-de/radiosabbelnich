@@ -7481,3 +7481,111 @@ Dokumentation statt Doppelung.
   im gekürzten Text), Intro-Absatz und Checkliste konsistent mit der
   neuen Aufteilung.
 - Zeilenzahl `CLAUDE.md`: 1194 → 174 Zeilen.
+
+## 2026-08-20 — Totluft-Watchdog: stiller Sender blieb unerkannt hängen
+
+### Auslöser
+
+Nutzermeldung: "das Radio spielt, aber ich höre nix". Diagnose direkt am
+laufenden Deployment (Icecast-Mount per curl abgegriffen, mit
+`ffmpeg -af volumedetect` ausgewertet): der laufende Sender ("Hamburg
+Zwei") lieferte technisch einwandfrei Daten, aber nur Stille
+(-74,7dBFS Mittel, -63,9dBFS Peak — praktisch Rauschboden). Direkter
+Abgriff der Original-URL bei Hamburg Zwei selbst zeigte dasselbe Bild
+(-74,6dBFS) — die Ursache lag beim Sender selbst, nicht bei
+RadioSabbelNich. Zum Vergleich SWR3 direkt abgegriffen: -17,9dBFS
+Mittel, -6,4dBFS Peak (normaler Pegel) — bestätigt, dass die Messmethode
+selbst valide ist. Codesuche ergab: im gesamten Audio-Pfad gab es
+**keinerlei** Pegel-/Stille-Prüfung, nur den Leere-Reads-Watchdog
+(`STREAM_FAILURE_LIMIT`), der bei `pcm.size > 0` gar nicht erst greift.
+Sofortmaßnahme: manueller Switch auf SWR3 über `/api/switch` (Payload-
+Key ist `id`, nicht `station_id` — beim ersten Versuch falsch geraten,
+`{"ok": false, "error": "invalid id"}` deckte es auf), danach per
+`volumedetect` bestätigt, dass wieder echter Pegel (-18,1dBFS) läuft.
+
+Nutzer bat anschließend explizit darum, das systemisch zu schließen.
+
+### Umsetzung
+
+`radiosabbelnich.py`:
+
+- Neue Konstanten `SILENCE_DBFS_THRESHOLD = -50.0` und
+  `SILENCE_DURATION_LIMIT = 30.0` (Sekunden) neben
+  `STREAM_FAILURE_LIMIT`/`STATION_DEAD_COOLDOWN`.
+- Neue Funktion `window_dbfs(pcm_int16)`: RMS-Pegel eines Analysefensters
+  in dBFS, auf -120.0 gekappt bei digitaler Stille (verhindert -inf/NaN
+  in Vergleichen).
+- Neue `silence_streak`-Zählvariable (analog zu `stream_failures`),
+  zurückgesetzt an denselben Stellen, an denen `stream_failures`
+  zurückgesetzt wird (`switch_to_station()`, die beiden "Kandidat wird
+  neuer Sender"-Zweige in `do_switch()`) — NICHT bei jedem erfolgreichen
+  Read wie `stream_failures`, da das den ganzen Mechanismus sofort
+  aushebeln würde (siehe Kommentar im Code).
+- Neuer Check im Hauptloop direkt nach `push_and_drain()`, vor dem
+  bestehenden `if news_break_active: continue` — läuft also bewusst
+  unabhängig von `state.filter_enabled` (wie der Leere-Reads-Watchdog),
+  aber ausgesetzt während einer laufenden Nachrichten-Pause (sonst würde
+  eine leise MP3-Passage den *pausierten* echten Sender fälschlich
+  sperren). Bei Überschreiten von `SILENCE_DURATION_LIMIT`: derselbe
+  `dead_until`+`do_switch()`-Pfad wie beim Leere-Reads-Watchdog.
+- Refactoring dabei: der bisher einmalige Block "Sender sperren + falls
+  alle gesperrt sind Sperren aufheben + weiterschalten" existierte nur
+  im Leere-Reads-Zweig; jetzt als `mark_dead_and_switch(reason)`
+  extrahiert und von beiden Watchdog-Zweigen aufgerufen — verhindert,
+  dass die "alle Sender tot"-Sonderbehandlung an zwei Stellen
+  auseinanderdriftet.
+- Docstring am Dateikopf und `ARCHITECTURE.md`
+  ("Watchdog gegen tote Sender") sowie `README.md` (De/En, Abschnitt
+  "Umgang mit toten Sendern"/"Handling dead stations") entsprechend
+  ergänzt.
+
+### Bewusst NICHT gemacht
+
+- Kandidaten beim automatischen Durchprobieren in `do_switch()` (das
+  bestehende `classify(...) == "music"`-Gate) zusätzlich auf Stille zu
+  prüfen. Trifft die Auto-Suche einen ebenfalls stillen Kandidaten,
+  spielt der zwar kurz weiter, aber der neue Totluft-Watchdog holt ihn
+  beim nächsten Durchlauf automatisch wieder raus — der Mehraufwand für
+  eine Vorab-Prüfung an dieser Stelle stand in keinem Verhältnis zum
+  Nutzen (seltener Fall, selbstkorrigierend).
+- Keine Anpassung der Schwellwerte pro Sender/Kategorie — ein einziger
+  globaler Schwellwert reicht für den beobachteten Fall, und
+  Pro-Sender-Tuning wäre unbegründete Komplexität ohne einen zweiten
+  Beobachtungsfall.
+
+### Verifiziert
+
+Test nach dem in `CLAUDE.md` beschriebenen Muster (separate Kopie von
+`python/*.py`, eigene `stations.json`, separater Icecast-Test-Mount) —
+diesmal zusätzlich im laufenden Docker-Container ausgeführt (nicht auf
+dem Host), weil dort alle Python-Abhängigkeiten (mutagen, aubio, Silero
+VAD) tatsächlich vorhanden sind:
+
+- Echte Totluft-Quelle erzeugt: `ffmpeg -f lavfi -i
+  "anoisesrc=color=white:amplitude=0.0006"` auf einen separaten
+  Icecast-Mount (`silence_test.mp3`) gepusht — kein synthetischer
+  Nullwert, sondern ein Signal mit echtem (sehr leisem) Rauschboden, wie
+  bei einem real still gesendeten Sender.
+  Testinstanz mit zwei Sendern (dem Totluft-Mount + echtem SWR3)
+  gestartet, `--icecast-url` auf einen dritten, separaten Test-Mount
+  (`test_output.mp3`) — Produktivbetrieb (PID 7 im Container) blieb
+  während des gesamten Tests unberührt.
+- Ergebnis: Watchdog löste nach exakt 30s aus
+  (`⛔ Stream 'AAA-Totluft-Test' liefert seit 30s nur noch Stille
+  (< -50 dBFS) ...`), Switch auf SWR3 lief nahtlos aus dem Puffer
+  ("aus Puffer, nahtlos, 10s Playout-Delay").
+- Icecast-Testausgabe direkt danach per `ffmpeg -af volumedetect`
+  geprüft: -18,3dBFS Mittel — echter Ton kommt durch.
+- SWR3 lief weitere >40s ohne Fehlalarm weiter (kein erneutes
+  "sendet Stille") — bestätigt, dass normale Pegel nicht anschlagen.
+- `window_dbfs()` zusätzlich isoliert mit numpy gegengerechnet: digitale
+  Stille -120dBFS, das simulierte Rauschboden-Signal -75,3dBFS (deckt
+  sich mit dem live gemessenen Hamburg-Zwei-Wert), -18dBFS-Sinuston
+  korrekt bei -21dBFS RMS (relativ zum Peak, wie erwartet), Vollausschlag
+  bei -3dBFS RMS.
+- `python3 -m py_compile radiosabbelnich.py` sauber.
+- Alle Testprozesse (Container-seitig radiosabbelnich.py + zugehörige
+  ffmpeg-Kindprozesse, host-seitige Totluft-Quelle) danach beendet, der
+  temporäre `silence_test.mp3`-Mount ist wieder aus Icecasts
+  Source-Liste verschwunden — Produktiv-Mount unangetastet, weiterhin 1
+  echter Hörer.

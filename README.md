@@ -72,6 +72,11 @@ minutenlang nichts liefern. Damit das nicht die ganze Wiedergabe anhält:
   fliegt er für 5 Minuten aus der Rotation und RadioSabbelNich schaltet
   automatisch weiter (`STREAM_FAILURE_LIMIT`/`STATION_DEAD_COOLDOWN` in
   `radiosabbelnich.py`).
+- Sendet der **aktuelle** Sender zwar weiter technisch einwandfrei Daten,
+  aber 30 Sekunden am Stück nur noch Stille/Rauschen ("tote Luft" —
+  senderseitiges Problem, real beobachtet), gilt das genauso als tot:
+  gleiche Sperre, gleiches automatisches Weiterschalten
+  (`SILENCE_DBFS_THRESHOLD`/`SILENCE_DURATION_LIMIT`).
 - Stirbt ein **Hintergrund-Puffer**, wandert der Sender sofort auf dieselbe
   Sperrliste, statt im Sekundentakt neu verbunden zu werden.
 - Gesperrte Sender werden beim automatischen Weiterschalten übersprungen
@@ -980,6 +985,11 @@ a time. So this doesn't stall playback entirely:
   windows in a row, it's pulled from rotation for 5 minutes and
   RadioSabbelNich automatically switches on (`STREAM_FAILURE_LIMIT`/
   `STATION_DEAD_COOLDOWN` in `radiosabbelnich.py`).
+- If the **current** station keeps delivering technically valid data but
+  only silence/noise for 30 seconds straight ("dead air" — a problem on
+  the station's own end, actually observed in the wild), it's treated
+  exactly the same: same block, same automatic switch
+  (`SILENCE_DBFS_THRESHOLD`/`SILENCE_DURATION_LIMIT`).
 - If a **background buffer** dies, its station is immediately put on
   the same block list instead of being reconnected every second.
 - Blocked stations are skipped during automatic switching and aren't

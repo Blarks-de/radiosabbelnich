@@ -175,18 +175,42 @@ resettet die Deque ebenfalls explizit (siehe unten).
 
 ## Watchdog gegen tote Sender
 
-`dead_until` (Sender-ID → Ablaufzeitpunkt) im Hauptloop wird aus drei
+`dead_until` (Sender-ID → Ablaufzeitpunkt) im Hauptloop wird aus vier
 Quellen gespeist: `STREAM_FAILURE_LIMIT` leere Reads des laufenden
-Senders, ein im Hintergrund gestorbener Puffer, oder ein Kandidat, der
-beim Durchprobieren nichts liefert. `alive_stations()` filtert gesperrte
+Senders, anhaltende Stille des laufenden Senders (s.u.), ein im
+Hintergrund gestorbener Puffer, oder ein Kandidat, der beim
+Durchprobieren nichts liefert. `alive_stations()` filtert gesperrte
 Sender aus Rotation und Pufferzielen; `keep_id` hält den laufenden Sender
 drin, damit nicht alle Pufferpositionen verrutschen. Manuelles Umschalten
 hebt die Sperre auf, und sind *alle* Sender gesperrt, werden die Sperren
-verworfen statt hängenzubleiben.
+verworfen statt hängenzubleiben. `mark_dead_and_switch()` bündelt "sperren
++ ggf. alle Sperren aufheben + weiterschalten" für beide unten
+beschriebenen Watchdog-Zweige an einer Stelle.
 
 Ohne diesen Mechanismus legte historisch ein einziger toter Sender den
 Player für 8,5 Stunden still — Grund, warum Switch-Logik und Pufferung
 diese Pfade immer mitdenken müssen.
+
+**Totluft-Erkennung (seit 2026-08-20):** Der Leere-Reads-Zähler oben
+erkennt nur, wenn eine Quelle *gar keine* Daten mehr liefert. Ein Sender
+kann aber technisch einwandfrei verbunden bleiben und trotzdem nur noch
+Stille/Rauschen senden (senderseitiges Problem, real beobachtet bei
+Hamburg Zwei) — dagegen hilft der Leere-Reads-Check nicht, `pcm.size`
+bleibt > 0. Deshalb misst `window_dbfs()` den RMS-Pegel jedes
+Analysefensters; bleibt er `SILENCE_DURATION_LIMIT` (30s) am Stück unter
+`SILENCE_DBFS_THRESHOLD` (-50dBFS), greift derselbe `dead_until`-
+Mechanismus wie beim Leere-Reads-Watchdog. Schwelle/Dauer bewusst
+grosszügig gewählt (gemessen: normaler Sender ~-18dBFS im Mittel, eine
+real beobachtete Totluft-Quelle durchgehend ~-75dBFS) — eine kurze
+Sprechpause oder ein leiser Songausklang soll keinen Fehlalarm auslösen.
+Läuft während einer Nachrichten-Pause (`news_break_active`), ist der
+Check ausgesetzt: `current` zeigt dabei weiter auf den *pausierten* echten
+Sender, eine leise Stelle in der News-MP3 darf den nicht fälschlich als
+tot markieren. Bewusst NICHT gemacht: Kandidaten beim Durchprobieren in
+`do_switch()` auf Stille zu prüfen (nur auf Sprache) — trifft die
+Auto-Suche doch einmal eine ebenfalls stille Quelle, korrigiert sich das
+von selbst beim nächsten Durchlauf des Totluft-Watchdogs, zusätzliche
+Komplexität an der Stelle schien den Nutzen nicht wert.
 
 ## Fingerprinting
 

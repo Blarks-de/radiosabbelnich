@@ -15,6 +15,16 @@ umbenannt. Ältere Commit-Nachrichten/Dateinamen (z.B. `radio_switch`,
 wider — hier einheitlich mit dem aktuellen Namen beschrieben, sofern
 nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 
+## 2026-08-20
+
+- Neu: Totluft-Watchdog — ein Sender, der weiter technisch einwandfrei
+  Daten liefert, aber 30s am Stück nur noch Stille/Rauschen sendet
+  (senderseitiges Problem, real beobachtet), wird jetzt genau wie ein
+  hart toter Stream automatisch aus der Rotation genommen und
+  weitergeschaltet (`SILENCE_DBFS_THRESHOLD`/`SILENCE_DURATION_LIMIT` in
+  `radiosabbelnich.py`). Vorher blieb der Player stumm auf so einem
+  Sender hängen, weil der bestehende Watchdog nur leere Reads erkennt.
+
 ## 2026-08-16
 
 - Doku: Architekturwissen konsolidiert — `ARCHITECTURE.md` ist jetzt die

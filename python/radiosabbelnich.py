@@ -20,7 +20,10 @@ Robustheit gegen tote Sender: liefert die aktuelle Quelle mehrfach
 hintereinander kein Audio mehr, wird sie für STATION_DEAD_COOLDOWN
 Sekunden aus der Rotation genommen und automatisch weitergeschaltet
 (siehe Watchdog im Hauptloop) — ein einzelner hängender Stream darf den
-Loop nicht anhalten.
+Loop nicht anhalten. Derselbe Mechanismus greift auch, wenn eine Quelle
+zwar weiter Daten liefert, aber senderseitig nur noch Stille/Rauschen
+sendet (SILENCE_DBFS_THRESHOLD/SILENCE_DURATION_LIMIT, "Totluft"), weil
+der reine Leere-Reads-Check das nicht erkennen kann.
 
 Abhängigkeiten:
     sudo apt install ffmpeg libportaudio2
@@ -91,6 +94,21 @@ STREAM_READ_TIMEOUT = 8.0    # max. Wartezeit pro Analysefenster, bevor eine Que
 # ein manueller Eingriff im Web-Interface holte den Player da wieder raus.
 STREAM_FAILURE_LIMIT = 3
 STATION_DEAD_COOLDOWN = 300.0
+
+# Watchdog gegen "tote Luft": anders als beim harten Verbindungsausfall oben
+# (pcm.size == 0) liefert ein Sender manchmal technisch einwandfreie Daten,
+# die aber senderseitig nur noch Stille/Rauschen enthalten -- der
+# Leere-Reads-Watchdog greift hier nicht, weil weiterhin Bytes ankommen.
+# Deshalb zusätzlich der RMS-Pegel jedes Analysefensters (siehe
+# window_dbfs()): bleibt er SILENCE_DURATION_LIMIT Sekunden am Stück unter
+# SILENCE_DBFS_THRESHOLD, wird der Sender genauso behandelt wie ein hart
+# toter Stream (dead_until + automatisches Weiterschalten). Schwelle und
+# Dauer bewusst grosszügig, damit eine kurze Sprechpause oder ein leiser
+# Songausklang keinen Fehlalarm auslöst -- real gemessen: ein normal
+# spielender Sender liegt im Mittel um die -18dBFS, ein Sender mit toter
+# Luft durchgehend um die -75dBFS (siehe SESSION.md-Eintrag vom 2026-08-20).
+SILENCE_DBFS_THRESHOLD = -50.0
+SILENCE_DURATION_LIMIT = 30.0  # Sekunden
 
 # Die nächsten PREBUFFER_COUNT Sender in Rotationsreihenfolge (ab dem
 # aktuellen) laufen im Hintergrund bereits mit und halten die letzten
@@ -171,6 +189,19 @@ def bass_energy_ratio(samples: np.ndarray, sr: int, cutoff_hz: float) -> float:
     total = np.sum(spectrum) + 1e-10
     bass = np.sum(spectrum[freqs <= cutoff_hz])
     return float(bass / total)
+
+
+def window_dbfs(pcm_int16: np.ndarray) -> float:
+    """RMS-Pegel eines Analysefensters in dBFS (0 dBFS = Vollausschlag,
+    negativer = leiser). Digitale Stille wäre rechnerisch -inf; auf einen
+    sehr niedrigen, aber endlichen Wert gekappt, damit Vergleiche gegen
+    SILENCE_DBFS_THRESHOLD nicht an -inf/NaN scheitern."""
+    if pcm_int16.size == 0:
+        return -120.0
+    rms = float(np.sqrt(np.mean(pcm_int16.astype(np.float64) ** 2)))
+    if rms < 1e-9:
+        return -120.0
+    return 20.0 * np.log10(rms / 32768.0)
 
 
 def classify_window(pcm_int16: np.ndarray, sr: int) -> tuple:
@@ -867,8 +898,9 @@ def main():
         Quelle, die schon nichts mehr liefert, und der Watchdog im
         Hauptloop müsste den Sender gleich wieder abräumen. Stattdessen
         ganz normal frisch verbinden: vielleicht war es nur ein Hänger."""
-        nonlocal source, stream_failures
+        nonlocal source, stream_failures, silence_streak
         stream_failures = 0
+        silence_streak = 0
         pb = prebuffer.pop(station["id"], None)
         if pb is not None:
             windows, adopted_source = pb.promote()
@@ -901,6 +933,7 @@ def main():
     speech_buffer = []       # sammelt PCM-Chunks des aktuellen Sprache-Laufs
     fp_checked_this_run = False
     stream_failures = 0      # leere Reads in Folge vom aktuellen Sender (Watchdog)
+    silence_streak = 0       # Analysefenster in Folge unter SILENCE_DBFS_THRESHOLD (Totluft-Watchdog)
 
     # Nachrichten-Pause (siehe news_break.py): `current` bleibt während der
     # Pause bewusst UNVERÄNDERT der pausierte Sender -> Watchdog/do_switch/
@@ -1099,7 +1132,7 @@ def main():
 
         Kandidaten, die der Watchdog gerade als tot markiert hat, werden
         übersprungen, ohne sie überhaupt anzufassen."""
-        nonlocal current, last_switch_time, source, stream_failures
+        nonlocal current, last_switch_time, source, stream_failures, silence_streak
         log.info("🎙  %s auf '%s' — schalte um ...", reason, current["name"])
         active = state.active_stations
         if not active:
@@ -1156,6 +1189,7 @@ def main():
                         source = candidate_source
                         state.set_current(current["id"])
                         stream_failures = 0
+                        silence_streak = 0
                         adopt_windows(windows)
                         log.info("▶ Spiele: %s (aus Puffer, nahtlos, %.0fs Playout-Delay)",
                                  current["name"], state.prebuffer_seconds)
@@ -1170,6 +1204,7 @@ def main():
             source.start(current["url"])
             state.set_current(current["id"])
             stream_failures = 0
+            silence_streak = 0
             log.info("▶ Spiele: %s (frisch, ohne Playout-Delay)", current["name"])
             last_switch_time = time.time()
             time.sleep(1.5)
@@ -1189,6 +1224,23 @@ def main():
                             current["name"], STATION_DEAD_COOLDOWN / 60)
                 continue
             log.info("   ... auch Sprache, probiere nächsten Sender.")
+
+    def mark_dead_and_switch(reason: str):
+        """Sperrt den aktuellen Sender für STATION_DEAD_COOLDOWN und
+        schaltet weiter -- gemeinsame Klammer für den Leere-Reads- und den
+        Totluft-Watchdog (siehe Hauptloop unten), damit das "alle Sender
+        tot -> Sperren aufheben"-Verhalten nur an einer Stelle gepflegt
+        werden muss."""
+        dead_until[current["id"]] = time.time() + STATION_DEAD_COOLDOWN
+        if not alive_stations(state.active_stations, dead_until):
+            # Alle aktivierten Sender sind als tot markiert (z.B. weil das
+            # Netz komplett weg war). Sperren aufheben und allen nochmal
+            # eine Chance geben, statt in einer Runde aus lauter
+            # übersprungenen Kandidaten hängenzubleiben.
+            log.error("⛔ Alle aktivierten Sender sind als tot markiert — "
+                      "hebe die Sperren auf und probiere von vorn.")
+            dead_until.clear()
+        do_switch(reason)
 
     try:
         while True:
@@ -1514,22 +1566,12 @@ def main():
                 log.error("⛔ Stream '%s' liefert nach %d Versuchen immer noch nichts — "
                           "nehme ihn für %.0f Min. aus der Rotation und schalte weiter.",
                           current["name"], stream_failures, STATION_DEAD_COOLDOWN / 60)
-                dead_until[current["id"]] = time.time() + STATION_DEAD_COOLDOWN
                 stream_failures = 0
+                silence_streak = 0
                 speech_streak = 0
                 speech_buffer = []
                 fp_checked_this_run = False
-
-                if not alive_stations(state.active_stations, dead_until):
-                    # Alle aktivierten Sender sind als tot markiert (z.B.
-                    # weil das Netz komplett weg war). Sperren aufheben und
-                    # allen nochmal eine Chance geben, statt in einer Runde
-                    # aus lauter übersprungenen Kandidaten hängenzubleiben.
-                    log.error("⛔ Alle aktivierten Sender sind als tot markiert — "
-                              "hebe die Sperren auf und probiere von vorn.")
-                    dead_until.clear()
-
-                do_switch("Sender liefert kein Audio")
+                mark_dead_and_switch("Sender liefert kein Audio")
                 continue
 
             stream_failures = 0
@@ -1544,6 +1586,36 @@ def main():
             # ist das hier ein reines Passthrough wie vor Einführung des
             # Delays, kein Sonderfall nötig.
             push_and_drain(pcm, pcm_stereo)
+
+            if not news_break_active:
+                # Totluft-Watchdog: unabhängig vom Sabbelfilter-Zustand
+                # (genau wie der Leere-Reads-Watchdog oben) -- ein technisch
+                # verbundener, aber stummer Sender ist keine abschaltbare
+                # Komfortfunktion, sondern derselbe Fall wie ein toter
+                # Stream, nur dass hier weiterhin Bytes ankommen (siehe
+                # SILENCE_DBFS_THRESHOLD/SILENCE_DURATION_LIMIT oben und
+                # SESSION.md-Eintrag vom 2026-08-20). Während der
+                # Nachrichten-Pause ausgesetzt: `current` bleibt dabei der
+                # PAUSIERTE echte Sender, eine leise MP3-Passage darf den
+                # nicht fälschlich als tot markieren.
+                if window_dbfs(pcm) < SILENCE_DBFS_THRESHOLD:
+                    silence_streak += 1
+                else:
+                    silence_streak = 0
+
+                if silence_streak * WINDOW_SECONDS >= SILENCE_DURATION_LIMIT:
+                    log.error("⛔ Stream '%s' liefert seit %.0fs nur noch Stille "
+                              "(< %.0f dBFS) — nehme ihn für %.0f Min. aus der "
+                              "Rotation und schalte weiter.",
+                              current["name"], SILENCE_DURATION_LIMIT,
+                              SILENCE_DBFS_THRESHOLD, STATION_DEAD_COOLDOWN / 60)
+                    silence_streak = 0
+                    stream_failures = 0
+                    speech_streak = 0
+                    speech_buffer = []
+                    fp_checked_this_run = False
+                    mark_dead_and_switch("Sender sendet Stille")
+                    continue
 
             if news_break_active:
                 # Keine automatische Erkennung während der Nachrichten-
