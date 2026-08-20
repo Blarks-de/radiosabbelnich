@@ -36,12 +36,15 @@ idx_filter_disable_btn=Sabbelfilter deaktivieren
 idx_filter_enable_btn=Sabbelfilter aktivieren
 idx_bs_meter_label=🤥 Bullshitometer
 idx_vu_meter_label=🔊 Pegel
-idx_stt_meter_label=🗣 STT
+idx_stt_meter_label=🗣 STT (Speech-to-Text)-Sprachfilter
 idx_stt_meter_off=STT aus
 idx_fp_indicator_label=🔎 Fingerprint
 idx_fp_state_idle=⚪ Idle
 idx_fp_state_match=🔴 Treffer: {label}
 idx_fp_state_learned=🟢 Gelernt
+idx_fp_last_learned=Zuletzt gelernt: {time}
+idx_fp_last_match=Zuletzt erkannt: {time}
+idx_fp_never=nie
 # --- Sender ---
 idx_stations_heading=Sender
 # --- Hörer ---

@@ -7715,3 +7715,87 @@ Basis). Plan wurde vom Nutzer freigegeben.
   Rendering und JS-Syntax sind geprüft, die tatsächliche visuelle/
   interaktive Wirkung im Browser aber noch nicht von einem Menschen
   bzw. automatisiert bestätigt.
+
+## 2026-08-20 (Fortsetzung 2) — STT-Label ausgeschrieben + Fingerprint-Historie
+
+### Auslöser
+
+Nutzer-Feedback nach dem VU-Meter-Rollout, zwei kleinere Punkte:
+1. Das "STT"-Label im Meter ist nicht selbsterklärend ("ich vergesse
+   immer was das heisst").
+2. Die Fingerprint-Anzeige zeigt nur "Idle" und "Gelernt" — "Erkannt"
+   (Treffer) hat der Nutzer noch nie gesehen und wollte wissen, ob das
+   überhaupt funktioniert. Wunsch: zusätzlich eine dauerhafte Zeile
+   "Idle, zuletzt gelernt: hh:mm:ss Uhr zuletzt erkannt: hh:mm:ss Uhr".
+
+### Umsetzung
+
+**STT-Label:** `idx_stt_meter_label` in `i18n.py` (`🗣 STT` →
+`🗣 STT (speech-to-text) filter`) und `language/Deutsch.lng`
+(`🗣 STT (Speech-to-Text)-Sprachfilter`) — plus der literale HTML-
+Fallback-Text im `data-i18n`-Span in `webui.py` (derselbe deutsche Text,
+gleiche Konvention wie bei allen anderen Meter-Labels: der Fallback ist
+IMMER Deutsch, unabhängig von der gerenderten Sprachvariante, wird von
+`applyStaticI18n()` sofort auf die tatsächliche Sprache korrigiert).
+
+**Fingerprint-Historie:** `state._fp_activity` (Chip, blinkt nur
+`FP_ACTIVITY_TTL` = 5s) blieb unverändert; zwei NEUE, dauerhafte Felder
+`_fp_last_learned_ts`/`_fp_last_match_ts` (Wanduhrzeit, `time.time()`)
+in `SwitcherState`, gesetzt in `set_fingerprint_activity()` je nach
+`status`, ausgeliefert über `/api/status` als
+`fingerprint_last_learned_ts`/`fingerprint_last_match_ts` (`null`, falls
+seit Prozessstart noch nie vorgekommen). Neues `<div id="fp-history">`
+unter dem Chip, JS formatiert die beiden Epochen-Werte per
+`toLocaleTimeString()` (gleiches Muster wie der bestehende "zuletzt
+aktualisiert"-Zeitstempel) und baut daraus
+"Zuletzt gelernt: hh:mm:ss Uhr · Zuletzt erkannt: hh:mm:ss Uhr"
+zusammen ("nie" statt Uhrzeit, falls `null`).
+
+**Bug beim ersten Anlauf, noch vor dem Testen gefunden:** "Uhr" initial
+fest ins i18n-Template gebacken (`Zuletzt gelernt: {time} Uhr`) —
+ergab bei "nie" den Unsinn "Zuletzt erkannt: nie Uhr". Fix: "Uhr" ist
+eine deutsche Zeitangaben-Konvention und gehört an die formatierte Zeit
+selbst (in der `fmtTime()`-Hilfsfunktion, sprachabhängig angehängt),
+nicht ins Template — dieselbe Funktion liefert für den "nie"-Fall nur
+`t('idx_fp_never')` zurück, ohne Uhr-Suffix.
+
+### Bewusst NICHT gemacht
+
+- Keine Änderung an `FP_ACTIVITY_TTL`/dem blinkenden Chip selbst — der
+  bleibt wie er ist, die Historie ergänzt ihn nur.
+- Keine Persistierung der Zeitstempel über einen Prozess-Neustart
+  hinaus (kein DB-Feld, rein In-Memory wie `_fp_activity`) — bei einem
+  Neustart zeigt die Historie wieder "nie", bis das erste Ereignis
+  dieses Laufs eintrifft. Für den eigentlichen Zweck (Nutzer will sehen,
+  ob "erkannt" während des laufenden Betriebs überhaupt mal auslöst)
+  reicht das; eine dauerhafte Historie in der Fingerprint-DB wäre
+  deutlich mehr Aufwand für einen Nutzen, der nicht angefragt war.
+
+### Verifiziert
+
+- `python3 -m py_compile webui.py i18n.py` sauber, JS-Syntax der
+  `/`-Seite (`node --check`, Platzhalter durch Stand-ins ersetzt) sauber.
+- Testinstanz im laufenden Container (separater Icecast-Test-Mount,
+  Web-Interface direkt über die Container-IP erreicht, Produktivbetrieb
+  PID 7 unberührt), Fingerprint-DB aktiv (nicht `--no-fingerprint`):
+  - `/api/status` vor jedem Ereignis: beide Zeitstempel `null`.
+  - Nach einem echten "gelernt"-Ereignis (SWR3-Moderation, Log:
+    "neuer Clip #1 gelernt"): `fingerprint_last_learned_ts` gesetzt,
+    `fingerprint_last_match_ts` weiter `null`.
+  - Prozess neu gestartet (gleiche Fingerprint-DB weiterverwendet): kurz
+    danach ein ECHTES "Treffer"-Ereignis beobachtet (Log: "Bekannter
+    Jingle/Werbespot wiedererkannt: Clip #3 'SWR3', schon 2x gehört") —
+    damit erstmals im Rahmen dieser Arbeit tatsächlich live bestätigt,
+    dass "erkannt" grundsätzlich funktioniert. Beide Zeitstempel danach
+    gesetzt und unterschiedlich (Match früher als Learn, wie erwartet).
+  - Exakte Formatierungslogik (inkl. des Uhr-Suffix-Fixes) mit den
+    echten Live-Zeitstempeln per Node nachgerechnet: alle drei Zustände
+    (beide leer / nur gelernt / beide gesetzt) ergeben korrekten Text.
+  - Gerenderte Seite abgerufen: `idx_stt_meter_label` sowohl im
+    statischen HTML-Fallback als auch im eingebetteten i18n-JSON korrekt
+    ausgeschrieben, `fp-history`-Element vorhanden, keine übrig
+    gebliebenen `%%...%%`-Platzhalter.
+  - Alle Testprozesse danach beendet, Test-Mount aus Icecasts
+    Source-Liste verschwunden, Produktiv-Mount unangetastet.
+- Weiterhin NICHT geprüft: echte Browser-Darstellung (claude-in-chrome
+  in dieser Session nicht verbunden, siehe vorheriger Eintrag).

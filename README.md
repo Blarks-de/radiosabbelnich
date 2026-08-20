@@ -525,17 +525,24 @@ Erreichbar unter `http://<host>:5000/`:
   live in Prozent, aktualisiert alle 1s. Rein informativ (nicht klickbar)
   — friert grau ein, während Nachrichten-Pause läuft oder der
   Sabbelfilter aus ist, weil dann gar nicht klassifiziert wird.
-- **🗣 STT-Balken** — gleiche Optik wie das Bullshitometer, zeigt aber
-  die rohe Konfidenz des STT-Sprachfilters (siehe eigener Abschnitt
-  oben), nicht die von VAD/Heuristik. Friert zusätzlich grau ein
-  ("STT aus"), wenn der STT-Filter selbst deaktiviert ist oder noch kein
-  frischer Befund vorliegt — unabhängig vom Sabbelfilter-Zustand, da der
-  STT-Filter eine eigene An/Aus-Einstellung hat.
+- **🗣 STT (Speech-to-Text)-Sprachfilter-Balken** — gleiche Optik wie das
+  Bullshitometer, zeigt aber die rohe Konfidenz des STT-Sprachfilters
+  (siehe eigener Abschnitt oben), nicht die von VAD/Heuristik. Label seit
+  2026-08-20 ausgeschrieben statt nur "STT" (Nutzer-Feedback: die
+  Abkürzung allein war nicht auf Anhieb verständlich). Friert zusätzlich
+  grau ein ("STT aus"), wenn der STT-Filter selbst deaktiviert ist oder
+  noch kein frischer Befund vorliegt — unabhängig vom Sabbelfilter-
+  Zustand, da der STT-Filter eine eigene An/Aus-Einstellung hat.
 - **🔎 Fingerprint-Anzeige** — anders als die beiden Balken oben kein
   Dauerwert, sondern ein kurz aufblitzendes Ereignis: 🔴 "Treffer:
   &lt;Name&gt;" bei einer erkannten Werbung/Jingle (löst den automatischen
   Wechsel aus), 🟢 "Gelernt" bei einem neuen, noch unbekannten Clip.
   Fällt 5s nach dem letzten Ereignis von selbst auf ⚪ "Idle" zurück.
+  Darunter (seit 2026-08-20) eine dauerhafte Historien-Zeile "Zuletzt
+  gelernt: hh:mm:ss Uhr · Zuletzt erkannt: hh:mm:ss Uhr" ("nie", falls
+  seit Prozessstart noch nicht vorgekommen) — anders als der Chip selbst
+  verschwindet die nicht nach 5s, damit auch seltene "Treffer"-Ereignisse
+  nachvollziehbar bleiben.
 
 Aktueller Sender, News-Break-Status und Sabbelfilter-Zustand kommen nicht
 nur per Intervall-Polling (alle 1s, vor 2026-08-20 alle 3s — angepasst an
@@ -1428,17 +1435,23 @@ Reachable at `http://<host>:5000/`:
   percent, updated every 1s. Purely informational (not clickable) —
   freezes gray while a news break is running or the chatter filter is
   off, because nothing is being classified then.
-- **🗣 STT bar** — same look as the bullshit-o-meter, but shows the raw
-  confidence of the STT speech filter (see its own section above)
-  instead of VAD/heuristic. Also freezes gray ("STT off") when the STT
-  filter itself is disabled or no fresh reading is available yet —
-  independent of the chatter filter state, since the STT filter has its
-  own on/off setting.
+- **🗣 STT (speech-to-text) filter bar** — same look as the
+  bullshit-o-meter, but shows the raw confidence of the STT speech
+  filter (see its own section above) instead of VAD/heuristic. Label
+  spelled out since 2026-08-20 instead of just "STT" (user feedback: the
+  bare abbreviation wasn't self-explanatory). Also freezes gray ("STT
+  off") when the STT filter itself is disabled or no fresh reading is
+  available yet — independent of the chatter filter state, since the
+  STT filter has its own on/off setting.
 - **🔎 Fingerprint indicator** — unlike the two bars above, not a
   continuous value but a briefly flashing event: 🔴 "Match: &lt;name&gt;"
   on a recognized ad/jingle (triggers the automatic switch), 🟢 "Learned"
   on a new, previously unknown clip. Falls back to ⚪ "Idle" on its own
-  5s after the last event.
+  5s after the last event. Below it (since 2026-08-20) a persistent
+  history line "Last learned: hh:mm:ss · Last recognized: hh:mm:ss"
+  ("never" if it hasn't happened yet this process run) — unlike the chip
+  itself this doesn't disappear after 5s, so rare "match" events stay
+  visible.
 
 Current station, news-break status and chatter-filter state arrive not
 just via interval polling (every 1s, was 3s before 2026-08-20 — tightened

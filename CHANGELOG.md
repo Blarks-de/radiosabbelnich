@@ -17,6 +17,11 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 
 ## 2026-08-20
 
+- Web-Interface: "STT"-Meter-Label ausgeschrieben (🗣 STT
+  (Speech-to-Text)-Sprachfilter) statt der bloßen Abkürzung.
+- Web-Interface: Fingerprint-Anzeige zeigt jetzt dauerhaft "Zuletzt
+  gelernt"/"Zuletzt erkannt" mit Uhrzeit unter dem blinkenden Chip, statt
+  nur den 5s lang sichtbaren Event.
 - Neu: 🔊 VU-Meter im Web-Interface (`/` und `/musik`) — zeigt den
   aktuellen Lautstärkepegel von Radio- und Musik-Wiedergabe, 10
   Pegelwerte/Sekunde vom Server, lokal im Browser animiert für einen

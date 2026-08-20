@@ -191,6 +191,14 @@ class SwitcherState:
         self._stt_probability = None  # siehe set_stt_probability()
         self._stt_language = None  # siehe set_stt_language()
         self._fp_activity = None  # {"status", "label", "ts"} oder None, siehe set_fingerprint_activity()
+        # Anders als _fp_activity (blinkt nur FP_ACTIVITY_TTL Sekunden auf)
+        # bleiben diese beiden stehen, bis der Prozess neu startet -- Wand-
+        # uhrzeit (time.time(), nicht monotonic), fürs "zuletzt gelernt/
+        # erkannt: hh:mm:ss Uhr" in der Live-Anzeige (siehe
+        # set_fingerprint_activity()). None, solange das jeweilige Ereignis
+        # seit Prozessstart noch nie vorkam.
+        self._fp_last_learned_ts = None
+        self._fp_last_match_ts = None
         self.reload()
 
     def reload(self):
@@ -583,9 +591,22 @@ class SwitcherState:
         für den "Zapping-Fehler"-Button reserviert und werden beim Klick
         konsumiert (pop) — ein zweiter Konsument (die Live-Anzeige, die
         bei jedem Poll denselben Wert lesen will) würde sich mit dem
-        Button den Wert sonst gegenseitig wegschnappen."""
+        Button den Wert sonst gegenseitig wegschnappen.
+
+        Aktualisiert nebenbei _fp_last_learned_ts/_fp_last_match_ts (siehe
+        __init__) -- die bleiben, anders als _fp_activity, über die
+        FP_ACTIVITY_TTL hinaus stehen, damit "zuletzt gelernt/erkannt"
+        auch dann noch etwas anzeigt, wenn das letzte Ereignis schon
+        länger her ist (Nutzer-Feedback: "Fingerprint zeigt nur Idle und
+        gelernt, ich hab erkannt noch nie gesehen" -- ohne die Historie
+        war nicht nachvollziehbar, ob "erkannt" je ausgelöst hatte oder
+        gar nicht erst funktioniert)."""
         with self._lock:
             self._fp_activity = {"status": status, "label": label, "ts": time.monotonic()}
+            if status == "learned":
+                self._fp_last_learned_ts = time.time()
+            elif status == "match":
+                self._fp_last_match_ts = time.time()
 
     @property
     def fingerprint_activity_raw(self):
@@ -596,6 +617,16 @@ class SwitcherState:
         reine Datenzugriff."""
         with self._lock:
             return dict(self._fp_activity) if self._fp_activity else None
+
+    @property
+    def fp_last_learned_ts(self):
+        with self._lock:
+            return self._fp_last_learned_ts
+
+    @property
+    def fp_last_match_ts(self):
+        with self._lock:
+            return self._fp_last_match_ts
 
     @property
     def filter_enabled(self) -> bool:
@@ -1165,6 +1196,8 @@ def _build_status(state: SwitcherState, icecast_cfg: dict, host_paths: dict = No
         "stt_probability": state.stt_probability,
         "stt_language": state.stt_language,
         "fingerprint_activity": _fresh_fingerprint_activity(state),
+        "fingerprint_last_learned_ts": state.fp_last_learned_ts,
+        "fingerprint_last_match_ts": state.fp_last_match_ts,
         "mode": state.mode,
         "music": music,
         "music_library_path": state.music_library_path,
@@ -1276,6 +1309,7 @@ _PAGE_HTML = """<!doctype html>
   }
   #fp-chip.state-match { background: #c0392b; border-color: #c0392b; color: #fff; }
   #fp-chip.state-learned { background: #27ae60; border-color: #27ae60; color: #fff; }
+  #fp-history { font-size: .75rem; color: #888; margin-top: .35rem; }
   ul#stations { list-style: none; padding: 0; display: grid; gap: .5rem; }
   ul#stations li button {
     width: 100%; text-align: left; padding: .6rem .8rem; font-size: 1rem;
@@ -1418,7 +1452,7 @@ _PAGE_HTML = """<!doctype html>
 
 <div id="stt-meter-wrap" class="meter-wrap">
   <div class="meter-label">
-    <span data-i18n="idx_stt_meter_label">🗣 STT</span>
+    <span data-i18n="idx_stt_meter_label">🗣 STT (Speech-to-Text)-Sprachfilter</span>
     <span id="stt-meter-pct">–</span>
   </div>
   <div class="meter-track">
@@ -1431,6 +1465,7 @@ _PAGE_HTML = """<!doctype html>
     <span data-i18n="idx_fp_indicator_label">🔎 Fingerprint</span>
   </div>
   <span id="fp-chip" data-i18n="idx_fp_state_idle">⚪ Idle</span>
+  <div id="fp-history"></div>
 </div>
 
 <h2 data-i18n="idx_stations_heading">Sender</h2>
@@ -1699,6 +1734,25 @@ function applyStatus(data) {
   } else {
     fpChip.textContent = t('idx_fp_state_idle');
   }
+
+  // Historie unter dem Chip: anders als fpAct oben (blinkt nur kurz auf)
+  // bleiben fingerprint_last_learned_ts/fingerprint_last_match_ts stehen,
+  // bis der Prozess neu startet -- Nutzer-Feedback: "Fingerprint zeigt nur
+  // Idle und gelernt, ich hab erkannt noch nie gesehen", ohne Historie war
+  // nicht nachvollziehbar, ob "erkannt" je ausgelöst hatte. Epochen-
+  // Sekunden vom Server, lokal per toLocaleTimeString() formatiert (gleiches
+  // Muster wie beim "zuletzt aktualisiert"-Zeitstempel unten).
+  const fmtTime = (epochSeconds) => {
+    if (!epochSeconds) return t('idx_fp_never');
+    const s = new Date(epochSeconds * 1000).toLocaleTimeString(LANG === 'de' ? 'de-DE' : 'en-GB');
+    // "Uhr"-Suffix ist eine deutsche Zeitangaben-Konvention, gehört an die
+    // Zeit selbst (nicht ins Template, sonst stünde "nie Uhr" da, wenn das
+    // Ereignis noch nie vorkam -- siehe idx_fp_never).
+    return LANG === 'de' ? s + ' Uhr' : s;
+  };
+  document.getElementById('fp-history').textContent =
+    t('idx_fp_last_learned', {time: fmtTime(data.fingerprint_last_learned_ts)}) + ' · ' +
+    t('idx_fp_last_match', {time: fmtTime(data.fingerprint_last_match_ts)});
 
   // Player-Quelle nur einmal setzen, nicht bei jedem Poll -> sonst würde
   // die Wiedergabe alle 5s neu starten/stottern. Die Stream-Adresse ändert
