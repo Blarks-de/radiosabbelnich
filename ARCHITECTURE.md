@@ -114,6 +114,22 @@ bedienen. Audio verlässt den Prozess ausschließlich über `write_audio()`
 Passthrough-Fall) — `output.write()` direkt aufzurufen würde die
 Playout-Deque komplett umgehen.
 
+**VU-Meter im Web-Interface (seit 2026-08-20):** rein lesend auf dem
+bereits gelesenen `pcm`-Mono-Array obendrauf, ohne `read_window()`/die
+Pipe-Timing-Logik selbst anzufassen. `sub_window_dbfs()` zerlegt das
+1-Sekunden-Fenster in `VU_SLICES_PER_WINDOW` (10) Teilstücke und liefert
+pro Teilstück den RMS-Pegel (`window_dbfs()`, ursprünglich für den
+Totluft-Watchdog gebaut). Der Hauptloop reicht die Liste an
+`state.set_audio_levels()` durch (kein `_version`-Bump — kontinuierlicher
+Wert, gleiches Muster wie `speech_probability`), `/api/status` liefert sie
+als `audio_levels_dbfs`. Läuft im **Radio-** UND im **Musik-Zweig** (beide
+lesen `pcm` über dieselbe `StreamSource.read_window()`), im Radio-Zweig
+bewusst außerhalb des `news_break_active`-Gates des Totluft-Watchdogs —
+der Pegel soll auch während einer News-Break-MP3 aktualisiert werden.
+Frontend-seitig animiert ein 100ms-Tick durch die 10 Werte, damit sich der
+Balken trotz nur 1×/Sekunde eintreffender Daten flüssig bewegt, statt
+1×/Sekunde zu springen.
+
 ## Prebuffering + Playout-Delay
 
 `PrebufferedSource` hält pro Sender eine eigene `StreamSource` plus

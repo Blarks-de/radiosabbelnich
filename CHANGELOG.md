@@ -17,6 +17,14 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 
 ## 2026-08-20
 
+- Neu: 🔊 VU-Meter im Web-Interface (`/` und `/musik`) — zeigt den
+  aktuellen Lautstärkepegel von Radio- und Musik-Wiedergabe, 10
+  Pegelwerte/Sekunde vom Server, lokal im Browser animiert für einen
+  flüssigen statt ruckeligen Balken.
+- Web-Interface: Intervall-Polling von 3s auf 1s verkürzt (passt zur
+  tatsächlichen 1Hz-Update-Rate des Hauptloops) — Bullshitometer/
+  STT-Balken/Hörerzahlen/Senderstatus fühlen sich insgesamt
+  reaktionsschneller an.
 - Neu: Totluft-Watchdog — ein Sender, der weiter technisch einwandfrei
   Daten liefert, aber 30s am Stück nur noch Stille/Rauschen sendet
   (senderseitiges Problem, real beobachtet), wird jetzt genau wie ein

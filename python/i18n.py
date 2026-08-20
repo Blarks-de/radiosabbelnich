@@ -84,6 +84,7 @@ _BASE_STRINGS = {
     'idx_filter_disable_btn': 'Disable chatter filter',
     'idx_filter_enable_btn': 'Enable chatter filter',
     'idx_bs_meter_label': '🤥 Bullshit-o-meter',
+    'idx_vu_meter_label': '🔊 Level',
     'idx_stt_meter_label': '🗣 STT',
     'idx_stt_meter_off': 'STT off',
     'idx_fp_indicator_label': '🔎 Fingerprint',

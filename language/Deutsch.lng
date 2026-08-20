@@ -35,6 +35,7 @@ idx_filter_toggle_title=Automatische Sprache-Erkennung komplett pausieren/wieder
 idx_filter_disable_btn=Sabbelfilter deaktivieren
 idx_filter_enable_btn=Sabbelfilter aktivieren
 idx_bs_meter_label=🤥 Bullshitometer
+idx_vu_meter_label=🔊 Pegel
 idx_stt_meter_label=🗣 STT
 idx_stt_meter_off=STT aus
 idx_fp_indicator_label=🔎 Fingerprint

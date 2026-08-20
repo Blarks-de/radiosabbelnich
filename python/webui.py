@@ -187,6 +187,7 @@ class SwitcherState:
         self._calibration = None  # {"language", "stage", "speech_samples", "music_samples"} oder None
         self._calibration_last_ts = None  # Dedup-Timestamp, siehe add_calibration_sample()
         self._speech_probability = 0.0
+        self._audio_levels = []  # siehe set_audio_levels()
         self._stt_probability = None  # siehe set_stt_probability()
         self._stt_language = None  # siehe set_stt_language()
         self._fp_activity = None  # {"status", "label", "ts"} oder None, siehe set_fingerprint_activity()
@@ -526,6 +527,23 @@ class SwitcherState:
     def speech_probability(self) -> float:
         with self._lock:
             return self._speech_probability
+
+    def set_audio_levels(self, levels: list):
+        """Vom Hauptloop einmal pro Analysefenster aufgerufen (Radio- UND
+        Musik-Zweig, siehe radiosabbelnich.py/sub_window_dbfs()) -- mehrere
+        dBFS-Pegelwerte statt nur einem, damit das VU-Meter im Web-Interface
+        pro Sekunde durch sie animieren kann statt nur 1x/Sekunde zu
+        springen. Bumpt bewusst NICHT `_version`, exakt aus demselben Grund
+        wie set_speech_probability(): ändert sich jedes Fenster, würde den
+        Long-Poll auf Poll-Tempo runterziehen, ohne echten Nutzen -- bleibt
+        Sache des normalen Intervall-Pollings."""
+        with self._lock:
+            self._audio_levels = levels
+
+    @property
+    def audio_levels(self) -> list:
+        with self._lock:
+            return self._audio_levels
 
     def set_stt_probability(self, value):
         """Vom Hauptloop in derselben classify()-Closure wie
@@ -1143,6 +1161,7 @@ def _build_status(state: SwitcherState, icecast_cfg: dict, host_paths: dict = No
         "news_break_active": state.news_break_active,
         "stt_status": state.stt_status,
         "speech_probability": state.speech_probability,
+        "audio_levels_dbfs": state.audio_levels,
         "stt_probability": state.stt_probability,
         "stt_language": state.stt_language,
         "fingerprint_activity": _fresh_fingerprint_activity(state),
@@ -1245,6 +1264,11 @@ _PAGE_HTML = """<!doctype html>
     transition: width .5s ease, background-color .5s ease, opacity .3s ease;
   }
   .meter-wrap.paused .meter-fill { opacity: .3; }
+  /* VU-Meter: eigener, viel kürzerer Transition als .meter-fill (0.5s) --
+     das Frontend setzt die Breite alle ~100ms neu (siehe animateVuMeter()
+     im Skript unten), mit der 0.5s-Transition würde der Balken jedem
+     Sprung nur träge hinterherziehen statt ihn sichtbar zu treffen. */
+  #vu-meter-fill { transition: width .08s linear, background-color .08s linear; }
   #fp-chip {
     display: inline-block; padding: .25rem .7rem; border-radius: 1rem; font-size: .85rem;
     background: #8882; border: 1px solid #8884; color: inherit;
@@ -1372,6 +1396,16 @@ _PAGE_HTML = """<!doctype html>
 </div>
 <div id="action-msg"></div>
 
+<div id="vu-meter-wrap" class="meter-wrap">
+  <div class="meter-label">
+    <span data-i18n="idx_vu_meter_label">🔊 Pegel</span>
+    <span id="vu-meter-pct">–</span>
+  </div>
+  <div class="meter-track">
+    <div id="vu-meter-fill" class="meter-fill"></div>
+  </div>
+</div>
+
 <div id="bs-meter-wrap" class="meter-wrap">
   <div class="meter-label">
     <span data-i18n="idx_bs_meter_label">🤥 Bullshitometer</span>
@@ -1440,6 +1474,39 @@ let lastVersion = 0;
 // Vor/Zurück (siehe switchRelative()) -- die Zielstation muss VOR der
 // Server-Antwort bekannt sein, sonst gäbe es dort nichts zu optimieren.
 let lastStatus = null;
+
+// VU-Meter-Animation: der Server liefert pro /api/status-Antwort mehrere
+// dBFS-Werte für die letzte Sekunde (siehe VU_SLICES_PER_WINDOW/
+// sub_window_dbfs() in radiosabbelnich.py), nicht nur einen -- vuQueue
+// hält sie, vuTick() (unten per setInterval alle 100ms gestartet) poppt
+// einen nach dem anderen und aktualisiert den Balken. Dadurch bewegt sich
+// das Meter ~10x/Sekunde, obwohl neue Daten nur 1x/Sekunde vom Server
+// kommen ("flüssig" trotz 1Hz-Produktionsrate im Hauptloop, siehe
+// ARCHITECTURE.md/Audio-Pfad). Läuft die Queue leer (Netzwerkhänger), hält
+// der zuletzt gesetzte Wert, statt auf 0 zu springen.
+let vuQueue = [];
+
+function vuLevelToStyle(dbfs) {
+  // -50dBFS (deckt sich mit SILENCE_DBFS_THRESHOLD in radiosabbelnich.py)
+  // -> 0%, 0dBFS (Vollausschlag) -> 100%, geclampt.
+  const pct = Math.max(0, Math.min(100, Math.round((dbfs + 50) / 50 * 100)));
+  // Grün (leise) -> Gelb (~-6dBFS) -> Rot (nahe 0dBFS/Clipping) --
+  // Standard-VU-Konvention, umgekehrte Richtung zum Bullshitometer unten
+  // (das zeigt grün=Musik -> rot=Sprache, nicht leise/laut).
+  const hue = Math.max(0, 120 - pct * 1.2);
+  return {pct, color: `hsl(${hue}, 70%, 45%)`};
+}
+
+function vuTick() {
+  const fill = document.getElementById('vu-meter-fill');
+  const pctLabel = document.getElementById('vu-meter-pct');
+  if (!fill || vuQueue.length === 0) return;
+  const dbfs = vuQueue.shift();
+  const style = vuLevelToStyle(dbfs);
+  fill.style.width = style.pct + '%';
+  fill.style.backgroundColor = style.color;
+  pctLabel.textContent = Math.round(dbfs) + ' dBFS';
+}
 
 function setSwitching(value) {
   switching = value;
@@ -1535,6 +1602,25 @@ function applyStatus(data) {
   } else {
     filterBtn.textContent = t('idx_filter_disable_btn');
     filterBtn.classList.remove('disabled-state');
+  }
+
+  // VU-Meter: legt hier nur die neue Werte-Charge für die nächste Sekunde
+  // in vuQueue, animiert wird unabhängig davon im 100ms-Tick (vuTick()
+  // oben). Grau/leer nur, wenn wirklich kein Audio läuft (Musik-Modus ohne
+  // aktiven Track) -- anders als das Bullshitometer läuft die Pegelmessung
+  // auch während News-Break und bei deaktiviertem Sabbelfilter mit (siehe
+  // Kommentar an der Aufrufstelle in radiosabbelnich.py).
+  const vuWrap = document.getElementById('vu-meter-wrap');
+  if (musicMode && !(data.music && data.music.active)) {
+    vuWrap.classList.add('paused');
+    vuQueue = [];
+    document.getElementById('vu-meter-fill').style.width = '0%';
+    document.getElementById('vu-meter-pct').textContent = '–';
+  } else {
+    vuWrap.classList.remove('paused');
+    if (Array.isArray(data.audio_levels_dbfs) && data.audio_levels_dbfs.length) {
+      vuQueue = data.audio_levels_dbfs.slice();
+    }
   }
 
   // Bullshitometer: Rohwert der VAD/Heuristik-Klassifikation (VOR der
@@ -1888,8 +1974,14 @@ longPollLoop();
 // Sicherheitsnetz zusätzlich zum Long-Poll oben: Bullshitometer/Hörerzahlen
 // ändern sich auch ohne Versionssprung (kein request/pop-Ereignis), und
 // falls der Long-Poll je hängen bleibt (Proxy/Browser-Eigenheiten), holt
-// das hier trotzdem regelmäßig den aktuellen Stand.
-setInterval(refresh, 3000);
+// das hier trotzdem regelmäßig den aktuellen Stand. 1000ms statt vormals
+// 3000ms -- passt zur tatsächlichen 1Hz-Produktionsrate der Analysewerte
+// im Hauptloop (WINDOW_SECONDS), schnelleres Pollen brächte für die Werte
+// selbst nichts, macht die Oberfläche insgesamt aber spürbar reaktionsschneller.
+setInterval(refresh, 1000);
+// VU-Meter-Animation (siehe vuTick()/vuQueue oben), unabhängig vom
+// Status-Polling -- läuft die Queue mal leer, tut der Tick einfach nichts.
+setInterval(vuTick, 100);
 
 // PWA: Service Worker fürs Offline-Fallback der Oberflächen-Hülle (siehe
 // sw.js) -- Registrierung selbst ist Voraussetzung für "Zum Home-Bildschirm
@@ -1988,6 +2080,24 @@ _MUSIC_PAGE_HTML = """<!doctype html>
   #track-subtitle:empty { display: none; }
   #action-msg { font-size: .85rem; margin-top: .4rem; min-height: 1.2em; color: #888; text-align: center; }
   a.config-link { display: inline-block; margin-top: 1.5rem; font-size: .9rem; }
+  /* Gleiches Bar-Meter-Muster wie auf "/" (dort ausführlich, siehe
+     Kommentare dort) -- hier nur das VU-Meter, kein Bullshitometer/STT
+     (keine Sprache-Klassifikation im Musik-Modus). */
+  .meter-wrap { margin-top: 1.2rem; }
+  .meter-label {
+    display: flex; justify-content: space-between; font-size: .8rem; color: #888;
+    margin-bottom: .3rem;
+  }
+  .meter-track {
+    height: 1rem; border-radius: .6rem; background: #8882; overflow: hidden;
+    border: 1px solid #8884;
+  }
+  .meter-fill {
+    height: 100%; width: 0%; background: #2ecc71;
+    transition: width .5s ease, background-color .5s ease, opacity .3s ease;
+  }
+  .meter-wrap.paused .meter-fill { opacity: .3; }
+  #vu-meter-fill { transition: width .08s linear, background-color .08s linear; }
 </style>
 </head>
 <body>
@@ -2052,6 +2162,17 @@ _MUSIC_PAGE_HTML = """<!doctype html>
      Bleibt leer -> per :empty ausgeblendet, wenn nichts läuft. -->
 <div id="track-title"></div>
 <div id="track-subtitle"></div>
+
+<div id="vu-meter-wrap" class="meter-wrap">
+  <div class="meter-label">
+    <span data-i18n="idx_vu_meter_label">🔊 Pegel</span>
+    <span id="vu-meter-pct">–</span>
+  </div>
+  <div class="meter-track">
+    <div id="vu-meter-fill" class="meter-fill"></div>
+  </div>
+</div>
+
 <div id="action-msg"></div>
 
 <a class="config-link" href="/">← <span data-i18n="music_back_link">zurück zum Radio-Player</span></a>
@@ -2073,6 +2194,28 @@ applyStaticI18n();
 let lastVersion = 0;
 let musicActive = false;
 let playerSrcSet = false;
+
+// VU-Meter-Animation: identisches Muster wie auf "/" (dort ausführlich
+// begründet) -- eigene Kopie hier, weil diese Seite ein komplett
+// separates Template ist, kein gemeinsamer Code mit "/".
+let vuQueue = [];
+
+function vuLevelToStyle(dbfs) {
+  const pct = Math.max(0, Math.min(100, Math.round((dbfs + 50) / 50 * 100)));
+  const hue = Math.max(0, 120 - pct * 1.2);
+  return {pct, color: `hsl(${hue}, 70%, 45%)`};
+}
+
+function vuTick() {
+  const fill = document.getElementById('vu-meter-fill');
+  const pctLabel = document.getElementById('vu-meter-pct');
+  if (!fill || vuQueue.length === 0) return;
+  const dbfs = vuQueue.shift();
+  const style = vuLevelToStyle(dbfs);
+  fill.style.width = style.pct + '%';
+  fill.style.backgroundColor = style.color;
+  pctLabel.textContent = Math.round(dbfs) + ' dBFS';
+}
 
 function setActionMsg(text, ms) {
   const el = document.getElementById('action-msg');
@@ -2201,6 +2344,21 @@ function applyStatus(data) {
     tags ? (tags.artist ? `${tags.artist} – ${tags.title}` : tags.title) : '';
   document.getElementById('track-subtitle').textContent =
     tags ? (tags.album && tags.year ? `${tags.album} (${tags.year})` : (tags.album || (tags.year ? String(tags.year) : ''))) : '';
+
+  // VU-Meter: siehe vuTick()/vuQueue oben, gleiches Muster wie auf "/".
+  // Grau/leer, solange kein Track läuft.
+  const vuWrap = document.getElementById('vu-meter-wrap');
+  if (!musicActive) {
+    vuWrap.classList.add('paused');
+    vuQueue = [];
+    document.getElementById('vu-meter-fill').style.width = '0%';
+    document.getElementById('vu-meter-pct').textContent = '–';
+  } else {
+    vuWrap.classList.remove('paused');
+    if (Array.isArray(data.audio_levels_dbfs) && data.audio_levels_dbfs.length) {
+      vuQueue = data.audio_levels_dbfs.slice();
+    }
+  }
 }
 
 // redirectTo: die Radio-Sender-Steuerung lebt nur auf "/", nicht hier --
@@ -2296,7 +2454,8 @@ document.querySelectorAll('.music-query-btn').forEach((btn) => {
 
 refresh();
 longPollLoop();
-setInterval(refresh, 3000);
+setInterval(refresh, 1000);
+setInterval(vuTick, 100);
 </script>
 </body>
 </html>

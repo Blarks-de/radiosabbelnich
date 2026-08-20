@@ -7589,3 +7589,129 @@ VAD) tatsächlich vorhanden sind:
   temporäre `silence_test.mp3`-Mount ist wieder aus Icecasts
   Source-Liste verschwunden — Produktiv-Mount unangetastet, weiterhin 1
   echter Hörer.
+
+## 2026-08-20 (Fortsetzung) — VU-Meter + schnelleres Intervall-Polling
+
+### Auslöser
+
+Nutzerfrage: "Wie aufwendig wäre der Einbau eines grafischen VU-Meter?"
+Antwort: Pegelmessung existiert durch den Totluft-Watchdog
+(`window_dbfs()`) bereits serverseitig, aber `WINDOW_SECONDS = 1.0`
+bedeutet neue Werte nur 1×/Sekunde — kombiniert mit dem 3s-Intervall-
+Polling des Web-Interface wäre ein direkt angezeigter Balken ruckelig.
+Nutzer bat um einen Plan für "die schnelle Variante" UND merkte an, dass
+die Oberfläche insgesamt zu langsam reagiert — beides sollte zusammen
+gelöst werden. Plan-Mode genutzt (Nutzer bat explizit um einen Plan),
+ein Explore-Agent klärte vorab drei offene Fragen: Musik-Modus-
+Audiopfad (identischer Mechanismus wie Radio — `pcm`-Array vor
+`write_audio()` verfügbar, nur bisher ungenutzt), i18n-Konventionen
+(`_BASE_STRINGS` in `i18n.py` + optional `language/Deutsch.lng`), und
+ob `/musik` Code mit `/` teilt (nein — beides sind vollständig
+separate Python-String-Templates in `webui.py`, keine gemeinsame
+Basis). Plan wurde vom Nutzer freigegeben.
+
+### Umsetzung
+
+**Backend (`radiosabbelnich.py`):**
+- Neue Konstante `VU_SLICES_PER_WINDOW = 10`.
+- Neue Funktion `sub_window_dbfs(pcm_int16, n=VU_SLICES_PER_WINDOW)`:
+  zerlegt das 1s-`pcm`-Fenster per `np.array_split()` in `n` Teilstücke
+  und ruft pro Teilstück das bestehende `window_dbfs()` auf (aus dem
+  Totluft-Watchdog-Feature, unverändert). `np.array_split()` verträgt
+  auch nicht exakt teilbare/sehr kurze Arrays ohne Fehler (relevant für
+  Probe-Reads in `quick_forward()`).
+- Aufruf an zwei Stellen, je ein Einzeiler:
+  - Radio-Zweig: direkt nach `push_and_drain(pcm, pcm_stereo)`, bewusst
+    VOR dem `if not news_break_active:`-Gate des Totluft-Watchdogs — der
+    Pegel soll auch während einer News-Break-MP3 weiterlaufen (echtes,
+    gerade hörbares Audio). Rührt nicht an `silence_streak`/der
+    Watchdog-Logik.
+  - Musik-Zweig: direkt vor `write_audio(pcm_stereo)` — dort gab es
+    bisher überhaupt keine Analyse des `pcm`-Arrays.
+
+**Backend (`webui.py`):**
+- `SwitcherState`: neue Methode `set_audio_levels(levels)` + Property
+  `audio_levels`. Bumpt bewusst NICHT `_version` — exakt dieselbe
+  Begründung wie bei `speech_probability` (ändert sich jedes Fenster,
+  würde den Long-Poll auf Poll-Tempo runterziehen, gehört zum normalen
+  Intervall-Polling).
+- `_build_status()`: neues Feld `audio_levels_dbfs`.
+- Intervall-Polling in BEIDEN Templates (`_PAGE_HTML`/`/`,
+  `_MUSIC_PAGE_HTML`/`/musik`) von 3000ms auf 1000ms verkürzt — passt
+  exakt zur tatsächlichen 1Hz-Produktionsrate der Analysewerte im
+  Hauptloop (schnelleres Pollen brächte für die Werte selbst nichts),
+  macht aber auch Bullshitometer/STT-Balken/Hörerzahlen spürbar
+  responsiver — löst den zweiten Teil der Nutzeranfrage ("Oberfläche
+  reagiert insgesamt zu langsam") mit.
+- Neues VU-Meter-Markup (`.meter-wrap`/`.meter-track`/`.meter-fill`,
+  bestehendes Muster vom Bullshitometer wiederverwendet) in BEIDEN
+  Templates — `/musik` hatte bisher gar keine Meter-CSS-Klassen, die
+  mussten dort komplett neu rein (dupliziert von `/`, da kein
+  gemeinsamer Code existiert).
+- Neuer i18n-Key `idx_vu_meter_label` in `i18n.py` (`_BASE_STRINGS`,
+  Pflicht) und `language/Deutsch.lng` (optional, deutsche Übersetzung).
+- JS: `vuQueue` + `vuTick()` (alle 100ms per `setInterval`) pro Seite
+  dupliziert (kein gemeinsamer Code zwischen `/` und `/musik`, siehe
+  oben). `applyStatus()` legt die 10 frisch angekommenen Werte nur in
+  die Queue, `vuTick()` poppt unabhängig davon einen nach dem anderen
+  und aktualisiert Breite/Farbe des Balkens — dadurch bewegt sich das
+  Meter ~10×/Sekunde, obwohl der Server nur 1×/Sekunde neue Daten
+  liefert. `#vu-meter-fill` bekommt eine eigene, viel kürzere
+  CSS-Transition (0.08s) als das allgemeine `.meter-fill` (0.5s) —
+  mit der langen Transition hätte der Balken jedem 100ms-Sprung nur
+  träge hinterhergezogen statt ihn sichtbar zu treffen. Pegel-Mapping
+  -50dBFS (0%, deckt sich mit `SILENCE_DBFS_THRESHOLD`) bis 0dBFS
+  (100%), Farbverlauf grün→gelb→rot (Standard-VU-Konvention, umgekehrte
+  Richtung zum Bullshitometer). Grauer "Kein Signal"-Zustand nur im
+  Musik-Modus ohne aktiven Track (`data.music.active === false`) — im
+  Radio-Modus läuft die Pegelmessung immer, auch während News-Break/bei
+  deaktiviertem Sabbelfilter.
+
+### Bewusst NICHT gemacht
+
+- Kein Peak-Hold-Indikator — vom Nutzer nicht angefragt, zusätzliche
+  Komplexität ohne belegten Bedarf, ließe sich später ergänzen.
+- Kein VU-Meter auf der `/config`-Seite — dort läuft ohnehin keine
+  Live-Wiedergabeanzeige.
+- Keine Änderung an `StreamSource.read_window()`/der Pipe-Timing-Logik
+  selbst — die Pegelmessung arbeitet ausschließlich auf dem bereits
+  gelesenen `pcm`-Array, genau wie geplant, um den fragilen Audio-Pfad
+  (siehe `ARCHITECTURE.md`) nicht anzufassen.
+
+### Verifiziert
+
+- `python3 -m py_compile radiosabbelnich.py webui.py i18n.py` sauber.
+- JS-Syntax beider Seiten separat geprüft: die `<script>`-Blöcke aus
+  `_PAGE_HTML`/`_MUSIC_PAGE_HTML` extrahiert, Python-seitige Platzhalter
+  (`%%I18N_JSON%%`/`%%VERSION%%`) durch valide Stand-ins ersetzt, `node
+  --check` auf allen drei Blöcken — keine Fehler.
+- Testinstanz im laufenden Container (separater Icecast-Test-Mount
+  `vu_test_output.mp3`, `--webui-port 5050`, Produktivbetrieb PID 7
+  unberührt), Web-Interface direkt über die Container-IP erreicht (kein
+  Port-Publishing nötig, Docker-Bridge-Netz ist vom Host aus direkt
+  erreichbar) statt über den nicht freigegebenen Port:
+  - Radio-Zweig (SWR3, echter Sender): `/api/status` liefert
+    `audio_levels_dbfs` mit 10 plausiblen, untereinander variierenden
+    Werten (~-17 bis -26dBFS) — keine Wiederholung desselben Werts,
+    also echte Sub-Sekunden-Auflösung, nicht nur ein aufgeblähtes Array.
+  - Musik-Zweig: Modus per `/api/mode` gewechselt, Wiedergabe per
+    `/api/music/play` gestartet (realer Ordner mit ~170.000 Tracks,
+    Scan brauchte ~30s bis zum ersten Track — Bibliotheksgröße, kein
+    Bug), danach ebenfalls plausible, variierende `audio_levels_dbfs`
+    (~-16 bis -43dBFS).
+  - Icecast-Testausgabe direkt per `ffmpeg -af volumedetect` geprüft
+    (-22,1dBFS Mittel während Musik-Wiedergabe) — deckt sich mit den
+    vom Meter gemeldeten Werten.
+  - Voll gerenderte `/` und `/musik`-Seiten per curl abgerufen: 0
+    übrig gebliebene `%%...%%`-Platzhalter (vollständig ersetzt),
+    `vu-meter-wrap`/`vu-meter-fill`/`vu-meter-pct` in beiden vorhanden,
+    deutsches Label "Pegel" korrekt eingesetzt.
+  - Alle Testprozesse (radiosabbelnich.py + ffmpeg-Kindprozesse)
+    danach beendet, `vu_test_output.mp3`-Mount wieder aus Icecasts
+    Source-Liste verschwunden, Produktiv-Mount unangetastet.
+- **NICHT geprüft**: echte Browser-Darstellung (Animation-Flüssigkeit,
+  Farbverlauf visuell, Layout) — die claude-in-chrome-Erweiterung war in
+  dieser Session nicht verbunden. Serverseitige Daten, Template-
+  Rendering und JS-Syntax sind geprüft, die tatsächliche visuelle/
+  interaktive Wirkung im Browser aber noch nicht von einem Menschen
+  bzw. automatisiert bestätigt.

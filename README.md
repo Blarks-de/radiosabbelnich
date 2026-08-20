@@ -514,9 +514,15 @@ Erreichbar unter `http://<host>:5000/`:
   automatische Erkennung für eine Weile aus (z.B. für ein Hörspiel/
   Feature auf einem sonst Musik-Sender), ohne dass RadioSabbelNich
   dazwischenfunkt. Aktueller Zustand direkt am Button erkennbar.
+- **🔊 Pegel (VU-Meter)** — grün-gelb-roter Balken, zeigt den aktuellen
+  Lautstärkepegel (dBFS) von Radio- **und** Musik-Wiedergabe. Läuft mit
+  10 Werten pro Sekunde vom Server (siehe `ARCHITECTURE.md`, Abschnitt
+  "Audio-Pfad") und animiert dazwischen lokal im Browser, damit sich der
+  Balken flüssig statt ruckelig bewegt. Friert grau ein, wenn im
+  Musik-Modus gerade kein Track läuft.
 - **🤥 Bullshitometer** — grüner-zu-roter Balken, zeigt den aktuell
   gemessenen Sprache-Wert (VAD-Wahrscheinlichkeit bzw. Heuristik-Votum)
-  live in Prozent, aktualisiert alle 3s. Rein informativ (nicht klickbar)
+  live in Prozent, aktualisiert alle 1s. Rein informativ (nicht klickbar)
   — friert grau ein, während Nachrichten-Pause läuft oder der
   Sabbelfilter aus ist, weil dann gar nicht klassifiziert wird.
 - **🗣 STT-Balken** — gleiche Optik wie das Bullshitometer, zeigt aber
@@ -532,10 +538,11 @@ Erreichbar unter `http://<host>:5000/`:
   Fällt 5s nach dem letzten Ereignis von selbst auf ⚪ "Idle" zurück.
 
 Aktueller Sender, News-Break-Status und Sabbelfilter-Zustand kommen nicht
-nur per Intervall-Polling (alle 3s), sondern zusätzlich über einen
-Long-Poll (`GET /api/status/wait`) an — ein Senderwechsel oder News-Break-
-Übergang erscheint dadurch binnen Millisekunden statt erst beim nächsten
-Poll-Tick.
+nur per Intervall-Polling (alle 1s, vor 2026-08-20 alle 3s — angepasst an
+die tatsächliche 1Hz-Produktionsrate der Analysewerte im Hauptloop),
+sondern zusätzlich über einen Long-Poll (`GET /api/status/wait`) an — ein
+Senderwechsel oder News-Break-Übergang erscheint dadurch binnen
+Millisekunden statt erst beim nächsten Poll-Tick.
 - **Hörer-Übersicht** — wer gerade zuhört (IP/Client/Verbindungsdauer)
 - **⚙ Sender verwalten** (`/config`) — Sender hinzufügen, bearbeiten,
   löschen, per Haken (de)aktivieren, gruppiert nach Kategorie
@@ -1410,9 +1417,15 @@ Reachable at `http://<host>:5000/`:
   detection for a while (e.g. for a radio drama/feature on an
   otherwise music station) without RadioSabbelNich interfering. Current
   state is visible directly on the button.
+- **🔊 Level (VU meter)** — a green-yellow-red bar showing the current
+  volume level (dBFS) of both radio and music playback. Gets 10 values
+  per second from the server (see `ARCHITECTURE.md`, "Audio-Pfad"
+  section) and animates between them client-side, so the bar moves
+  smoothly instead of jumping once a second. Freezes gray when nothing
+  is playing in music mode.
 - **🤥 Bullshit-o-meter** — a green-to-red bar showing the currently
   measured speech value (VAD probability or heuristic vote) live in
-  percent, updated every 3s. Purely informational (not clickable) —
+  percent, updated every 1s. Purely informational (not clickable) —
   freezes gray while a news break is running or the chatter filter is
   off, because nothing is being classified then.
 - **🗣 STT bar** — same look as the bullshit-o-meter, but shows the raw
@@ -1428,9 +1441,11 @@ Reachable at `http://<host>:5000/`:
   5s after the last event.
 
 Current station, news-break status and chatter-filter state arrive not
-just via interval polling (every 3s) but additionally via long polling
-(`GET /api/status/wait`) — a station switch or news-break transition
-appears within milliseconds instead of waiting for the next poll tick.
+just via interval polling (every 1s, was 3s before 2026-08-20 — tightened
+to match the main loop's actual 1Hz production rate for analysis values)
+but additionally via long polling (`GET /api/status/wait`) — a station
+switch or news-break transition appears within milliseconds instead of
+waiting for the next poll tick.
 - **Listener overview** — who's currently listening (IP/client/
   connection duration)
 - **⚙ Manage stations** (`/config`) — add, edit, delete stations,

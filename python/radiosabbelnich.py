@@ -110,6 +110,14 @@ STATION_DEAD_COOLDOWN = 300.0
 SILENCE_DBFS_THRESHOLD = -50.0
 SILENCE_DURATION_LIMIT = 30.0  # Sekunden
 
+# VU-Meter im Web-Interface: pro 1s-Analysefenster werden VU_SLICES_PER_WINDOW
+# Pegelwerte statt nur einem geliefert (siehe sub_window_dbfs()) -- das
+# Frontend animiert dann durch diese Werte, statt den Balken nur 1x/Sekunde
+# springen zu lassen. Rein kosmetisch, hat mit dem Totluft-Watchdog oben
+# nichts zu tun (der bleibt bei einem einzelnen window_dbfs()-Wert pro
+# Fenster).
+VU_SLICES_PER_WINDOW = 10
+
 # Die nächsten PREBUFFER_COUNT Sender in Rotationsreihenfolge (ab dem
 # aktuellen) laufen im Hintergrund bereits mit und halten die letzten
 # PREBUFFER_SECONDS Sekunden vor -> ein Wechsel dorthin muss nicht erst
@@ -202,6 +210,16 @@ def window_dbfs(pcm_int16: np.ndarray) -> float:
     if rms < 1e-9:
         return -120.0
     return 20.0 * np.log10(rms / 32768.0)
+
+
+def sub_window_dbfs(pcm_int16: np.ndarray, n: int = VU_SLICES_PER_WINDOW) -> list:
+    """Zerlegt ein Analysefenster in `n` gleich große Teilstücke und liefert
+    pro Teilstück `window_dbfs()` -- fürs VU-Meter im Web-Interface, das
+    dadurch pro 1s-Fenster mehrere Werte zum Animieren bekommt, statt nur
+    einen (siehe ARCHITECTURE.md, Abschnitt "Audio-Pfad"). `np.array_split`
+    verträgt auch nicht exakt durch `n` teilbare oder sehr kurze Arrays
+    (z.B. Probe-Reads in quick_forward()) ohne Fehler."""
+    return [window_dbfs(chunk) for chunk in np.array_split(pcm_int16, n)]
 
 
 def classify_window(pcm_int16: np.ndarray, sr: int) -> tuple:
@@ -1344,7 +1362,10 @@ def main():
                     start_music_track((music_index + 1) % len(music_tracks))
                     continue
                 # Direkt schreiben, keine Playout-Deque/Klassifikation --
-                # im Musik-Modus gibt es nichts zu erkennen/verzögern.
+                # im Musik-Modus gibt es nichts zu erkennen/verzögern. Fürs
+                # VU-Meter im Web-Interface läuft die Pegelmessung trotzdem
+                # mit -- rein kosmetisch, keine Watchdog-/Switch-Logik.
+                state.set_audio_levels(sub_window_dbfs(pcm))
                 write_audio(pcm_stereo)
                 continue
 
@@ -1586,6 +1607,13 @@ def main():
             # ist das hier ein reines Passthrough wie vor Einführung des
             # Delays, kein Sonderfall nötig.
             push_and_drain(pcm, pcm_stereo)
+
+            # VU-Meter im Web-Interface: bewusst VOR dem news_break_active-
+            # Gate unten und unabhängig vom Sabbelfilter -- der Pegel soll
+            # auch während einer News-Break-MP3 aktualisiert werden (das ist
+            # echtes, gerade hörbares Audio), rein kosmetisch, rührt nicht
+            # an silence_streak/dem Totluft-Watchdog.
+            state.set_audio_levels(sub_window_dbfs(pcm))
 
             if not news_break_active:
                 # Totluft-Watchdog: unabhängig vom Sabbelfilter-Zustand
