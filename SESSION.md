@@ -7896,3 +7896,96 @@ braucht.
   Nachrichtenpause, per `https://localhost:5000/api/status` bestätigt —
   ein früherer `curl http://...`-Check schlug fehl, weil das
   Produktiv-Webinterface TLS-only läuft, kein echtes Problem).
+
+## 2026-08-21 (Fortsetzung) — Werbeblock-Vorbuffering, Phase 1: eigenständiger Hintergrund-Detector
+
+### Auslöser
+
+Fortsetzung des Feature-Plans vom selben Tag (siehe Eintrag oben, Phase
+0). Phase 1 laut Plan: den Hintergrund-Klassifikations-Baustein als
+eigenständige, isoliert testbare Einheit bauen — noch OHNE Verdrahtung
+in den News-Break-Lebenszyklus von `radiosabbelnich.py`.
+
+### Umsetzung
+
+**Refactoring zuerst, nicht Teil des ursprünglichen Phase-1-Zuschnitts,
+aber Voraussetzung dafür:** `StreamSource` aus `radiosabbelnich.py` nach
+`stream_source.py` extrahiert (samt `STREAM_READ_TIMEOUT`). Grund: der
+neue Hintergrund-Detector braucht dieselbe Klasse, aber ein Import von
+`ad_skip_prebuffer.py` aus `radiosabbelnich.py` (Phase 2 wird das tun)
+plus ein Import von `radiosabbelnich.py` aus `ad_skip_prebuffer.py` (um
+an `StreamSource` zu kommen) wäre ein Zirkelimport gewesen.
+`radiosabbelnich.py` importiert `StreamSource`/`STREAM_READ_TIMEOUT` jetzt
+aus dem neuen Modul, `PrebufferedSource` bleibt unverändert dort (nutzt
+`StreamSource` weiter ganz normal per Import). Nebenbei: `import select`
+in `radiosabbelnich.py` war dadurch verwaist (nur noch in `StreamSource`
+gebraucht) und wurde entfernt.
+
+**Neues Modul `ad_skip_prebuffer.py`** mit `AdSkipPrebuffer`: eigene
+`StreamSource`, eigener `SpeechDetector` (siehe dessen `reset()` von
+Phase 0 — zwei parallele Audioströme dürfen sich nie eine Instanz
+teilen), Hintergrund-Thread liest fortlaufend Analysefenster und
+klassifiziert sie, OHNE Audio zu speichern (jedes Fenster wird nach der
+Klassifikation verworfen — das ist der ganze Witz: Werbung "ungehört"
+verstreichen lassen, nicht zwischenspeichern). `is_ready()` wird True,
+sobald `CONSECUTIVE_MUSIC_TO_CONFIRM` (=2) Musik-Fenster am Stück erkannt
+wurden — ein einzelnes musikalisches Jingle mitten im Werbeblock soll
+nicht sofort als "fertig" durchgehen. API bewusst schlank:
+`start()/is_ready()/stop()` plus `dead`-Flag (gleiches Muster wie
+`PrebufferedSource`), noch KEIN `promote()`/Übernahme-Mechanismus — der
+kommt erst mit der eigentlichen Verdrahtung in Phase 2.
+
+**Bewusst NUR VAD, kein STT/Fingerprint, kein Heuristik-Fallback** (siehe
+Moduldocstring für die volle Begründung): STT-Engines laden pro Instanz
+eigene Modelle (RAM-Verdopplung bei zweiter Instanz), `FingerprintDB` ist
+laut `ARCHITECTURE.md` exklusiv dem Hauptloop-Thread vorbehalten
+(sqlite3 nicht thread-übergreifend sicher), und die Heuristik
+(`classify_window()` in `radiosabbelnich.py`) hätte denselben
+Zirkelimport-Konflikt heraufbeschworen, den die `StreamSource`-Extraktion
+gerade vermieden hat. Ist VAD nicht verfügbar, bleibt der Hintergrund-
+Detector dauerhaft "nicht bereit" — Feature deaktiviert sich dadurch
+faktisch selbst, der Hauptloop-Fallback bleibt unverändert der heutige
+Pfad.
+
+### Bewusst NICHT gemacht
+
+- Keine Verdrahtung in `radiosabbelnich.py` — Trigger (Restzeit-Berechnung
+  über `mutagen`-Dauer), Start/Stop an allen Ausstiegspunkten der
+  Nachrichtenpause, Übernahme-Mechanismus: alles Phase 2.
+- Kein neues Setting in `settings_store.py`/Config-UI — kommt mit der
+  Verdrahtung in Phase 2, macht isoliert noch keinen Sinn.
+- Keine Änderung an `ARCHITECTURE.md` in diesem Schritt — der Baustein
+  ist noch nicht Teil des tatsächlichen Nachrichtenpause-Ablaufs, ein
+  Architektur-Diagramm dafür wäre verfrüht, bevor die Verdrahtung
+  (Trigger-Zeitpunkt, Übergabe-Mechanismus) in Phase 2 feststeht. Kommt
+  dort nach.
+
+### Verifiziert
+
+- `python3 -m py_compile ad_skip_prebuffer.py stream_source.py
+  radiosabbelnich.py speech_detector.py` sauber.
+- Isolierter Testlauf im laufenden Container (separates `/tmp`-
+  Arbeitsverzeichnis, nur die vier betroffenen Module + Testskript, KEIN
+  Icecast, KEIN Hauptloop, Produktivprozess PID 7 unberührt) gegen zwei
+  echte Sender aus der Produktiv-Senderliste:
+  - **BR24** (reiner Nachrichtensender): 20 Analysefenster über 15s,
+    durchgehend `label=speech` mit `prob` zwischen 0.74 und 1.00 —
+    `is_ready()` blieb erwartungsgemäß die ganze Zeit `False`.
+  - **80s80s** (reiner Musiksender): nach anfänglich uneinheitlichen
+    Werten während eines Verbindungs-Bursts (ffmpeg lieferte in <1s
+    Wall-Clock-Zeit 13 Analysefenster auf einmal — Puffer-Vorrat direkt
+    nach Verbindungsaufbau, kein Bug, dieselbe `StreamSource`, die auch
+    der Hauptloop nutzt) pendelte sich die Klassifikation auf
+    `label=music` ein; `is_ready()` wurde nach 2 Musik-Fenstern am Stück
+    `True` (bei Sekunde 12 von 15) und blieb bis Testende stabil `True`.
+  - Kein Absturz, `dead` blieb in beiden Fällen `False`, sauberer
+    `stop()` (Thread-Join + ffmpeg beendet) in beiden Fällen bestätigt.
+  - Beobachtung für Phase 2 vorgemerkt (kein Blocker): der
+    Verbindungs-Burst direkt nach `start()` liefert kurzzeitig
+    uneinheitliche Klassifikationen — der `CONSECUTIVE_MUSIC_TO_CONFIRM`-
+    Streak fängt das schon ab (ein einzelner Ausreißer reicht nicht für
+    `ready=True`), im echten Pause-Einsatz aber im Hinterkopf behalten.
+- Alle Testdateien danach aus Container und Host-Scratchpad gelöscht,
+  Produktivprozess währenddessen durchgehend gesund (per HTTPS-
+  `/api/status` bestätigt, lief zu dem Zeitpunkt selbst gerade in einer
+  echten Nachrichtenpause).

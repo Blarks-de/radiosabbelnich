@@ -21,6 +21,10 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
   jetzt bei jedem echten Streamwechsel zurück (`reset()`, neu) — vorher
   konnte Audio des vorigen Senders/Kandidaten die Klassifikation des
   neuen leicht verfälschen.
+- Intern: `StreamSource` aus `radiosabbelnich.py` nach `stream_source.py`
+  extrahiert, neues (noch nicht verdrahtetes) `ad_skip_prebuffer.py` für
+  das geplante Werbeblock-Vorbuffering nach der Nachrichtenpause — kein
+  Verhaltensunterschied für Nutzer in diesem Schritt.
 
 ## 2026-08-20
 
