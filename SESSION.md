@@ -7989,3 +7989,136 @@ Pfad.
   Produktivprozess währenddessen durchgehend gesund (per HTTPS-
   `/api/status` bestätigt, lief zu dem Zeitpunkt selbst gerade in einer
   echten Nachrichtenpause).
+
+## 2026-08-21 (Fortsetzung 2) — Werbeblock-Vorbuffering, Phase 2: Verdrahtung in den News-Break-Lebenszyklus
+
+### Auslöser
+
+Fortsetzung des Feature-Plans (siehe die beiden Einträge oben, Phase 0/1).
+Nutzerfreigabe für Phase 2 inkl. pauschaler Erlaubnis, den Docker-
+Container dafür ohne Rückfrage neu zu bauen/starten, falls nötig.
+
+### Umsetzung
+
+**Trigger** (`radiosabbelnich.py`): `start_news_break_mp3()` liest jetzt
+per neuem `audio_tags.read_duration_seconds()` (mutagen, gleiches
+Toleranz-Muster wie `read_display_tags()`: `None` bei nicht lesbarer
+Datei) die Dauer der gerade gestarteten Pause-MP3 und merkt sich
+Startzeitpunkt (`news_break_mp3_duration`/`news_break_mp3_started_at`,
+neue Hauptloop-lokale Variablen). Ein neuer Block direkt vor dem
+`read_window()`-Aufruf im Radio-Zweig prüft pro Tick, ob
+`ad_prebuffer_enabled` gesetzt, noch kein Hintergrund-Reader läuft
+(`ad_skip_bg is None`) und die Restzeit (`duration - (time.time() -
+started_at)`) `ad_prebuffer_lead_seconds` unterschritten hat — dann
+`AdSkipPrebuffer(SAMPLE_RATE, resume_station["url"], ...).start()` gegen
+`news_break_resume_id`. Läuft genau einmal pro Pause an; eine
+Fortsetzungs-MP3 innerhalb desselben Fensters (siehe Phase-0-Eintrag
+oben zum Nachlade-Mechanismus) lässt einen schon laufenden Reader
+unangetastet weiterlaufen, bestätigt im E2E-Test unten.
+
+**Übernahme** (`resume_from_news_break()`): entscheidet zwischen
+Adoption und Fallback. Wichtige Korrektur während der Implementierung:
+`bg.dead` ist erst NACH `promote()`/`_join()` verlässlich (ein
+hängender Hintergrund-Thread wird erst BEIM Join als tot erkannt) — ein
+`if bg.dead` VOR `promote()` wäre ein Race gewesen, exakt das gleiche
+Muster wie bei `PrebufferedSource.promote()` im bestehenden Code. Erste
+Fassung hatte den Check versehentlich davor, beim Nachlesen des
+bestehenden `do_switch()`-Codes aufgefallen und vor jedem Test korrigiert.
+Bei Adoption: `source.stop(); source = bg.promote(); detector.reset()`
+(Hauptloop-Detector, siehe Phase-0-Fix) `; reset_playout()` — bewusst
+KEIN `adopt_windows()`, die im Hintergrund klassifizierten Fenster wurden
+absichtlich verworfen (siehe `ad_skip_prebuffer.py`-Moduldocstring),
+Passthrough ist hier inhaltlich richtig. `AdSkipPrebuffer.promote()` ist
+neu (Phase 1 hatte bewusst nur `start()/is_ready()/stop()`, siehe
+dortiger Eintrag) — gibt die weiterlaufende `StreamSource` zurück, ohne
+sie zu stoppen, exakt analog zu `PrebufferedSource.promote()`.
+`stop_ad_skip_bg()` (neuer Helper) räumt den Reader an den übrigen
+Ausstiegspunkten auf: manueller Interrupt (`note_news_break_interrupted()`),
+Radio→Musik-Moduswechsel, Programmende (`finally`-Block).
+
+**Konfiguration**: `news_break.ad_prebuffer_enabled` (Default `false`)
+und `news_break.ad_prebuffer_lead_seconds` (Default `20.0`, Grenzen
+1–120s) neu in `settings_store.py` (DEFAULTS/LIMITS/`update()`) — altes
+`settings.json` ohne diese Felder funktioniert unverändert weiter (die
+bestehende Merge-Logik in `_read_raw()` lässt fehlende Unterfelder auf
+den Defaults, siehe dortiger Code, ungeprüft übernommen, kein
+Migrationscode nötig). Neue Formularfelder auf der Config-Seite unter
+"📰 Nachrichten-Pause" (`webui.py`: HTML, Lade-/Speicher-JS,
+`_handle_update_settings()`), neue i18n-Keys in `i18n.py`
+(`_BASE_STRINGS`, Englisch) und `language/Deutsch.lng` — Coverage-Check
+(`_check_i18n_coverage()`, läuft beim Modul-Import) im Container
+gegengeprüft, keine fehlenden Keys.
+
+### Bewusst NICHT gemacht
+
+- Kein STT/Fingerprint im Hintergrund-Detector — unverändert seit Phase
+  1, siehe dortige Begründung (RAM/Thread-Safety), hier nicht erneut
+  angefasst.
+- Keine Reload-getriggerte Abbruch-Logik für einen laufenden
+  Hintergrund-Reader, falls sich die Senderliste WÄHREND der letzten
+  `ad_prebuffer_lead_seconds` ändert und `news_break_resume_id` dadurch
+  inaktiv wird — `resume_from_news_break()` validiert die URL beim
+  tatsächlichen Übernahmeversuch ohnehin frisch (`bg.url ==
+  current["url"]`) und verwirft bei Mismatch sauber auf den normalen
+  Pfad. Zusätzliche Abbruch-Logik nur für dieses enge Zeitfenster schien
+  die Komplexität nicht wert.
+- Keine Ressourcen-Messung (docker stats) in diesem Schritt — kommt mit
+  Phase 3.
+
+### Verifiziert
+
+- `python3 -m py_compile` über alle geänderten Module sauber.
+- i18n-Coverage-Check (`import webui` im Container mit allen
+  transitiven Abhängigkeiten) lief ohne `AssertionError` durch.
+- **Isolierter Trigger-Test** (mutagen-Dauer einer per ffmpeg erzeugten
+  35s-Sinuston-MP3 gegengeprüft: 35,03s gelesen, korrekt).
+- **Voller End-to-End-Testlauf** im laufenden Container (echter
+  `main()`-Aufruf, separates `/tmp`-Arbeitsverzeichnis mit allen 21
+  Modulen + `language/`, eigene `stations.json` mit einem echten Sender
+  (80s80s, reine Musik), eigene `settings.json`
+  (`ad_prebuffer_enabled=true`, `ad_prebuffer_lead_seconds=20`),
+  separater Icecast-Test-Mount, Produktivprozess PID 7 durchgehend
+  unberührt). Die News-Break-Uhr (`news_break.datetime`) wurde für den
+  Test auf eine Slot-Grenze eingefroren, die danach im echten
+  Wall-Clock-Tempo weiterläuft (`now() = Slot-Startzeit +
+  monotonic-Differenz`) — löst die Pause sofort aus, statt bis zu 30 Min.
+  auf die nächste echte :00/:30 zu warten, verhält sich danach aber
+  exakt wie im Produktivbetrieb (Fenster läuft nach `window_minutes`
+  real ab).
+  - Mit `window_minutes=0.5` (30s, kürzer als die 35s-Test-MP3, damit
+    der Resume direkt nach der ersten MP3 passiert statt nach einer
+    Nachlade-Runde): Trigger schlug bei "noch 19s Pause-MP3 übrig" an
+    (erwartet: ≤ 20s Lead), `is_ready()` wurde nach 2 Musik-Fenstern
+    `True` und blieb es. Beim tatsächlichen Pause-Ende: Log
+    "📰 Nachrichten-Pause-MP3 zu Ende — zurück zu: 80s80s (Werbeblock im
+    Hintergrund übersprungen)" — die Adoption hat gegriffen. Direkt
+    danach klassifizierte der HAUPTLOOP-Detector (frisch zurückgesetzt)
+    das übernommene Audio durchgehend als "music", keine Lücke, kein
+    fälschliches erneutes "Moderation erkannt".
+  - Mit `window_minutes=0.7` (42s, absichtlich länger, um eine
+    Nachlade-Runde UND den regulären Fallback zu erzwingen): Trigger und
+    `is_ready()`-Aufbau liefen identisch, blieben über ~40 Sekunden
+    stabil `True` (Streak bis 55). Exakt im Moment des tatsächlichen
+    Pause-Endes lag auf dem echten Sender kurz echte Sprache (zwei
+    `label=speech`-Fenster kurz vor Schluss, real beobachtet, keine
+    Fingierung) — `is_ready()` kippte dadurch auf `False`, Log
+    "📰 Vorbuffering war noch nicht bereit ... — normaler Wechsel", der
+    Code fiel sauber auf `switch_to_station()` zurück, kein Crash, kein
+    Hänger. Bestätigt den in `ARCHITECTURE.md` dokumentierten Best-
+    Effort-Charakter an einem echten, nicht konstruierten Beispiel.
+  - Kontinuität des Hintergrund-Readers über eine Fortsetzungs-MP3
+    hinweg bestätigt (Log zeigt `[adskip:...]`-Zeilen unverändert
+    weiterlaufend über den "nächste MP3"-Log-Eintrag hinweg).
+  - Alle Testprozesse (Python + ffmpeg-Kindprozesse) nach jedem Lauf
+    verifiziert beendet (per PID-Scan, nicht nur `timeout`-Exit
+    vertraut — `timeout` beendet nur den direkten Kindprozess, Reste
+    wurden gezielt geprüft und waren jeweils keine vorhanden), Test-
+    Verzeichnisse aus Container und Host-Scratchpad gelöscht.
+  - Produktivprozess PID 7 währenddessen durchgehend gesund
+    (`/api/status` per HTTPS bestätigt, lief selbst gerade in einer
+    echten Nachrichtenpause mit eigenem, unbeeinflusstem Titel/Interpret).
+- Noch NICHT gemessen: tatsächlicher CPU/RAM-Fußabdruck des
+  Hintergrund-Readers unter Last (docker stats) — kommt mit Phase 3.
+- Noch NICHT getestet: echte Browser-Darstellung der beiden neuen
+  Config-Formularfelder (Checkbox + Zahlenfeld) — HTML/JS/i18n-Coverage
+  geprüft, aber keine claude-in-chrome-Session in diesem Lauf verfügbar.

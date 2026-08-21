@@ -25,6 +25,12 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
   extrahiert, neues (noch nicht verdrahtetes) `ad_skip_prebuffer.py` für
   das geplante Werbeblock-Vorbuffering nach der Nachrichtenpause — kein
   Verhaltensunterschied für Nutzer in diesem Schritt.
+- Neu (experimentell, standardmäßig AUS): Werbeblock-Vorbuffering nach
+  der Nachrichten-Pause — hört den pausierten Sender in den letzten
+  Sekunden der Pause-MP3 schon im Hintergrund mit und steigt beim
+  Pause-Ende direkt in die Musik ein, falls die Werbung dort rechtzeitig
+  vorbei ist. Einstellbar auf der Config-Seite unter "📰
+  Nachrichten-Pause" (`ad_prebuffer_enabled`/`ad_prebuffer_lead_seconds`).
 
 ## 2026-08-20
 

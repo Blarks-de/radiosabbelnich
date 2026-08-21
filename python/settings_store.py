@@ -64,6 +64,14 @@ DEFAULTS = {
         "mp3_folder": "/app/news_mp3",
         "window_minutes": 2.0,
         "enabled_hours": None,  # None = rund um die Uhr, sonst [start, end), z.B. [6, 22]
+        # Werbeblock-Vorbuffering (siehe ARCHITECTURE.md, Abschnitt
+        # "Nachrichten-Pause"/SESSION.md 2026-08-21 Phase 2): hört den
+        # pausierten Sender in den letzten ad_prebuffer_lead_seconds der
+        # laufenden Pause-MP3 schon im Hintergrund mit, um beim Pause-Ende
+        # direkt in die Musik einzusteigen statt in einen Werbeblock.
+        # Default AUS -- reine Zusatzoptimierung, kein Kernfeature.
+        "ad_prebuffer_enabled": False,
+        "ad_prebuffer_lead_seconds": 20.0,
     },
     "stt_filter": {
         "enabled": False,
@@ -105,6 +113,7 @@ LIMITS = {
     "prebuffer_seconds": (0.0, 60.0),
     "prebuffer_count": (0, 20),
     "news_break_window_minutes": (0.1, 15.0),
+    "news_break_ad_prebuffer_lead_seconds": (1.0, 120.0),
     "stt_sample_interval_seconds": (2.0, 60.0),
     "stt_confidence_threshold": (0.0, 1.0),
 }
@@ -219,6 +228,8 @@ def update(prebuffer_seconds=None, prebuffer_count=None, import_url=None,
            current_mode=None, music_library_path=None,
            news_break_enabled=None, news_break_mp3_folder=None,
            news_break_window_minutes=None, news_break_enabled_hours=UNSET,
+           news_break_ad_prebuffer_enabled=None,
+           news_break_ad_prebuffer_lead_seconds=None,
            stt_filter_enabled=None, stt_filter_engine=None,
            stt_filter_whisper_model_size=None,
            stt_filter_sample_interval_seconds=None,
@@ -336,6 +347,17 @@ def update(prebuffer_seconds=None, prebuffer_count=None, import_url=None,
                     raise ValueError("news_break_enabled_hours muss 0 <= start < end <= 24 erfüllen "
                                       "(Übernacht-Fenster wie 22-6 werden nicht unterstützt).")
                 nb["enabled_hours"] = [start, end]
+        if news_break_ad_prebuffer_enabled is not None:
+            nb["ad_prebuffer_enabled"] = bool(news_break_ad_prebuffer_enabled)
+        if news_break_ad_prebuffer_lead_seconds is not None:
+            lo, hi = LIMITS["news_break_ad_prebuffer_lead_seconds"]
+            try:
+                news_break_ad_prebuffer_lead_seconds = float(news_break_ad_prebuffer_lead_seconds)
+            except (TypeError, ValueError):
+                raise ValueError("news_break_ad_prebuffer_lead_seconds muss eine Zahl sein.")
+            if not (lo <= news_break_ad_prebuffer_lead_seconds <= hi):
+                raise ValueError(f"news_break_ad_prebuffer_lead_seconds muss zwischen {lo} und {hi} liegen.")
+            nb["ad_prebuffer_lead_seconds"] = news_break_ad_prebuffer_lead_seconds
 
         stt = data["stt_filter"]
         if stt_filter_enabled is not None:

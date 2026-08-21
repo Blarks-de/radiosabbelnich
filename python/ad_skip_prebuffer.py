@@ -154,6 +154,17 @@ class AdSkipPrebuffer:
                             "— Quelle wird verworfen.", self.url)
             self._thread = None
 
+    def promote(self):
+        """Stoppt den Hintergrund-Thread, gibt aber die weiterlaufende
+        StreamSource zur Übernahme zurück (KEIN self.source.stop() -- der
+        Aufrufer übernimmt sie als neue Playback-Quelle, gleiches Prinzip
+        wie `PrebufferedSource.promote()`). `self.dead` danach prüfen, bevor
+        die zurückgegebene Quelle tatsächlich verwendet wird -- ein
+        hängender Reader-Thread wird erst beim Join (also während dieses
+        Aufrufs) als tot erkannt, nicht schon vorher."""
+        self._join()
+        return self.source
+
     def stop(self):
         """Verwirft die Hintergrundquelle komplett (Pause vorbei, Nutzer
         hat manuell weggeschaltet, Feature deaktiviert o.ä.)."""

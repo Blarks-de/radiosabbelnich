@@ -59,6 +59,7 @@ import news_break
 import settings_store
 import stt_filter
 import webui
+from ad_skip_prebuffer import AdSkipPrebuffer
 from speech_detector import SpeechDetector
 from stream_source import StreamSource, STREAM_READ_TIMEOUT
 
@@ -868,6 +869,29 @@ def main():
     news_break_recent_files = collections.deque(maxlen=news_break.RECENT_HISTORY_SIZE)
     news_break_served_slot = None  # welcher Slot (siehe news_break.active_slot) schon dran war
 
+    # Werbeblock-Vorbuffering (siehe ad_skip_prebuffer.py, SESSION.md
+    # 2026-08-21 Phase 2): ad_skip_bg ist nur gesetzt, während innerhalb
+    # einer laufenden Nachrichten-Pause bereits ein Hintergrund-Reader auf
+    # news_break_resume_id läuft. Dauer/Startzeit der AKTUELLEN Pause-MP3
+    # (gesetzt in start_news_break_mp3()) sind die Grundlage für den
+    # Restzeit-Trigger unten -- mutagen liefert die Dauer, echtes
+    # Abspielen misst radiosabbelnich.py sonst nirgends.
+    ad_skip_bg = None
+    news_break_mp3_duration = None
+    news_break_mp3_started_at = None
+
+    def stop_ad_skip_bg():
+        """Verwirft einen laufenden Hintergrund-Reader, falls einer läuft --
+        eigene Funktion, weil das an mehreren Ausstiegspunkten der
+        Nachrichtenpause gebraucht wird (manueller Interrupt, Moduswechsel,
+        Programmende). Das reguläre Pause-Ende läuft NICHT hierüber --
+        resume_from_news_break() muss dort selbst zwischen Übernehmen und
+        Verwerfen entscheiden, siehe dort."""
+        nonlocal ad_skip_bg
+        if ad_skip_bg is not None:
+            ad_skip_bg.stop()
+            ad_skip_bg = None
+
     def note_news_break_interrupted():
         """Eine explizite Nutzer-Aktion (manueller Switch, 'ZAPPEN!')
         während einer laufenden Nachrichten-Pause beendet die Pause sofort
@@ -880,17 +904,33 @@ def main():
             state.set_news_break(False)
             news_break_active = False
             news_break_served_slot = news_break.active_slot(state.news_break_cfg)
+            stop_ad_skip_bg()
 
     def resume_from_news_break(reason: str):
         """Beendet die Nachrichten-Pause und schaltet zurück zum Sender,
         der vorher lief — oder, falls der inzwischen deaktiviert/gelöscht
         wurde, zum ersten aktivierten Sender (wie beim Reload-erzwungenen
         Wechsel). Aufgerufen sowohl bei abgelaufenem Zeitfenster als auch
-        bei einer MP3, die kürzer ist als das Fenster."""
-        nonlocal current, news_break_active, last_switch_time
+        bei einer MP3, die kürzer ist als das Fenster.
+
+        Werbeblock-Vorbuffering (siehe ad_skip_prebuffer.py): war ein
+        Hintergrund-Reader für GENAU das tatsächliche Resume-Ziel aktiv
+        und dort schon `is_ready()` (Musik erkannt), wird dessen
+        weiterlaufende StreamSource direkt übernommen -- kein
+        adopt_windows(), die im Hintergrund klassifizierten Fenster wurden
+        absichtlich verworfen (siehe dortiger Moduldocstring), Passthrough
+        ist hier also inhaltlich richtig, nicht nur technisch nötig. In
+        jedem anderen Fall (kein Hintergrund-Reader, falscher Sender weil
+        sich das Resume-Ziel während der Pause geändert hat, Quelle
+        gestorben, oder Werbeblock lief länger als die Restzeit) läuft der
+        heutige Pfad über switch_to_station() unverändert weiter."""
+        nonlocal current, news_break_active, last_switch_time, source
+        nonlocal stream_failures, silence_streak, ad_skip_bg
         nonlocal speech_streak, speech_buffer, fp_checked_this_run
         state.set_news_break(False)
         news_break_active = False
+        bg = ad_skip_bg
+        ad_skip_bg = None
         active_now = state.active_stations
         resume = next((s for s in active_now if s["id"] == news_break_resume_id), None)
         if resume is None and active_now:
@@ -900,12 +940,48 @@ def main():
         if resume is None:
             log.error("📰 Nachrichten-Pause-Ende: keine aktivierten Sender mehr "
                       "konfiguriert — Wiedergabe pausiert, bis wieder einer aktiv ist.")
+            if bg is not None:
+                bg.stop()
             return
         current = resume
-        used_buffer = switch_to_station(current)
+
+        # bg.dead erst NACH promote()/_join() verlässlich -- ein Hintergrund-
+        # Thread, der gerade in read_window() hängt, wird erst BEIM Join als
+        # tot markiert (siehe PrebufferedSource._join()/promote() für
+        # dasselbe Muster). Ein "if bg.dead" VOR promote() wäre deshalb ein
+        # Race: der Thread könnte exakt zwischen Check und Aufruf hängen
+        # bleiben.
+        adskip_candidate = bg is not None and bg.url == current["url"] and bg.is_ready()
+        if adskip_candidate:
+            promoted_source = bg.promote()
+            if bg.dead:
+                promoted_source.stop()
+                log.debug("📰 Vorbuffering-Hintergrundquelle war beim Übernehmen tot "
+                          "— verworfen.")
+                used_buffer = switch_to_station(current)
+            else:
+                source.stop()
+                source = promoted_source
+                detector.reset()  # neue Quelle im Hauptloop -- siehe SpeechDetector.reset()
+                reset_playout()
+                stream_failures = 0
+                silence_streak = 0
+                used_buffer = "adskip"
+        else:
+            if bg is not None:
+                if bg.url != current["url"]:
+                    log.debug("📰 Vorbuffering zeigte auf einen anderen Sender als das "
+                              "tatsächliche Resume-Ziel — verworfen.")
+                else:
+                    log.debug("📰 Vorbuffering war noch nicht bereit (Werbeblock lief "
+                              "vermutlich länger als die Restzeit) — normaler Wechsel.")
+                bg.stop()
+            used_buffer = switch_to_station(current)
+
         state.set_current(current["id"])
         log.info("📰 %s — zurück zu: %s%s", reason, current["name"],
-                 " (aus Puffer)" if used_buffer.startswith("prebuffered") else "")
+                 " (Werbeblock im Hintergrund übersprungen)" if used_buffer == "adskip"
+                 else " (aus Puffer)" if used_buffer.startswith("prebuffered") else "")
         last_switch_time = time.time()
         speech_streak = 0
         speech_buffer = []
@@ -921,6 +997,7 @@ def main():
         vermieden, sofern der Ordner genug andere MP3s enthält. Gibt False
         zurück, wenn keine MP3 verfügbar ist (Ordner leer/nicht lesbar) —
         der Aufrufer entscheidet dann, was stattdessen passiert."""
+        nonlocal news_break_mp3_duration, news_break_mp3_started_at
         path = news_break.pick_random_mp3(cfg.get("mp3_folder"), recent=news_break_recent_files)
         if path is None:
             return False
@@ -947,6 +1024,12 @@ def main():
         source.start(path, realtime=True)
         state.set_news_break(True, news_break_recent_files[-1],
                               tags=audio_tags.read_display_tags(path))
+        # Grundlage für den Werbeblock-Vorbuffering-Trigger unten im Loop
+        # (Restzeit = Dauer minus verstrichene Zeit). None, falls mutagen
+        # die Datei nicht lesen kann -- der Trigger prüft das und bleibt in
+        # dem Fall einfach inaktiv (kein Fehler, siehe audio_tags.py).
+        news_break_mp3_duration = audio_tags.read_duration_seconds(path)
+        news_break_mp3_started_at = time.time()
         quick_forward()
         return True
 
@@ -1188,6 +1271,7 @@ def main():
                         state.set_news_break(False)
                         news_break_active = False
                         news_break_served_slot = news_break.active_slot(state.news_break_cfg)
+                        stop_ad_skip_bg()
                     source.stop()
                     for pb in prebuffer.values():
                         pb.stop()
@@ -1457,6 +1541,28 @@ def main():
             # MP3 wird dadurch immer bis zum natürlichen Ende gespielt,
             # auch wenn das die Pause über window_minutes hinaus verlängert.
 
+            # Werbeblock-Vorbuffering (siehe ad_skip_prebuffer.py, SESSION.md
+            # 2026-08-21 Phase 2): in den letzten ad_prebuffer_lead_seconds
+            # der laufenden Pause-MP3 schon im Hintergrund auf das Resume-
+            # Ziel verbinden und mitklassifizieren -- resume_from_news_break()
+            # übernimmt den Reader später, falls er rechtzeitig "ready" wird.
+            # Läuft genau EINMAL pro Pause an (ad_skip_bg is None-Gate) --
+            # eine Fortsetzungs-MP3 innerhalb desselben Fensters lässt einen
+            # schon laufenden Reader unangetastet weiterlaufen.
+            if (news_break_active and news_break_cfg.get("ad_prebuffer_enabled")
+                    and ad_skip_bg is None and news_break_mp3_duration is not None):
+                remaining = news_break_mp3_duration - (time.time() - news_break_mp3_started_at)
+                lead = news_break_cfg.get("ad_prebuffer_lead_seconds", 20.0)
+                if remaining <= lead:
+                    resume_station = next((s for s in state.active_stations
+                                            if s["id"] == news_break_resume_id), None)
+                    if resume_station is not None:
+                        ad_skip_bg = AdSkipPrebuffer(SAMPLE_RATE, resume_station["url"],
+                                                     WINDOW_SECONDS, name=resume_station["id"])
+                        ad_skip_bg.start()
+                        log.info("🎧 Werbeblock-Vorbuffering: höre '%s' im Hintergrund mit "
+                                 "(noch %.0fs Pause-MP3 übrig).", resume_station["name"], remaining)
+
             pcm, pcm_stereo = source.read_window(WINDOW_SECONDS)
             if pcm.size == 0:
                 if news_break_active:
@@ -1668,6 +1774,7 @@ def main():
         source.stop()
         for pb in prebuffer.values():
             pb.stop()
+        stop_ad_skip_bg()
         output.close()
         if fp_db:
             fp_db.close()

@@ -2761,6 +2761,16 @@ _CONFIG_PAGE_HTML = """<!doctype html>
       <input type="number" id="nb-hour-end" min="0" max="24" step="1">
     </label>
   </div>
+  <p class="hint" data-i18n="cfg_nb_adskip_hint">Verbindet sich in den letzten Sekunden der Pause-MP3 schon im
+    Hintergrund mit dem Sender und hört auf Musik — wird sie rechtzeitig erkannt, steigt die Wiedergabe direkt
+    in der Musik ein statt in einem live laufenden Werbeblock. Best-Effort: ein Live-Radiostream lässt sich
+    nicht vorspulen, ein längerer Werbeblock läuft dann wie bisher live weiter.</p>
+  <label class="checkbox">
+    <input type="checkbox" id="nb-adskip-enabled"> <span data-i18n="cfg_nb_adskip_enabled_label">Werbeblock nach der Pause überspringen (experimentell)</span>
+  </label>
+  <label><span data-i18n="cfg_nb_adskip_lead_label">Vorlaufzeit vor Pause-Ende (Sekunden)</span>
+    <input type="number" id="nb-adskip-lead" min="1" max="120" step="1">
+  </label>
   <button type="submit" data-i18n="common_save">Speichern</button>
 </form>
 
@@ -3392,6 +3402,8 @@ async function loadSettings() {
     document.getElementById('nb-hours-enabled').checked = !!hours;
     document.getElementById('nb-hour-start').value = hours ? hours[0] : '';
     document.getElementById('nb-hour-end').value = hours ? hours[1] : '';
+    document.getElementById('nb-adskip-enabled').checked = !!nb.ad_prebuffer_enabled;
+    document.getElementById('nb-adskip-lead').value = nb.ad_prebuffer_lead_seconds;
 
     const ml = settings.music_library || {};
     document.getElementById('ml-folder-value').value = ml.path || '';
@@ -3506,6 +3518,8 @@ document.getElementById('news-break-form').addEventListener('submit', async (ev)
     const end = parseInt(document.getElementById('nb-hour-end').value, 10);
     news_break_enabled_hours = [start, end];
   }
+  const news_break_ad_prebuffer_enabled = document.getElementById('nb-adskip-enabled').checked;
+  const news_break_ad_prebuffer_lead_seconds = parseFloat(document.getElementById('nb-adskip-lead').value);
   try {
     await api('/api/config/settings', {
       method: 'POST',
@@ -3513,6 +3527,7 @@ document.getElementById('news-break-form').addEventListener('submit', async (ev)
       body: JSON.stringify({
         news_break_enabled, news_break_mp3_folder, news_break_window_minutes,
         news_break_enabled_hours,
+        news_break_ad_prebuffer_enabled, news_break_ad_prebuffer_lead_seconds,
       }),
     });
     showMsg(t('cfg_news_break_saved'), false);
@@ -4192,6 +4207,8 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                         if "news_break_enabled_hours" in payload
                         else settings_store.UNSET
                     ),
+                    news_break_ad_prebuffer_enabled=payload.get("news_break_ad_prebuffer_enabled"),
+                    news_break_ad_prebuffer_lead_seconds=payload.get("news_break_ad_prebuffer_lead_seconds"),
                     stt_filter_enabled=payload.get("stt_filter_enabled"),
                     stt_filter_engine=payload.get("stt_filter_engine"),
                     stt_filter_whisper_model_size=payload.get("stt_filter_whisper_model_size"),

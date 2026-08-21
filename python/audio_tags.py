@@ -117,3 +117,20 @@ def read_display_tags(full_path: str) -> dict:
         log.debug("Tag-Anzeige: %s nicht lesbar (%s) -- nur Dateiname.", full_path, e)
         return {"title": fallback_title, "artist": None, "album": None, "year": None}
     return {"title": title, "artist": artist, "album": album, "year": year}
+
+
+def read_duration_seconds(full_path: str) -> float | None:
+    """Spieldauer in Sekunden, oder None falls nicht lesbar/kein
+    unterstütztes Format -- für den Werbeblock-Vorbuffering-Trigger einer
+    News-Break-MP3 (radiosabbelnich.py): Restzeit = Dauer minus verstrichene
+    Zeit seit Start. Gleiches Toleranz-Muster wie read_display_tags() oben,
+    der Aufrufer behandelt "unbekannt" einfach wie "noch kein Trigger"."""
+    ext = os.path.splitext(full_path)[1].lower()
+    try:
+        tags = open_tags(full_path, ext)
+        if tags is None or tags.info is None:
+            return None
+        return float(tags.info.length)
+    except (MutagenError, OSError) as e:
+        log.debug("Dauer nicht lesbar: %s (%s)", full_path, e)
+        return None

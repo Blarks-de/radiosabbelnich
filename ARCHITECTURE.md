@@ -332,6 +332,73 @@ einen Wahrheitswert — sonst würde eine ungewöhnlich lange MP3-Kette, die
 zufällig ins nächste Halbe-Stunde-Fenster hineinreicht, fälschlich als
 "noch dasselbe Fenster" durchgehen.
 
+### Werbeblock-Vorbuffering (ad_skip_prebuffer.py, seit 2026-08-21)
+
+Optionales Zusatzfeature (`news_break.ad_prebuffer_enabled`, Default
+AUS): nach der Pause-MP3 folgt auf vielen Sendern erst ein Werbeblock,
+bevor wieder Musik läuft — der Hörer bekäme den live komplett ab. Ein
+Live-Stream lässt sich aber nicht schneller als Echtzeit lesen, "vorspulen"
+geht nicht. Der Trick ist deshalb, die ohnehin verstreichende Pause-Zeit
+doppelt zu nutzen: in den letzten `ad_prebuffer_lead_seconds` der Pause-MP3
+schon im Hintergrund auf den pausierten Sender verbinden und mitklassifizieren
+(`AdSkipPrebuffer`, eigene `StreamSource` + eigener `SpeechDetector`, siehe
+dessen Moduldocstring) — läuft der Werbeblock dort kürzer als die Restzeit,
+ist er beim Pause-Ende bereits vorbei.
+
+```mermaid
+flowchart LR
+    Trigger["Restzeit Pause-MP3 <= lead_seconds?<br/>(mutagen-Dauer minus verstrichene Zeit)"] -->|ja, einmal pro Pause| Start["AdSkipPrebuffer.start()<br/>eigene StreamSource + eigener SpeechDetector"]
+    Start --> Loop["Fenster für Fenster klassifizieren,<br/>NICHT gespeichert/abgespielt"]
+    Loop -->|"N Musik-Fenster am Stück"| Ready["is_ready() = True"]
+    Play["Pause-MP3 zu Ende"] --> Check{"bg vorhanden, URL passt,<br/>is_ready()?"}
+    Check -->|ja| Promote["promote(): StreamSource übernehmen,<br/>detector.reset(), reset_playout()"]
+    Check -->|nein| Fallback["switch_to_station()<br/>= heutiges Verhalten unverändert"]
+```
+
+Harte Punkte:
+
+- **Trigger über MP3-Restdauer, nicht über eine feste Fensterposition**:
+  `window_minutes` kann durch die "MP3 spielt immer bis zum natürlichen
+  Ende"-Regel oben beliebig überschritten werden, ein Trigger relativ zum
+  Fenster-Ende wäre also unzuverlässig. `start_news_break_mp3()` liest die
+  Dauer stattdessen einmalig per `audio_tags.read_duration_seconds()`
+  (mutagen, bereits Projektabhängigkeit) und merkt sich den Startzeitpunkt;
+  der Hauptloop berechnet daraus pro Tick die Restzeit. Datei nicht lesbar
+  → Trigger bleibt für diese MP3 einfach inaktiv, kein Fehler.
+- **Eigene `SpeechDetector`-Instanz zwingend** (siehe deren `reset()`-
+  Docstring/Abschnitt "Sprache-Erkennung (VAD)" oben): der Hintergrund-
+  Strom und der Hauptloop-Strom laufen gleichzeitig, eine geteilte Instanz
+  würde Leftover/Modellzustand beider vermischen.
+- **Bewusst NUR VAD, kein STT/Fingerprint**: `SttFilter` lädt pro Instanz
+  eigene Sprachmodelle (RAM-Verdopplung bei einer zweiten Instanz),
+  `FingerprintDB`-Connections sind laut Abschnitt "Fingerprinting" oben
+  exklusiv dem Hauptloop-Thread vorbehalten. Reine VAD-Klassifikation
+  reicht, um "ist das noch Sprache" zu beantworten; ist VAD nicht
+  verfügbar, bleibt der Hintergrund-Detector dauerhaft "nicht bereit" —
+  Feature deaktiviert sich dadurch faktisch selbst.
+- **Kein Audio wird zwischengespeichert** — jedes Hintergrund-Fenster wird
+  nach der Klassifikation verworfen. Bei der Übernahme (`promote()`) gibt
+  es deshalb bewusst KEIN `adopt_windows()` wie beim normalen
+  Prebuffering-Wechsel — `reset_playout()` (Passthrough) ist hier
+  inhaltlich richtig, nicht nur technisch nötig.
+- **`bg.dead` erst NACH `promote()`/`_join()` verlässlich** (gleiches
+  Muster wie `PrebufferedSource`): ein hängender Hintergrund-Thread wird
+  erst beim Join als tot erkannt, ein Check davor wäre ein Race.
+- **Best-Effort, kein hartes Versprechen**: läuft der Werbeblock länger
+  als `ad_prebuffer_lead_seconds`, oder liegt der exakte Pause-Ende-
+  Zeitpunkt zufällig auf einer kurzen Wortmeldung/einem Jingle des
+  Zielsenders (real beim Testen beobachtet — `is_ready()` kann durch ein
+  einzelnes Sprache-Fenster zwischen zwei Ticks kurzzeitig wieder `False`
+  werden), fällt der Code auf den heutigen Pfad (`switch_to_station()`)
+  zurück — keine Verschlechterung gegenüber dem Verhalten ohne dieses
+  Feature.
+- **`AdSkipPrebuffer.stop()`/`promote()` können den Hauptloop kurz
+  blockieren** (bis zu `STREAM_READ_TIMEOUT + 1` ≈ 9s, falls der
+  Hintergrund-Thread gerade mitten in einem Read hängt) — dieselbe
+  bekannte, akzeptierte Grenze wie bei `PrebufferedSource`/
+  `sync_prebuffer()` (siehe "Offene Punkte" unten), nicht neu eingeführt,
+  nur an einer weiteren Stelle wirksam.
+
 ## Radio-/Musik-Modus (Top-Level-Fork)
 
 Der Musik-Modus ist **kein** Sonderfall der Nachrichten-Pause (die

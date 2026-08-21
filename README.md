@@ -149,7 +149,9 @@ Senderliste auf der Config-Seite (`/config`) oder direkt per API:
   "enabled": false,
   "mp3_folder": "/app/news_mp3",
   "window_minutes": 2.0,
-  "enabled_hours": null
+  "enabled_hours": null,
+  "ad_prebuffer_enabled": false,
+  "ad_prebuffer_lead_seconds": 20.0
 }
 ```
 
@@ -172,6 +174,22 @@ Senderliste auf der Config-Seite (`/config`) oder direkt per API:
 - **`enabled_hours`** — optional `[start, end]`, z.B. `[6, 22]` für "nur
   6–22 Uhr"; `null` = rund um die Uhr. Kein Übernacht-Wraparound (22–6
   wird nicht unterstützt).
+- **`ad_prebuffer_enabled`** (seit 2026-08-21, standardmäßig AUS) —
+  "Werbeblock nach der Pause überspringen (experimentell)" auf der
+  Config-Seite. In den letzten `ad_prebuffer_lead_seconds` der laufenden
+  Pause-MP3 verbindet sich RadioSabbelNich schon im Hintergrund mit dem
+  pausierten Sender und hört mit, ohne es hörbar abzuspielen — läuft dort
+  rechtzeitig wieder Musik statt eines Werbeblocks, steigt die Wiedergabe
+  beim Pause-Ende direkt dort ein. Best-Effort, kein hartes Versprechen:
+  ein Live-Radiostream lässt sich nicht vorspulen, läuft der Werbeblock
+  länger als die Restzeit (oder liegt der Erkennungszeitpunkt zufällig
+  genau auf einer kurzen Wortmeldung/einem Jingle), spielt er wie bisher
+  live weiter.
+- **`ad_prebuffer_lead_seconds`** — wie viele Sekunden vor dem
+  (voraussichtlichen) Ende der Pause-MP3 das Hintergrund-Mithören
+  beginnt (Default 20s, Bereich 1–120s). Die MP3-Dauer wird dafür beim
+  Start jeder Pause-MP3 per `mutagen` gelesen — ist die Datei damit nicht
+  lesbar, bleibt der Trigger für diese MP3 einfach inaktiv.
 
 Alternativ direkt per API setzen (z.B. für Skripte):
 ```bash
@@ -644,7 +662,9 @@ Grafische Gesamtübersicht mit Diagrammen pro Subsystem: `ARCHITECTURE.md`.
 | Datei | Zweck |
 |---|---|
 | `python/radiosabbelnich.py` | Hauptprozess: Stream holen, klassifizieren, umschalten, Icecast-Output |
+| `python/stream_source.py` | ffmpeg-Wrapper (Mono-Analyse- + Stereo-Playback-Pipe aus einer Quelle) |
 | `python/speech_detector.py` | Silero-VAD-Wrapper mit Signal-Heuristik-Fallback |
+| `python/ad_skip_prebuffer.py` | Hintergrund-VAD-Detector fürs Werbeblock-Vorbuffering nach der Nachrichten-Pause |
 | `python/fingerprint.py` | Audio-Fingerprinting (Constellation-Map-Hashing) in SQLite |
 | `python/stations_store.py` | Laden/Speichern/CRUD der Senderliste (`stations.json`) |
 | `python/settings_store.py` | Laufzeit-Einstellungen (Puffer-Parameter, Import-URL, `settings.json`) |
@@ -1073,7 +1093,9 @@ on the config page (`/config`), or directly via the API:
   "enabled": false,
   "mp3_folder": "/app/news_mp3",
   "window_minutes": 2.0,
-  "enabled_hours": null
+  "enabled_hours": null,
+  "ad_prebuffer_enabled": false,
+  "ad_prebuffer_lead_seconds": 20.0
 }
 ```
 
@@ -1097,6 +1119,21 @@ on the config page (`/config`), or directly via the API:
 - **`enabled_hours`** — optional `[start, end]`, e.g. `[6, 22]` for
   "only 6am–10pm"; `null` = around the clock. No overnight wraparound
   (22–6 is not supported).
+- **`ad_prebuffer_enabled`** (since 2026-08-21, off by default) — "skip
+  the ad block after the break (experimental)" on the config page. In
+  the last `ad_prebuffer_lead_seconds` of the running break MP3,
+  RadioSabbelNich already connects to the paused station in the
+  background and listens along without playing it audibly — if music is
+  already playing there in time instead of an ad block, playback jumps
+  straight into it once the break ends. Best-effort, not a hard
+  guarantee: a live radio stream can't be fast-forwarded, so a longer ad
+  block (or the check landing exactly on a short voice-over/jingle)
+  still plays live like today.
+- **`ad_prebuffer_lead_seconds`** — how many seconds before the
+  (expected) end of the break MP3 the background listening starts
+  (default 20s, range 1–120s). The MP3's duration is read via `mutagen`
+  each time a break MP3 starts — if the file isn't readable that way,
+  the trigger simply stays inactive for that MP3.
 
 Alternatively, set it directly via the API (e.g. for scripts):
 ```bash
@@ -1551,7 +1588,9 @@ beyond the debug signing (see above).
 | File | Purpose |
 |---|---|
 | `python/radiosabbelnich.py` | Main process: fetch stream, classify, switch, Icecast output |
+| `python/stream_source.py` | ffmpeg wrapper (mono analysis + stereo playback pipe from one source) |
 | `python/speech_detector.py` | Silero VAD wrapper with signal-heuristic fallback |
+| `python/ad_skip_prebuffer.py` | Background VAD detector for the post-news-break ad-skip prebuffer |
 | `python/fingerprint.py` | Audio fingerprinting (constellation-map hashing) in SQLite |
 | `python/stations_store.py` | Load/save/CRUD for the station list (`stations.json`) |
 | `python/settings_store.py` | Runtime settings (buffer parameters, import URL, `settings.json`) |

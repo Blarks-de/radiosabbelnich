@@ -109,6 +109,9 @@ cfg_nb_window_label=Zeitfenster (Minuten)
 cfg_nb_hours_enabled_label=nur zu bestimmten Stunden aktiv
 cfg_nb_hour_start_label=von Stunde
 cfg_nb_hour_end_label=bis Stunde
+cfg_nb_adskip_enabled_label=Werbeblock nach der Pause überspringen (experimentell)
+cfg_nb_adskip_hint=Verbindet sich in den letzten Sekunden der Pause-MP3 schon im Hintergrund mit dem Sender und hört auf Musik — wird sie rechtzeitig erkannt, steigt die Wiedergabe direkt in der Musik ein statt in einem live laufenden Werbeblock. Best-Effort: ein Live-Radiostream lässt sich nicht vorspulen, ein längerer Werbeblock läuft dann wie bisher live weiter.
+cfg_nb_adskip_lead_label=Vorlaufzeit vor Pause-Ende (Sekunden)
 # --- 🎵 Player ---
 cfg_music_library_heading=🎵 Player
 cfg_music_library_hint=Root-Ordner für den Player-Modus (Play/Stop auf der /musik-Seite) — Container-interner Pfad, gemountet über MUSIC_LIBRARY_FOLDER in .env.
