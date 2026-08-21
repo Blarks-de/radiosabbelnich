@@ -1,5 +1,27 @@
 # Architektur
 
+## Inhaltsverzeichnis
+
+- [Gesamtbild](#gesamtbild)
+- [Audio-Pfad](#audio-pfad)
+- [Prebuffering + Playout-Delay](#prebuffering--playout-delay)
+- [Watchdog gegen tote Sender](#watchdog-gegen-tote-sender)
+- [Sprache-Erkennung (VAD, speech_detector.py)](#sprache-erkennung-vad-speech_detectorpy)
+- [Fingerprinting](#fingerprinting)
+- [Logging](#logging)
+- [Sender-Import](#sender-import)
+- [Nachrichten-Pause (news_break.py)](#nachrichten-pause-news_breakpy)
+  - [Werbeblock-Vorbuffering (ad_skip_prebuffer.py, seit 2026-08-21)](#werbeblock-vorbuffering-ad_skip_prebufferpy-seit-2026-08-21)
+  - [Sprache-Gate für den Pause-Start (seit 2026-08-21)](#sprache-gate-für-den-pause-start-seit-2026-08-21)
+- [Radio-/Musik-Modus (Top-Level-Fork)](#radio-musik-modus-top-level-fork)
+- [Musik-Library-Baukasten](#musik-library-baukasten)
+- [STT-Sprachfilter (stt_filter.py)](#stt-sprachfilter-stt_filterpy)
+- [Mehrsprachiges Web-Interface (i18n.py)](#mehrsprachiges-web-interface-i18npy)
+- [Docker: Host- vs. Container-Layout](#docker-host--vs-container-layout)
+- [TLS/HTTPS (optional, `TLS_CERT_FILE`/`TLS_KEY_FILE` in `.env`)](#tlshttps-optional-tls_cert_filetls_key_file-in-env)
+- [Sicherheitsmodell](#sicherheitsmodell)
+- [Offene Punkte](#offene-punkte)
+
 Dieses Dokument ist die **einzige, vollständige** Beschreibung der
 RadioSabbelNich-Architektur — Diagramme und die dazugehörigen
 Begründungen ("warum genau so, warum ein naheliegender Ansatz
