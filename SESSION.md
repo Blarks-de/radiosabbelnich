@@ -8540,3 +8540,52 @@ zusätzlich, dass der Reader auch über MEHRERE MP3-Fortsetzungen hinweg
 (hier: 2 Tracks, 4:37 min Gesamtlaufzeit) korrekt am Leben bleibt und
 am Ende sauber übernommen wird — kein separater Test nötig, echte
 Bestätigung reicht.
+
+## 2026-08-21 (Fortsetzung 10) — Lizenz-Setup: GPLv3
+
+Nutzer bat darum, das Projekt (Docker-Dienst + Android-App) explizit
+unter GPLv3 zu lizenzieren.
+
+**Umsetzung:**
+- `LICENSE` im Repo-Root angelegt: vollständiger, unveränderter GPLv3-
+  Text von `https://www.gnu.org/licenses/gpl-3.0.txt` (per `curl`
+  direkt geladen statt über WebFetch, das den Text durch ein Modell
+  zusammenfassen/umformulieren lassen würde — bei einem Lizenztext
+  inakzeptabel), Copyright-Zeile `Copyright (C) 2026 RadioSabbelNich`
+  vorangestellt.
+- `README.md` (deutscher und englischer Teil): Lizenz-Badge direkt
+  unter der jeweiligen H1 sowie ein neuer Abschnitt "Lizenz"/"License"
+  am Ende des jeweiligen Teils mit Verweis auf `LICENSE`.
+- Kurzer 4-zeiliger GPLv3-Kopfblock (Copyright, Kernsatz "this program
+  is free software…", Verweis auf `LICENSE`) an den Anfang aller
+  Python-Module unter `python/` (21 Dateien, nach einer eventuellen
+  Shebang-Zeile, vor dem Docstring) und aller Kotlin-Klassen unter
+  `android-app/app/src/main/java/com/radiozapper/mvp/` (25 Dateien)
+  gesetzt — mechanisch per Einweg-Skript
+  (`/tmp/.../add_license_headers.py`, nicht Teil des Repos) statt 46
+  einzelner Edits, danach `python3 -m py_compile python/*.py` gegen
+  Syntaxfehler durch die Einfügung geprüft (fehlerfrei).
+- Abhängigkeits-Lizenzen geprüft (WebSearch, keine aus dem Gedächtnis
+  übernommen): `numpy` (BSD-3), `silero-vad-lite` (MIT, ebenso die
+  zugrunde liegenden Silero-VAD-Modelle), `vosk`/`vosk-android`
+  (Apache-2.0), `faster-whisper` (MIT), `psutil` (BSD-3), `mutagen`
+  (GPL-2.0-or-later), `aubio` (GPL-3.0-or-later), `androidx.media3`/
+  ExoPlayer (Apache-2.0). Alle mit GPLv3 kompatibel — `mutagen`s
+  "or-later"-Klausel erlaubt die Kombination unter GPLv3-Bedingungen,
+  `aubio` ist ohnehin schon GPLv3. **Keine problematische Abhängigkeit
+  gefunden**, nichts zu melden.
+
+**Bewusst NICHT gemacht**: keine Kotlin-Header für reine
+Daten-/Enum-Klassen extra ausgelassen (z.B. `Station.kt`,
+`Categories.kt`, `PlaybackStatus.kt`) — einheitlich alle 25 Dateien
+unter `mvp/` geheadert statt eine Line-Count-Schwelle zu erfinden,
+das ist bei der überschaubaren Projektgröße einfacher und konsistenter
+als eine Unterscheidung "Hauptklasse vs. Hilfsklasse" zu treffen.
+
+**Verifiziert**: `LICENSE` enthält den vollständigen offiziellen Text
+(674 Zeilen Originaltext + Copyright-Kopf, per `wc -l`/Sichtprüfung
+Anfang/Ende gegen die Quelle geprüft); alle Python-Dateien parsen nach
+der Header-Einfügung weiterhin fehlerfrei; Stichproben der Kotlin- und
+Python-Header per `head` visuell geprüft (Header korrekt vor/nach
+Shebang bzw. `package`-Zeile, kein doppeltes Einfügen bei erneutem
+Lauf dank Idempotenz-Check im Skript).

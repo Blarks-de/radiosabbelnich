@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 RadioSabbelNich
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License version 3 (or
+# later), as published by the Free Software Foundation. See LICENSE.
+
 """
 music_query.py — Phase 2 der Musik-Library-Roadmap (siehe README
 "Zukünftige Features"): einfache Lesezugriffe auf die von music_scan.py

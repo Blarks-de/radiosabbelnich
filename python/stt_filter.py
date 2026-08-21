@@ -1,3 +1,8 @@
+# Copyright (C) 2026 RadioSabbelNich
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License version 3 (or
+# later), as published by the Free Software Foundation. See LICENSE.
+
 """
 stt_filter.py — Zusätzliches Sprache-Signal per Speech-to-Text (STT),
 unabhängig von Silero VAD/der Signal-Heuristik (speech_detector.py) und

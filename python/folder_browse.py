@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 RadioSabbelNich
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License version 3 (or
+# later), as published by the Free Software Foundation. See LICENSE.
+
 """
 folder_browse.py — Gemeinsamer Baustein für die Breadcrumb-Ordnerauswahl
 auf der Config-Seite: wird sowohl für den News-Break-MP3-Pfad als auch für

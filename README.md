@@ -4,6 +4,8 @@
 
 # RadioSabbelNich
 
+![License](https://img.shields.io/badge/license-GPLv3-blue.svg)
+
 *[🇬🇧 English version further below](#radiosabbelnich-english-version)*
 
 # Namensänderung: von RadioZapper über KeinSabbelRadio zu --> RadioSabbelNich
@@ -972,6 +974,11 @@ Swift/SwiftUI gebaut und über Xcode auf einem Mac kompiliert — ein
 eigenständiges Projekt mit eigenem Tech-Stack, analog zu
 `android-app/`. Bislang nur Idee, kein Zeitplan.
 
+## Lizenz
+
+Lizenziert unter der GNU General Public License v3.0 (GPLv3), siehe
+[LICENSE](LICENSE).
+
 ---
 
 <a id="radiosabbelnich-english-version"></a>
@@ -979,6 +986,8 @@ eigenständiges Projekt mit eigenem Tech-Stack, analog zu
 *[🇩🇪 Deutsche Version weiter oben](#radiosabbelnich)*
 
 # RadioSabbelNich (English version)
+
+![License](https://img.shields.io/badge/license-GPLv3-blue.svg)
 
 RadioSabbelNich listens to several internet radio stations at once and
 automatically switches away the moment someone starts talking —
@@ -1914,3 +1923,8 @@ possibly music library operation as the Android version, but built
 with Swift/SwiftUI and compiled via Xcode on a Mac — a standalone
 project with its own tech stack, analogous to `android-app/`. Idea
 only so far, no timeline.
+
+## License
+
+Licensed under the GNU General Public License v3.0 (GPLv3), see
+[LICENSE](LICENSE).

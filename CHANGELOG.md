@@ -17,6 +17,11 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 
 ## 2026-08-21
 
+- Lizenz: Projekt unter GPLv3 lizenziert — `LICENSE` (voller Originaltext)
+  im Repo-Root, Lizenz-Badge/-Abschnitt in README.md, GPLv3-Kurzheader
+  in allen `python/`-Modulen sowie **Android:** allen Kotlin-Klassen
+  unter `mvp/`. Abhängigkeiten auf Kompatibilität geprüft, keine
+  problematische gefunden.
 - Doku: erste echte Bestätigung des Sprache-Gates im Produktivbetrieb
   (echtes :00/:30-Fenster, kein synthetischer Test) — Details in
   SESSION.md.

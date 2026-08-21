@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 RadioSabbelNich
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License version 3 (or
+# later), as published by the Free Software Foundation. See LICENSE.
+
 """
 i18n.py — Übersetzungstabelle für die Benutzerdialoge des Web-Interfaces
 (_PAGE_HTML/_CONFIG_PAGE_HTML/_MUSIC_PAGE_HTML in webui.py). Reine
