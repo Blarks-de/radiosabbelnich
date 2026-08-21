@@ -35,6 +35,9 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
   `ad_skip_prebuffer.py` nicht ins Image — verursachte kurzzeitig eine
   Crash-Loop nach dem Deploy, bevor die fehlenden `COPY`-Zeilen ergänzt
   wurden.
+- Doku: Werbeblock-Vorbuffering-Abschnitt in `ARCHITECTURE.md` um real
+  gemessene Ressourcenwerte ergänzt (~40MB RSS/~1 Prozentpunkt CPU
+  zusätzlich, nur während der Vorlaufzeit einer aktiven Pause).
 
 ## 2026-08-20
 

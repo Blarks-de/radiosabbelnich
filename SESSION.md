@@ -8171,3 +8171,75 @@ Vor jedem `docker compose up -d --build` nach dem Hinzufügen einer neuen
 existiert — dieser Fehler ist leicht zu wiederholen, weil `py_compile`
 und selbst container-interne Tests (die die Datei manuell reinkopieren)
 ihn nicht aufdecken, nur ein echter Image-Build tut das.
+
+## 2026-08-21 (Fortsetzung 4) — Werbeblock-Vorbuffering, Phase 3: Ressourcen-Messung + Doku-Abschluss
+
+### Auslöser
+
+Letzte Phase des Feature-Plans (siehe die vier Einträge oben): reale
+Ressourcen-Messung statt Schätzung, plus Doku-Feinschliff.
+
+### Umsetzung
+
+Keine Code-Änderung — reine Messung + `ARCHITECTURE.md`-Ergänzung um die
+konkreten Zahlen (neuer Bullet im Werbeblock-Vorbuffering-Abschnitt).
+
+### Verifiziert
+
+- **Ressourcenmessung** über die projekteigene `/api/resources`-Route
+  (`resource_monitor.py`, misst RSS/CPU von Python-Hauptprozess UND allen
+  ffmpeg-Kindprozessen zusammen) — Testinstanz wie in Phase 2 (separates
+  `/tmp`-Arbeitsverzeichnis, echter `main()`-Lauf mit eingefrorener
+  News-Break-Uhr, `--webui-port 5097`, `ad_prebuffer_lead_seconds=15`
+  gegen eine 60s-Test-MP3, damit ein klarer Vorher/Nachher-Zeitraum
+  entsteht statt eines sofortigen Triggers). 13 Messpunkte alle 5s über
+  60s, Produktivprozess PID 7 durchgehend unberührt:
+  - **Vorher** (0–40s, kein Hintergrund-Reader, `ffmpeg_count=2`:
+    Pause-MP3 + Icecast-Encoder): `total_rss_bytes` stabil ~88-90MB,
+    `total_cpu_percent` stabil ~2,0%.
+  - **Nachher** (ab ~45s, Trigger schlug bei "noch 14s" an,
+    `ffmpeg_count=3`): `total_rss_bytes` sprang auf ~130-132MB (**+~40MB**),
+    `total_cpu_percent` pendelte sich auf ~2,8-3,2% ein (**+~1
+    Prozentpunkt**, kurzer Ausschlag auf 7,0% exakt beim Start selbst —
+    Modell-Load/Thread-Anlauf, kein Dauerzustand).
+  - Aufschlüsselung des RSS-Sprungs: ~25MB davon im `main_rss_bytes`
+    (Python-Hauptprozess) — plausibel das zweite, unabhängig geladene
+    Silero-VAD-Modell (`AdSkipPrebuffer` bekommt eine EIGENE
+    `SpeechDetector`-Instanz, siehe Phase 1/2); der Rest (~16MB) im
+    `ffmpeg_rss_bytes`-Delta, passt zum durchschnittlichen Fußabdruck
+    eines einzelnen ffmpeg-Prozesses in derselben Messung (~24,8MB / 2
+    Prozesse ≈ 12,4MB je Prozess vorher, ~16MB für den dritten neu
+    hinzugekommenen ist derselben Größenordnung).
+  - Zusätzlich `docker stats` auf den PRODUKTIV-Container (lief parallel
+    normal weiter, andere Sender/Prebuffer-Kandidaten als die Testinstanz):
+    276,5MiB von 61,95GiB Limit (0,44%) — reiner Kontext, keine isolierte
+    Aussage über das Feature selbst (mischt Test- und Produktivprozess),
+    die eigentliche Aussage liefert die `/api/resources`-Messung oben.
+  - Kosten fallen NUR während der letzten `ad_prebuffer_lead_seconds`
+    einer aktiven Pause an (`ad_skip_bg` ist sonst `None`) — außerhalb
+    einer Pause oder bei deaktiviertem Feature exakt null zusätzlicher
+    Fußabdruck.
+  - Alle Testprozesse danach per PID beendet (verifiziert: kein Prozess
+    mit "phase3" im cmdline mehr vorhanden außer dem eigenen Check-
+    Aufruf), Testverzeichnis aus Container und Host-Scratchpad gelöscht.
+- **Browser-Test der neuen Config-Formularfelder**: claude-in-chrome in
+  dieser Session nicht verbunden (`/chrome` nötig) — wie in mehreren
+  früheren Einträgen bereits vermerkt, weiterhin NICHT durchgeführt.
+  HTML/JS/i18n-Coverage sind geprüft (siehe Phase-2-Eintrag), die
+  tatsächliche visuelle/interaktive Wirkung im Browser bleibt offen.
+
+### Bewusst NICHT gemacht
+
+- Keine Langzeit-/Dauerlast-Messung (z.B. über mehrere Pausen/Stunden
+  hinweg) — die Kosten sind pro Aktivierung klein und zeitlich strikt
+  begrenzt (`lead_seconds`), ein Langzeittest hätte gegenüber der
+  Einzelmessung keinen zusätzlichen Erkenntniswert versprochen.
+- Kein Vergleich mit `engine="whisper"` im STT-Filter parallel aktiv —
+  das Feature nutzt ohnehin keine STT-Engine (siehe Phase 1), diese
+  Kombination ist nicht relevant.
+
+Damit ist der ursprüngliche 4-Phasen-Plan für das Werbeblock-
+Vorbuffering abgeschlossen: Bugfix-Voraussetzung (Phase 0), eigenständiger
+Baustein (Phase 1), Verdrahtung (Phase 2, inkl. Dockerfile-Fix), Messung +
+Doku (Phase 3). Feature bleibt standardmäßig deaktiviert; Aktivierung im
+echten Produktivbetrieb ist eine eigene, spätere Nutzerentscheidung.

@@ -398,6 +398,14 @@ Harte Punkte:
   bekannte, akzeptierte Grenze wie bei `PrebufferedSource`/
   `sync_prebuffer()` (siehe "Offene Punkte" unten), nicht neu eingeführt,
   nur an einer weiteren Stelle wirksam.
+- **Ressourcen, real gemessen** (`/api/resources`, SESSION.md
+  2026-08-21 Phase 3): ein laufender Hintergrund-Reader kostet ~40MB
+  zusätzliches RSS (~25MB im Python-Hauptprozess für das zweite geladene
+  Silero-VAD-Modell, ~16MB fürs zusätzliche ffmpeg) und ~1 CPU-
+  Prozentpunkt on top, jeweils nur für die Dauer von
+  `ad_prebuffer_lead_seconds` innerhalb einer Pause — außerhalb einer
+  aktiven Pause exakt 0, da `ad_skip_bg` dann `None` ist. Auf dem
+  Zielhost (61,95GiB RAM-Limit des Containers) nicht spürbar.
 
 ## Radio-/Musik-Modus (Top-Level-Fork)
 
