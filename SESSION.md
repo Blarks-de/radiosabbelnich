@@ -8416,3 +8416,60 @@ festgehalten gehört.
     (`/api/status` per HTTPS bestätigt), alle Testverzeichnisse aus
     Container und Host-Scratchpad danach gelöscht, keine verwaisten
     Prozesse übrig (verifiziert per PID-Scan).
+
+## 2026-08-21 (Fortsetzung 7) — Sprache-Gate für News-Break, Phase 3: Doku-Abschluss + Deploy
+
+### Auslöser
+
+Letzte Phase des Plans (siehe die beiden Einträge oben). Nutzerfreigabe
+für Phase 3 inkl. anschließendem Deploy.
+
+### Umsetzung
+
+Keine Code-Änderung. `README.md` (deutscher UND englischer
+Konfigurationsabschnitt "Nachrichten-Pause"/"News break") um die drei
+neuen Felder ergänzt, gleiches Muster wie die Ad-Prebuffer-Felder
+zuvor: JSON-Beispiel, Bullet-Liste mit Default/Wertebereich, Hinweis auf
+den Bypass bei deaktiviertem Sabbelfilter und die Empfehlung
+`speech_gate_window_minutes <= window_minutes`. `ARCHITECTURE.md` war
+bereits in Phase 2 vollständig (inkl. der Race-Condition-Analyse) —
+hier nicht erneut angefasst, keine Doppelung.
+
+Kein zusätzlicher synthetischer Test in dieser Phase — die vier
+Szenarien aus Phase 2 (Gate aus/an×Musik/Sprache, Filter-Bypass) decken
+die Verhaltenslogik bereits vollständig ab. Echte Beobachtung am
+Produktivbetrieb (reales Zeitfenster, reale Sender) passiert nach dem
+Deploy von selbst, sobald der Nutzer das Feature aktiviert.
+
+Danach: `docker compose up -d --build radiosabbelnich` (Standard-Zyklus,
+siehe CLAUDE.md) — diesmal KEINE neuen `.py`-Dateien, nur
+`radiosabbelnich.py` geändert, die schon im Dockerfile gelistet ist,
+also kein Wiederholen des COPY-Fehlers aus SESSION.md Fortsetzung 3
+möglich.
+
+### Bewusst NICHT gemacht
+
+- Kein Aktivieren des Features in der echten `settings.json` in diesem
+  Schritt — Deploy bringt nur den Code, `require_speech_in_window`
+  bleibt beim bestehenden Default `false`, bis der Nutzer es selbst
+  einschaltet (wie schon beim Werbeblock-Vorbuffering).
+
+### Verifiziert
+
+- Vor dem Rebuild: `git status`/`git diff` geprüft, dass NUR
+  `python/radiosabbelnich.py` plus die Doku-Dateien geändert sind, keine
+  neue `.py`-Datei diesmal betroffen (Dockerfile-COPY-Liste also
+  vollständig, kein Wiederholen des Fortsetzung-3-Fehlers).
+- `docker compose up -d --build radiosabbelnich`: Image gebaut,
+  Container neu gestartet, Log zeigt sauberen Start ohne Traceback.
+- `/api/status` per HTTPS gegen den echten Produktiv-Port bestätigt
+  normalen Betrieb nach dem Neustart.
+- `/api/config/settings` bestätigt: `news_break.require_speech_in_window`
+  ist im echten `settings.json` weiterhin `false` (Default) — der Deploy
+  selbst ändert das laufende Verhalten nicht, bis der Nutzer es aktiv
+  einschaltet.
+
+Damit ist der zweite Feature-Plan dieser Session (Sprache-Gate für
+News-Break) abgeschlossen: Settings+UI (Phase 1), Verdrahtung inkl.
+Race-Fix (Phase 2), Doku+Deploy (Phase 3). Feature bleibt standardmäßig
+deaktiviert.

@@ -151,7 +151,10 @@ Senderliste auf der Config-Seite (`/config`) oder direkt per API:
   "window_minutes": 2.0,
   "enabled_hours": null,
   "ad_prebuffer_enabled": false,
-  "ad_prebuffer_lead_seconds": 20.0
+  "ad_prebuffer_lead_seconds": 20.0,
+  "require_speech_in_window": false,
+  "speech_gate_window_minutes": 2.0,
+  "speech_gate_streak": 3
 }
 ```
 
@@ -190,6 +193,24 @@ Senderliste auf der Config-Seite (`/config`) oder direkt per API:
   beginnt (Default 20s, Bereich 1–120s). Die MP3-Dauer wird dafür beim
   Start jeder Pause-MP3 per `mutagen` gelesen — ist die Datei damit nicht
   lesbar, bleibt der Trigger für diese MP3 einfach inaktiv.
+- **`require_speech_in_window`** (seit 2026-08-21, standardmäßig AUS) —
+  "Pause nur bei erkannter Sprache starten (experimentell)" auf der
+  Config-Seite. Ohne dieses Feature startet die Pause rein zeitbasiert,
+  auch wenn der Live-Sender gerade noch Musik spielt. Mit aktiviertem
+  Feature muss zusätzlich zum normalen Zeitfenster ein eigenes, meist
+  engeres Toleranzfenster (`speech_gate_window_minutes`) erreicht UND
+  `speech_gate_streak` Analysefenster am Stück als Sprache erkannt
+  worden sein — sonst verstreicht das Zeitfenster einfach, die Pause
+  fällt für diesen Termin aus. Wird automatisch umgangen (= altes
+  Verhalten), wenn der Sabbelfilter deaktiviert ist.
+- **`speech_gate_window_minutes`** — eigenes Toleranzfenster um :00/:30
+  fürs Sprache-Gate (Default 2 Min., Bereich 0,1–15 Min.), unabhängig
+  von `window_minutes` (das weiterhin nur steuert, wie lange die Pause
+  nach dem Start MP3s nachlädt). Sollte nicht größer als `window_minutes`
+  sein, sonst kann der Trigger überraschend spät greifen.
+- **`speech_gate_streak`** — wie viele Analysefenster am Stück als
+  Sprache erkannt werden müssen, bevor das Gate durchlässt (Default 3,
+  Bereich 1–20).
 
 Alternativ direkt per API setzen (z.B. für Skripte):
 ```bash
@@ -1095,7 +1116,10 @@ on the config page (`/config`), or directly via the API:
   "window_minutes": 2.0,
   "enabled_hours": null,
   "ad_prebuffer_enabled": false,
-  "ad_prebuffer_lead_seconds": 20.0
+  "ad_prebuffer_lead_seconds": 20.0,
+  "require_speech_in_window": false,
+  "speech_gate_window_minutes": 2.0,
+  "speech_gate_streak": 3
 }
 ```
 
@@ -1134,6 +1158,24 @@ on the config page (`/config`), or directly via the API:
   (default 20s, range 1–120s). The MP3's duration is read via `mutagen`
   each time a break MP3 starts — if the file isn't readable that way,
   the trigger simply stays inactive for that MP3.
+- **`require_speech_in_window`** (since 2026-08-21, off by default) —
+  "only start the break when speech is detected (experimental)" on the
+  config page. Without it, the break starts purely on a timer, even if
+  the live station is still playing music. With it enabled, in addition
+  to the normal time window a separate, usually narrower tolerance
+  window (`speech_gate_window_minutes`) must be reached AND
+  `speech_gate_streak` consecutive analysis windows must have been
+  classified as speech — otherwise the time window simply passes and
+  the break is skipped for that occasion. Automatically bypassed (= old
+  behavior) when the Sabbelfilter is disabled.
+- **`speech_gate_window_minutes`** — its own tolerance window around
+  :00/:30 for the speech gate (default 2 min, range 0.1–15 min),
+  independent of `window_minutes` (which still only controls how long
+  the break keeps reloading MP3s after it starts). Should not be larger
+  than `window_minutes`, or the trigger can fire surprisingly late.
+- **`speech_gate_streak`** — how many consecutive analysis windows must
+  be classified as speech before the gate lets the break start (default
+  3, range 1–20).
 
 Alternatively, set it directly via the API (e.g. for scripts):
 ```bash

@@ -52,6 +52,8 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
   hätte den neuen Sprache-Gate-Zähler fast immer vor dessen eigener
   Prüfung zurückgesetzt (beide nutzen denselben Zähler) — während des
   engen Sprache-Gate-Fensters jetzt ausgesetzt.
+- Doku: README-Konfigurationstabelle (DE/EN) um die drei neuen
+  Sprache-Gate-Felder ergänzt.
 
 ## 2026-08-20
 
