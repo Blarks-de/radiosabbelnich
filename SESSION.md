@@ -8501,3 +8501,42 @@ Poll-Intervall 15s bis kurz nach :30) statt aktivem Pollen im Gespräch.
 Erste echte Bestätigung außerhalb der eingefrorenen Testumgebung: das
 Gate wartete auf einen tatsächlichen, mehrsekündigen Sprachmoment statt
 blind zur Uhrzeit zu starten, exakt wie in `ARCHITECTURE.md` beschrieben.
+
+## 2026-08-21 (Fortsetzung 9) — Auch das Pause-ENDE im selben echten Durchlauf verfolgt
+
+Nutzer bat direkt im Anschluss darum, auch das Ende derselben, gerade
+per Sprache-Gate gestarteten Pause zu verfolgen. Hintergrund-Poller
+(`/api/status` alle 15s bis `current_id != "__news_break__"`, 30-Min.-
+Timeout als Sicherheitsnetz) statt aktives Warten im Gespräch.
+
+**Kompletter Ablauf, echtes Log:**
+- 06:29:39 — Pause startet (siehe Eintrag oben, Sprache-Gate).
+- 06:33:47 — Werbeblock-Vorbuffering triggert auf der ERSTEN Pause-MP3
+  ("noch 19s Pause-MP3 übrig").
+- 06:34:04 — diese MP3 endet, `window_minutes` (6.0) ist zu dem
+  Zeitpunkt noch nicht abgelaufen (seit 06:29:39 erst 4:25 min) → laut
+  Design lädt eine Fortsetzungs-MP3 nach (REM-Track); der bereits
+  laufende Hintergrund-Reader bleibt dabei UNANGETASTET (Guard
+  `ad_skip_bg is None`, siehe Phase 2 des Ad-Prebuffer-Plans) und hört
+  weiter auf '105'5 Spreeradio 80er'.
+- 06:38:24 — REM-Track endet nach ~4:20 min Spielzeit, `window_minutes`
+  ist jetzt klar abgelaufen → `resume_from_news_break()`: Log
+  "zurück zu: 105'5 Spreeradio 80er (Werbeblock im Hintergrund
+  übersprungen)" — der Hintergrund-Reader lief zu dem Zeitpunkt bereits
+  **4:37 Minuten** durchgehend (über zwei MP3-Fortsetzungen hinweg,
+  deutlich länger als in jedem bisherigen synthetischen Test) und wurde
+  erfolgreich übernommen.
+- Direkt danach: letzte `[adskip:...]`-Zeile um 06:38:24,270, sofort
+  gefolgt von nahtlosen `MainThread`-Klassifikationen (`music`, ein
+  einzelnes `SPEECH`-Fenster dazwischen ohne Folge) — sauberer Übergang,
+  kein Hänger, `detector.reset()` sichtbar wirksam (keine verzerrten
+  Werte am Übergang).
+- Keine WARNING/ERROR/Traceback im gesamten Zeitraum 06:29–06:38.
+
+**Neue Erkenntnis gegenüber den bisherigen Tests**: bislang war nur der
+Fall "Hintergrund-Reader läuft bis zum natürlichen MP3-Ende, das
+gleichzeitig das Pause-Ende ist" durchgetestet. Dieser reale Lauf zeigt
+zusätzlich, dass der Reader auch über MEHRERE MP3-Fortsetzungen hinweg
+(hier: 2 Tracks, 4:37 min Gesamtlaufzeit) korrekt am Leben bleibt und
+am Ende sauber übernommen wird — kein separater Test nötig, echte
+Bestätigung reicht.

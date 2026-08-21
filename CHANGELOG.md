@@ -20,6 +20,9 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 - Doku: erste echte Bestätigung des Sprache-Gates im Produktivbetrieb
   (echtes :00/:30-Fenster, kein synthetischer Test) — Details in
   SESSION.md.
+- Doku: dasselbe Pause-Ende real verfolgt — Werbeblock-Vorbuffering blieb
+  über zwei MP3-Fortsetzungen und 4:37 Min. korrekt am Leben und wurde
+  sauber übernommen, keine Fehler.
 - Fix: `SpeechDetector` setzt Resample-Rest UND internen VAD-Modellzustand
   jetzt bei jedem echten Streamwechsel zurück (`reset()`, neu) — vorher
   konnte Audio des vorigen Senders/Kandidaten die Klassifikation des
