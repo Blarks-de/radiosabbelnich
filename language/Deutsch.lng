@@ -112,6 +112,10 @@ cfg_nb_hour_end_label=bis Stunde
 cfg_nb_adskip_enabled_label=Werbeblock nach der Pause überspringen (experimentell)
 cfg_nb_adskip_hint=Verbindet sich in den letzten Sekunden der Pause-MP3 schon im Hintergrund mit dem Sender und hört auf Musik — wird sie rechtzeitig erkannt, steigt die Wiedergabe direkt in der Musik ein statt in einem live laufenden Werbeblock. Best-Effort: ein Live-Radiostream lässt sich nicht vorspulen, ein längerer Werbeblock läuft dann wie bisher live weiter.
 cfg_nb_adskip_lead_label=Vorlaufzeit vor Pause-Ende (Sekunden)
+cfg_nb_speechgate_hint=Startet die Pause nur noch, wenn zur Zeitfenster-Grenze ZUSÄTZLICH gerade Sprache auf dem Live-Sender erkannt wird — verhindert, dass rein zeitbasiert ausgelöst wird, während noch Musik läuft. Ohne erkannte Sprache verstreicht das Zeitfenster einfach, die Pause fällt für diesen Termin aus.
+cfg_nb_speechgate_enabled_label=Pause nur bei erkannter Sprache starten (experimentell)
+cfg_nb_speechgate_window_label=Toleranzfenster um :00/:30 (Minuten)
+cfg_nb_speechgate_streak_label=Nötige Sprache-Fenster am Stück
 # --- 🎵 Player ---
 cfg_music_library_heading=🎵 Player
 cfg_music_library_hint=Root-Ordner für den Player-Modus (Play/Stop auf der /musik-Seite) — Container-interner Pfad, gemountet über MUSIC_LIBRARY_FOLDER in .env.

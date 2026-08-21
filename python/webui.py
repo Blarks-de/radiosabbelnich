@@ -2771,6 +2771,19 @@ _CONFIG_PAGE_HTML = """<!doctype html>
   <label><span data-i18n="cfg_nb_adskip_lead_label">Vorlaufzeit vor Pause-Ende (Sekunden)</span>
     <input type="number" id="nb-adskip-lead" min="1" max="120" step="1">
   </label>
+  <p class="hint" data-i18n="cfg_nb_speechgate_hint">Startet die Pause nur noch, wenn zur Zeitfenster-Grenze
+    ZUSÄTZLICH gerade Sprache auf dem Live-Sender erkannt wird — verhindert, dass rein zeitbasiert
+    ausgelöst wird, während noch Musik läuft. Ohne erkannte Sprache verstreicht das Zeitfenster einfach,
+    die Pause fällt für diesen Termin aus.</p>
+  <label class="checkbox">
+    <input type="checkbox" id="nb-speechgate-enabled"> <span data-i18n="cfg_nb_speechgate_enabled_label">Pause nur bei erkannter Sprache starten (experimentell)</span>
+  </label>
+  <label><span data-i18n="cfg_nb_speechgate_window_label">Toleranzfenster um :00/:30 (Minuten)</span>
+    <input type="number" id="nb-speechgate-window" min="0.1" max="15" step="0.1">
+  </label>
+  <label><span data-i18n="cfg_nb_speechgate_streak_label">Nötige Sprache-Fenster am Stück</span>
+    <input type="number" id="nb-speechgate-streak" min="1" max="20" step="1">
+  </label>
   <button type="submit" data-i18n="common_save">Speichern</button>
 </form>
 
@@ -3404,6 +3417,9 @@ async function loadSettings() {
     document.getElementById('nb-hour-end').value = hours ? hours[1] : '';
     document.getElementById('nb-adskip-enabled').checked = !!nb.ad_prebuffer_enabled;
     document.getElementById('nb-adskip-lead').value = nb.ad_prebuffer_lead_seconds;
+    document.getElementById('nb-speechgate-enabled').checked = !!nb.require_speech_in_window;
+    document.getElementById('nb-speechgate-window').value = nb.speech_gate_window_minutes;
+    document.getElementById('nb-speechgate-streak').value = nb.speech_gate_streak;
 
     const ml = settings.music_library || {};
     document.getElementById('ml-folder-value').value = ml.path || '';
@@ -3520,6 +3536,9 @@ document.getElementById('news-break-form').addEventListener('submit', async (ev)
   }
   const news_break_ad_prebuffer_enabled = document.getElementById('nb-adskip-enabled').checked;
   const news_break_ad_prebuffer_lead_seconds = parseFloat(document.getElementById('nb-adskip-lead').value);
+  const news_break_require_speech_in_window = document.getElementById('nb-speechgate-enabled').checked;
+  const news_break_speech_gate_window_minutes = parseFloat(document.getElementById('nb-speechgate-window').value);
+  const news_break_speech_gate_streak = parseInt(document.getElementById('nb-speechgate-streak').value, 10);
   try {
     await api('/api/config/settings', {
       method: 'POST',
@@ -3528,6 +3547,8 @@ document.getElementById('news-break-form').addEventListener('submit', async (ev)
         news_break_enabled, news_break_mp3_folder, news_break_window_minutes,
         news_break_enabled_hours,
         news_break_ad_prebuffer_enabled, news_break_ad_prebuffer_lead_seconds,
+        news_break_require_speech_in_window, news_break_speech_gate_window_minutes,
+        news_break_speech_gate_streak,
       }),
     });
     showMsg(t('cfg_news_break_saved'), false);
@@ -4209,6 +4230,9 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                     ),
                     news_break_ad_prebuffer_enabled=payload.get("news_break_ad_prebuffer_enabled"),
                     news_break_ad_prebuffer_lead_seconds=payload.get("news_break_ad_prebuffer_lead_seconds"),
+                    news_break_require_speech_in_window=payload.get("news_break_require_speech_in_window"),
+                    news_break_speech_gate_window_minutes=payload.get("news_break_speech_gate_window_minutes"),
+                    news_break_speech_gate_streak=payload.get("news_break_speech_gate_streak"),
                     stt_filter_enabled=payload.get("stt_filter_enabled"),
                     stt_filter_engine=payload.get("stt_filter_engine"),
                     stt_filter_whisper_model_size=payload.get("stt_filter_whisper_model_size"),

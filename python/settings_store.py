@@ -72,6 +72,18 @@ DEFAULTS = {
         # Default AUS -- reine Zusatzoptimierung, kein Kernfeature.
         "ad_prebuffer_enabled": False,
         "ad_prebuffer_lead_seconds": 20.0,
+        # Sprache-Gate (siehe ARCHITECTURE.md/SESSION.md 2026-08-21):
+        # verhindert, dass die Pause rein zeitbasiert startet, während der
+        # Live-Sender noch erkennbar Musik spielt. Bei enabled=True muss
+        # ZUSÄTZLICH zum Zeitfenster (window_minutes) auch ein enges,
+        # eigenes Toleranzfenster (speech_gate_window_minutes) UND
+        # speech_gate_streak aufeinanderfolgende Sprache-Analysefenster
+        # (analog CONSECUTIVE_MUSIC_TO_CONFIRM beim Ad-Prebuffer) erfüllt
+        # sein. Default AUS -- bestehendes rein zeitbasiertes Verhalten
+        # bricht dadurch nicht überraschend.
+        "require_speech_in_window": False,
+        "speech_gate_window_minutes": 2.0,
+        "speech_gate_streak": 3,
     },
     "stt_filter": {
         "enabled": False,
@@ -114,6 +126,8 @@ LIMITS = {
     "prebuffer_count": (0, 20),
     "news_break_window_minutes": (0.1, 15.0),
     "news_break_ad_prebuffer_lead_seconds": (1.0, 120.0),
+    "news_break_speech_gate_window_minutes": (0.1, 15.0),
+    "news_break_speech_gate_streak": (1, 20),
     "stt_sample_interval_seconds": (2.0, 60.0),
     "stt_confidence_threshold": (0.0, 1.0),
 }
@@ -230,6 +244,9 @@ def update(prebuffer_seconds=None, prebuffer_count=None, import_url=None,
            news_break_window_minutes=None, news_break_enabled_hours=UNSET,
            news_break_ad_prebuffer_enabled=None,
            news_break_ad_prebuffer_lead_seconds=None,
+           news_break_require_speech_in_window=None,
+           news_break_speech_gate_window_minutes=None,
+           news_break_speech_gate_streak=None,
            stt_filter_enabled=None, stt_filter_engine=None,
            stt_filter_whisper_model_size=None,
            stt_filter_sample_interval_seconds=None,
@@ -358,6 +375,26 @@ def update(prebuffer_seconds=None, prebuffer_count=None, import_url=None,
             if not (lo <= news_break_ad_prebuffer_lead_seconds <= hi):
                 raise ValueError(f"news_break_ad_prebuffer_lead_seconds muss zwischen {lo} und {hi} liegen.")
             nb["ad_prebuffer_lead_seconds"] = news_break_ad_prebuffer_lead_seconds
+        if news_break_require_speech_in_window is not None:
+            nb["require_speech_in_window"] = bool(news_break_require_speech_in_window)
+        if news_break_speech_gate_window_minutes is not None:
+            lo, hi = LIMITS["news_break_speech_gate_window_minutes"]
+            try:
+                news_break_speech_gate_window_minutes = float(news_break_speech_gate_window_minutes)
+            except (TypeError, ValueError):
+                raise ValueError("news_break_speech_gate_window_minutes muss eine Zahl sein.")
+            if not (lo <= news_break_speech_gate_window_minutes <= hi):
+                raise ValueError(f"news_break_speech_gate_window_minutes muss zwischen {lo} und {hi} liegen.")
+            nb["speech_gate_window_minutes"] = news_break_speech_gate_window_minutes
+        if news_break_speech_gate_streak is not None:
+            lo, hi = LIMITS["news_break_speech_gate_streak"]
+            try:
+                news_break_speech_gate_streak = int(news_break_speech_gate_streak)
+            except (TypeError, ValueError):
+                raise ValueError("news_break_speech_gate_streak muss eine Ganzzahl sein.")
+            if not (lo <= news_break_speech_gate_streak <= hi):
+                raise ValueError(f"news_break_speech_gate_streak muss zwischen {lo} und {hi} liegen.")
+            nb["speech_gate_streak"] = news_break_speech_gate_streak
 
         stt = data["stt_filter"]
         if stt_filter_enabled is not None:

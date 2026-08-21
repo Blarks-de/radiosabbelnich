@@ -8243,3 +8243,86 @@ Vorbuffering abgeschlossen: Bugfix-Voraussetzung (Phase 0), eigenständiger
 Baustein (Phase 1), Verdrahtung (Phase 2, inkl. Dockerfile-Fix), Messung +
 Doku (Phase 3). Feature bleibt standardmäßig deaktiviert; Aktivierung im
 echten Produktivbetrieb ist eine eigene, spätere Nutzerentscheidung.
+Nutzer hat es danach testweise selbst über die Config-Seite/API aktiviert
+(`ad_prebuffer_enabled=true`, restliche Defaults) — reine Settings-
+Änderung, kein Code-Deploy nötig.
+
+## 2026-08-21 (Fortsetzung 5) — Neuer Plan: Nachrichtenpause nur bei Sprache + Zeitfenster, Phase 1: Settings + Config-UI
+
+### Auslöser
+
+Nutzer beobachtete, dass die Nachrichtenpause manchmal rein zeitbasiert
+startet, während der Live-Sender noch hörbar Musik spielt. Wunsch: Pause
+nur noch starten, wenn ZUSÄTZLICH zum Zeitfenster gerade Sprache erkannt
+wird (Wiederverwendung der bestehenden VAD/Heuristik-Klassifikation,
+kein neuer Detector). Plan zuvor mit dem Nutzer abgestimmt (Recherche:
+`active_slot()` in `news_break.py` ist die einzige, rein zeitbasierte
+Trigger-Stelle, keinerlei Sprach-Prüfung lief dort bisher mit hinein) —
+zwei Design-Entscheidungen vom Nutzer übernommen: symmetrisches
+Toleranzfenster (nicht das ursprünglich vorgeschlagene asymmetrische
+Beispiel), UND `speech_streak >= 1` durch einen konfigurierbaren
+Schwellwert `news_break.speech_gate_streak` (Default 3, analog
+`CONSECUTIVE_MUSIC_TO_CONFIRM` beim Ad-Prebuffer-Feature) ersetzt.
+
+### Umsetzung
+
+Drei neue Felder im `news_break`-Block (`settings_store.py`,
+DEFAULTS/LIMITS/`update()`, gleiches Muster wie die Ad-Prebuffer-Felder):
+- `require_speech_in_window` (bool, Default `false`) — Master-Schalter.
+- `speech_gate_window_minutes` (Default `2.0`, Grenzen 0.1–15.0 wie
+  `window_minutes`) — EIGENES, meist engeres Toleranzfenster um :00/:30,
+  bewusst getrennt von `window_minutes` (das weiterhin nur steuert, wie
+  lange die Pause nach dem Start MP3s nachlädt).
+- `speech_gate_streak` (Default `3`, Grenzen 1–20) — wie viele
+  Sprache-Analysefenster am Stück nötig sind, bevor das Gate durchlässt.
+
+Noch KEINE Änderung an der eigentlichen Trigger-Zeile in
+`radiosabbelnich.py` — reine Konfigurationsebene, isoliert getestet.
+Neue Config-UI-Sektion (`webui.py`: HTML unter "📰 Nachrichten-Pause",
+Lade-/Speicher-JS, `_handle_update_settings()`), neue i18n-Keys
+(`i18n.py`/`language/Deutsch.lng`).
+
+Geplante Umsetzung für Phase 2 (Design, noch nicht implementiert): die
+enge Toleranzfenster-Prüfung soll `news_break.active_slot()`
+UNVERÄNDERT wiederverwenden, mit einer temporär überschriebenen Config
+(`{**news_break_cfg, "window_minutes": speech_gate_window_minutes}`)
+statt einer neuen, fast identischen Funktion in `news_break.py` — vermeidet
+Code-Duplikat der Datumsmathematik.
+
+### Bewusst NICHT gemacht
+
+- Kein asymmetrisches Zeitfenster (Nutzer hat den symmetrischen Vorschlag
+  übernommen) — könnte bei Bedarf später als eigene Erweiterung
+  nachgezogen werden.
+- Keine Verdrahtung des eigentlichen Gates in den Hauptloop — Phase 2.
+- Keine Bypass-Logik für `state.filter_enabled == False` in diesem
+  Schritt (reine Settings-Phase, betrifft erst die Trigger-Verdrahtung)
+  — als Design-Entscheidung für Phase 2 vorgemerkt: Gate soll umgangen
+  werden (= altes Verhalten), wenn der Sabbelfilter deaktiviert ist,
+  sonst würde News-Break bei deaktiviertem Filter faktisch nie mehr
+  starten (`speech_streak` wird dann nirgends mehr fortgeschrieben).
+
+### Verifiziert
+
+- `python3 -m py_compile settings_store.py webui.py i18n.py` sauber.
+- i18n-Coverage-Check (`import webui` im Container mit vollständigem
+  Modulsatz) lief ohne `AssertionError` durch.
+- **Settings-Roundtrip** im Container (isoliertes `/tmp`-Arbeitsverzeichnis,
+  eigene `settings.json`): `settings_store.load()` liefert die neuen
+  Defaults (`require_speech_in_window=false`,
+  `speech_gate_window_minutes=2.0`, `speech_gate_streak=3`);
+  `settings_store.update(news_break_require_speech_in_window=True,
+  news_break_speech_gate_window_minutes=3.5,
+  news_break_speech_gate_streak=5)` persistiert korrekt und wird beim
+  Neuladen genauso zurückgegeben; `speech_gate_streak=0` UND
+  `speech_gate_window_minutes=999` werfen beide korrekt `ValueError` mit
+  verständlicher Meldung (Grenzen greifen).
+- **Rückwärtskompatibilität**: eine `settings.json` im ALTEN Format
+  (`news_break`-Block ohne die drei neuen Felder, exakt wie die reale
+  Produktivdatei vor diesem Schritt) liefert beim Laden automatisch die
+  neuen Defaults für die fehlenden Felder — keine Migration nötig,
+  bestätigt am Beispiel der echten Struktur.
+- Produktivprozess PID unverändert währenddessen gesund
+  (`/api/status` per HTTPS bestätigt, lief zu dem Zeitpunkt selbst
+  gerade in einer echten Nachrichtenpause). Kein Rebuild nötig für diese
+  Phase (reine Python-Quelländerung, noch nicht deployt).

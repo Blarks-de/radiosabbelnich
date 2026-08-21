@@ -38,6 +38,10 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 - Doku: Werbeblock-Vorbuffering-Abschnitt in `ARCHITECTURE.md` um real
   gemessene Ressourcenwerte ergänzt (~40MB RSS/~1 Prozentpunkt CPU
   zusätzlich, nur während der Vorlaufzeit einer aktiven Pause).
+- Intern: neue Settings `news_break.require_speech_in_window`/
+  `speech_gate_window_minutes`/`speech_gate_streak` (alle noch
+  wirkungslos, Trigger-Verdrahtung folgt) — Vorbereitung für "Pause nur
+  bei erkannter Sprache starten".
 
 ## 2026-08-20
 
