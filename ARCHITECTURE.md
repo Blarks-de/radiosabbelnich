@@ -228,6 +228,35 @@ Auto-Suche doch einmal eine ebenfalls stille Quelle, korrigiert sich das
 von selbst beim nächsten Durchlauf des Totluft-Watchdogs, zusätzliche
 Komplexität an der Stelle schien den Nutzen nicht wert.
 
+## Sprache-Erkennung (VAD, speech_detector.py)
+
+`SpeechDetector` ist eine einzige, im Hauptloop gehaltene Instanz um
+Silero VAD herum (`classify()`-Closure in `main()`, Fallback auf die
+Signal-Heuristik `classify_window()`, falls `silero-vad-lite` fehlt oder
+scheitert). **Jeder echte Wechsel des klassifizierten Audiostroms ruft
+`detector.reset()` auf**, bevor das erste Fenster des neuen Stroms
+klassifiziert wird — bei `switch_to_station()`, in `do_switch()` vor jeder
+Kandidaten-Klassifikation (gepuffert wie frisch), beim Rekonnekt nach
+Stream-Ausfall und beim Musik→Radio-Übergang. Zwei unabhängige Gründe,
+warum das nötig ist, nicht nur einer:
+
+1. `self.leftover` sind Resample-Reste des vorigen Fensters — ohne Reset
+   landen sie im ersten Fenster des neuen Streams und verzerren dessen
+   erste VAD-Auswertung.
+2. `SileroVAD.process()` hält zusätzlich einen rekurrenten Modellzustand
+   über aufeinanderfolgende `process()`-Aufrufe, den die C-Erweiterung
+   NICHT über eine eigene `reset()`-Methode freigibt — der einzige Weg,
+   ihn loszuwerden, ist ein frisches `SileroVAD`-Objekt (klein/billig
+   genug für einen Reset pro Streamwechsel).
+
+Ohne (2) würde eine reine `leftover`-Bereinigung nicht reichen — ein
+naheliegender Ansatz, der bei genauerem Blick in die Bibliotheks-API
+nicht funktioniert hätte. Relevant vor allem, sobald mehr als ein
+Audiostrom gleichzeitig klassifiziert wird (z.B. ein zusätzlicher
+Hintergrund-Detector): der muss eine EIGENE `SpeechDetector`-Instanz
+bekommen, kein Teilen der Hauptloop-Instanz — sonst vermischen sich
+Leftover/Modellzustand beider Ströme.
+
 ## Fingerprinting
 
 `fingerprint.py` lernt jeden Sprach-Clip, der keinen Treffer erzeugt — die
@@ -717,7 +746,6 @@ hat vollen Zugriff.
 - `sync_prebuffer()`/`pb.stop()` können den Hauptloop blockieren (bis
   ~9 s pro Quelle, siehe Prebuffering oben).
 - Das Web-Interface zeigt keinen Stream-Health-Status.
-- `SpeechDetector.leftover` wird beim Senderwechsel nicht zurückgesetzt.
 - Die Fingerprint-DB wächst ohne Pruning.
 - Die Config-Seite skaliert nicht auf mehrere hundert Sender (keine
   Suche, kein Bulk-Delete).

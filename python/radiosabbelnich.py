@@ -919,6 +919,10 @@ def main():
         nonlocal source, stream_failures, silence_streak
         stream_failures = 0
         silence_streak = 0
+        # Neuer Sender = neuer Audiostrom -- SpeechDetector.reset() verhindert,
+        # dass VAD-Zustand/Resample-Rest des vorigen Senders die erste
+        # Klassifikation des neuen verfälscht (siehe deren Docstring).
+        detector.reset()
         pb = prebuffer.pop(station["id"], None)
         if pb is not None:
             windows, adopted_source = pb.promote()
@@ -1201,6 +1205,11 @@ def main():
                 else:
                     candidate_stt_lang = settings_store.resolve_stt_language(
                         candidate["category"], state.stt_filter_cfg)
+                    # tail gehört zu candidate, nicht zu current -- ohne Reset
+                    # würde der VAD-Zustand/Resample-Rest des aktuellen
+                    # Senders (oder eines zuvor abgelehnten Kandidaten) in
+                    # dieses Urteil hineinlaufen (siehe SpeechDetector.reset()).
+                    detector.reset()
                     if classify(tail, candidate_stt_lang) == "music":
                         current = candidate
                         source.stop()
@@ -1220,6 +1229,10 @@ def main():
             reset_playout()
             current = candidate
             source.start(current["url"])
+            # Neue Quelle -- siehe Reset-Stelle im gepufferten Zweig oben,
+            # gleicher Grund (verhindert Kontamination durch den vorigen
+            # Kandidaten/Sender VOR dem gleich folgenden classify()).
+            detector.reset()
             state.set_current(current["id"])
             stream_failures = 0
             silence_streak = 0
@@ -1300,6 +1313,7 @@ def main():
                         current = resume
                         reset_playout()
                         source.start(current["url"])
+                        detector.reset()  # neue Quelle, siehe switch_to_station()
                         quick_forward()
                         state.set_current(current["id"])
                         last_switch_time = time.time()
@@ -1581,6 +1595,10 @@ def main():
                                 "versuche neu zu verbinden ...",
                                 current["name"], stream_failures, STREAM_FAILURE_LIMIT)
                     source.start(current["url"])
+                    # Physisch neue Verbindung (ffmpeg neu gestartet) nach der
+                    # Lücke -- derselbe Grund wie bei einem echten Senderwechsel,
+                    # siehe SpeechDetector.reset().
+                    detector.reset()
                     time.sleep(1)
                     continue
 

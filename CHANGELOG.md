@@ -15,6 +15,13 @@ umbenannt. Ältere Commit-Nachrichten/Dateinamen (z.B. `radio_switch`,
 wider — hier einheitlich mit dem aktuellen Namen beschrieben, sofern
 nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 
+## 2026-08-21
+
+- Fix: `SpeechDetector` setzt Resample-Rest UND internen VAD-Modellzustand
+  jetzt bei jedem echten Streamwechsel zurück (`reset()`, neu) — vorher
+  konnte Audio des vorigen Senders/Kandidaten die Klassifikation des
+  neuen leicht verfälschen.
+
 ## 2026-08-20
 
 - Web-Interface: "STT"-Meter-Label ausgeschrieben (🗣 STT

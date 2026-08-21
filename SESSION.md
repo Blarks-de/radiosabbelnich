@@ -7799,3 +7799,100 @@ nicht ins Template — dieselbe Funktion liefert für den "nie"-Fall nur
     Source-Liste verschwunden, Produktiv-Mount unangetastet.
 - Weiterhin NICHT geprüft: echte Browser-Darstellung (claude-in-chrome
   in dieser Session nicht verbunden, siehe vorheriger Eintrag).
+
+## 2026-08-21 — SpeechDetector.leftover-Reset (Phase 0 des Werbeblock-Vorbuffering-Plans)
+
+### Auslöser
+
+Nutzer wollte einen Plan für "Werbeblock-Vorbuffering nach Nachrichtenpause"
+(während die News-Break-MP3 noch läuft, im Hintergrund schon den Live-Stream
+öffnen und mitklassifizieren, um beim Pause-Ende direkt in die Musik
+einzusteigen statt in den Werbeblock). Recherche für den Plan ergab: das
+Feature würde zwei `SpeechDetector`-Instanzen gleichzeitig laufen lassen
+(Hauptloop + Hintergrund-Kandidat) und damit den in `ARCHITECTURE.md`
+("Offene Punkte") vermerkten Bug direkt einschlägig machen: `leftover`
+wird beim Senderwechsel nicht zurückgesetzt. Nutzerentscheidung: erst
+diesen Bug als eigenständige Phase 0 beheben, bevor am eigentlichen
+Feature weitergearbeitet wird.
+
+### Umsetzung
+
+`SpeechDetector.reset()` (neu, `speech_detector.py`) verwirft
+`self.leftover` UND baut `self.vad` per neuem `SileroVAD(...)`-Objekt neu
+auf. Der zweite Teil war beim genaueren Blick in die
+`silero-vad-lite`-API (`help(SileroVAD)` im laufenden Container geprüft)
+nötig, nicht nur "nice to have": `SileroVAD.process()` hält einen
+rekurrenten Modellzustand über aufeinanderfolgende Aufrufe, den die
+C-Erweiterung nicht über eine eigene `reset()`-Methode freigibt — ein
+reines `leftover`-Löschen hätte den eigentlichen Kontaminationspfad
+(Modellzustand des vorigen Streams beeinflusst die ersten Frames des
+neuen) gar nicht behoben.
+
+`detector.reset()` wird jetzt an jeder Stelle aufgerufen, an der
+`radiosabbelnich.py`s Hauptloop-`source` auf einen anderen/neuen
+physischen Audiostrom wechselt:
+- `switch_to_station()` (deckt manuellen Switch, Nachrichtenpause-Resume
+  und den Senderlisten-Reload-Switch ab, da alle drei darüber laufen),
+- `do_switch()` — VOR jeder einzelnen Kandidaten-Klassifikation (sowohl
+  gepuffert als auch frisch verbunden), nicht erst nach einem
+  committeten Wechsel: sonst hätte schon die Bewertung des ERSTEN
+  Kandidaten mit dem Leftover/Modellzustand des verlassenen Senders
+  kontaminiert gestartet, und bei mehreren nacheinander abgelehnten
+  Kandidaten hätte sich das von Kandidat zu Kandidat fortgesetzt,
+  - Rekonnekt-Pfad des Leere-Reads-Watchdogs (`source.start()` nach
+  Verbindungsabbruch auf denselben Sender — physisch neue ffmpeg-
+  Verbindung nach einer Lücke, derselbe Kontaminationsgrund),
+- Musik→Radio-Moduswechsel (`source.start()` beim Zurückwechseln in den
+  Radio-Modus).
+
+`ARCHITECTURE.md`: "Offene Punkte"-Eintrag entfernt (behoben), neuer
+Abschnitt "Sprache-Erkennung (VAD, speech_detector.py)" ergänzt, der das
+Reset-Invariant und beide Kontaminationsgründe festhält — wichtig für
+Phase 2 des Feature-Plans, wo eine zweite `SpeechDetector`-Instanz für
+den Hintergrund-Kandidaten hinzukommt und exakt dieselbe Isolation
+braucht.
+
+### Bewusst NICHT gemacht
+
+- Kein Reset in `start_news_break_mp3()`: während `news_break_active`
+  läuft `classify()` ohnehin gar nicht (siehe News-Break-Abschnitt in
+  `ARCHITECTURE.md`), ein Reset dort wäre wirkungslos — der tatsächlich
+  relevante Reset passiert schon beim Resume danach über
+  `switch_to_station()`.
+- Kein Reset beim initialen Programmstart (`source.start()` vor der
+  Hauptschleife) — `detector` ist dort gerade erst frisch konstruiert,
+  `leftover` und VAD-Zustand sind schon leer/neu.
+- Keine Änderung an `stt_filter.py`/`SttFilter` in diesem Schritt — das
+  bekannte Ressourcen-/Thread-Safety-Thema dort (eigene Engine-Instanzen
+  pro `SttFilter`, `FingerprintDB` exklusiv im Hauptloop-Thread) betrifft
+  erst spätere Phasen des Feature-Plans (STT/Fingerprint im
+  Hintergrund-Detector), nicht diesen Bugfix.
+
+### Verifiziert
+
+- `python3 -m py_compile speech_detector.py radiosabbelnich.py` sauber.
+- `help(SileroVAD)` im laufenden Produktiv-Container geprüft: keine
+  `reset()`-Methode in der `silero_vad_lite`-API vorhanden — bestätigt,
+  dass ein neues Objekt der einzige Weg ist.
+- Testlauf im laufenden Container (separates `/tmp`-Arbeitsverzeichnis,
+  eigene `stations.json` mit zwei echten Sendern aus der Produktiv-Liste,
+  eigener Icecast-Test-Mount `phase0test.mp3`, Produktivprozess PID 7
+  unberührt): "🗣 Sprache-Erkennung: Silero VAD" bestätigt aktive
+  VAD-Engine (nicht Heuristik-Fallback). Über mehrere automatische
+  `do_switch()`-Läufe (gepufferter Zweig UND frischer Reconnect-Zweig)
+  sowie zwei manuelle Switches über `/api/switch` (`switch_to_station()`)
+  hinweg: kein Absturz, `[vad] mean_prob=...`-Werte direkt nach jedem
+  Reset plausibel (keine NaN/konstant-0/konstant-1-Ausreißer, die auf
+  korrumpierten VAD-Input hindeuten würden).
+- Nicht direkt live ausgelöst (beide Test-Sender blieben erreichbar):
+  der Rekonnekt-Pfad nach Stream-Ausfall — strukturell identisch mit den
+  anderen Reset-Stellen (einzeilig, keine Verzweigung drumherum), Risiko
+  eingeschätzt als gering.
+- Nach dem Test: Testprozesse beendet (per PID, nicht per Namens-Match —
+  ein erster Versuch mit `kill $pfad` statt `kill $pid` lief ins Leere
+  und wurde korrigiert), `/tmp/phase0test` im Container gelöscht, Host-
+  Scratchpad gelöscht. Produktivprozess währenddessen durchgehend
+  gesund geblieben (eigenes Log ununterbrochen, aktuell in einer echten
+  Nachrichtenpause, per `https://localhost:5000/api/status` bestätigt —
+  ein früherer `curl http://...`-Check schlug fehl, weil das
+  Produktiv-Webinterface TLS-only läuft, kein echtes Problem).

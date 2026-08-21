@@ -63,6 +63,31 @@ class SpeechDetector:
             log.warning("⚠ silero-vad-lite nicht verfügbar (%s) — "
                         "falle auf die Signal-Heuristik zurück.", _SILERO_IMPORT_ERROR)
 
+    def reset(self):
+        """Verwirft den Resample-Rest UND baut das VAD-Objekt neu auf --
+        beides muss bei jedem echten Streamwechsel (Senderwechsel,
+        Rekonnekt nach Verbindungsabbruch, Kandidat-Probing in do_switch())
+        passieren, sonst rutscht Audio des VORHERIGEN Streams in die
+        Klassifikation des neuen: `self.leftover` sind Resample-Samples,
+        die im letzten Fenster übrig blieben; `SileroVAD.process()` hält
+        zusätzlich intern einen rekurrenten Zustand über aufeinanderfolgende
+        Frames (siehe silero-vad-lite-Doku), den die C-Erweiterung NICHT
+        über eine reset()-Methode freigibt -- ein frisches SileroVAD-Objekt
+        ist billig genug (kleines ONNX-Modell), das pro Streamwechsel neu
+        anzulegen, statt den alten Zustand stillschweigend weiterlaufen zu
+        lassen."""
+        self.leftover = np.array([], dtype=np.float32)
+        if self.available:
+            try:
+                self.vad = SileroVAD(self.TARGET_SR)
+            except Exception as e:
+                log.warning("⚠ Silero VAD konnte beim Streamwechsel nicht neu "
+                            "initialisiert werden (%s) — Sprache-Erkennung fällt "
+                            "bis zum nächsten Prozessneustart auf die Heuristik "
+                            "zurück.", e)
+                self.vad = None
+                self.available = False
+
     def _resample(self, pcm_int16: np.ndarray) -> np.ndarray:
         samples = pcm_int16.astype(np.float32) / 32768.0
         if self.source_sr == self.TARGET_SR:
