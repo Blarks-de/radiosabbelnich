@@ -407,6 +407,82 @@ Harte Punkte:
   aktiven Pause exakt 0, da `ad_skip_bg` dann `None` ist. Auf dem
   Zielhost (61,95GiB RAM-Limit des Containers) nicht spürbar.
 
+### Sprache-Gate für den Pause-Start (seit 2026-08-21)
+
+Optionales Zusatzfeature (`news_break.require_speech_in_window`, Default
+AUS): der Pause-Trigger war bis dahin rein zeitbasiert
+(`news_break.active_slot()`) — die Pause konnte dadurch auch starten,
+während der Live-Sender noch hörbar Musik spielte. Bei aktiviertem Gate
+muss zusätzlich zum normalen Zeitfenster (`window_minutes`) ein eigenes,
+meist engeres Toleranzfenster (`speech_gate_window_minutes`, Default 2
+Min.) erreicht UND `speech_gate_streak` Analysefenster am Stück als
+Sprache klassifiziert worden sein, bevor die Pause tatsächlich startet.
+
+```mermaid
+flowchart LR
+    Tick["Hauptloop-Tick"] --> InWindow{"speech_gate_window_minutes<br/>um :00/:30 erreicht?"}
+    InWindow -->|nein| NoGate["speech_gate_active = false<br/>bestehende Skip-Logik unverändert"]
+    InWindow -->|ja| Gate["speech_gate_active = true<br/>Fingerprint-Match- UND<br/>CONSECUTIVE_SPEECH_TO_SWITCH-Switch AUSGESETZT"]
+    Gate -->|"speech_streak >= speech_gate_streak"| Start["Pause startet"]
+    Gate -->|"Fenster verstreicht ohne genug Sprache"| Skip["Pause fällt für diesen Termin aus"]
+```
+
+Harte Punkte:
+
+- **Kein Duplikat der Datumsmathematik**: die enge Toleranzprüfung ruft
+  `news_break.active_slot()` UNVERÄNDERT mit einer temporär
+  überschriebenen Config auf (`{**news_break_cfg, "window_minutes":
+  speech_gate_window_minutes}`) — dieselbe Slot-Identität, dieselben
+  `enabled`/`enabled_hours`-Regeln, kein eigenständiger, potenziell
+  driftender Zweitcode in `news_break.py`.
+- **Wiederverwendung von `speech_streak` statt eines zweiten Detectors**:
+  das Gate liest denselben, ohnehin pro Tick berechneten Streak-Zähler,
+  den auch die bestehende Skip-Logik nutzt — kein zusätzlicher
+  Klassifikations-Durchlauf, keine zweite `SpeechDetector`-Instanz nötig
+  (anders als beim Werbeblock-Vorbuffering oben, wo zwei PARALLELE
+  Audioströme klassifiziert werden — hier läuft alles auf demselben,
+  einzigen Live-Strom).
+- **Race mit der bestehenden Skip-Logik — real beim Testen gefunden, kein
+  theoretisches Risiko**: `speech_streak` wird auch vom Fingerprint-Match-
+  Trigger (`FINGERPRINT_TRIGGER_SECONDS=2`) und vom normalen
+  "Moderation erkannt"-Trigger (`CONSECUTIVE_SPEECH_TO_SWITCH=3`)
+  konsumiert und dabei auf 0 zurückgesetzt — UND ZWAR NOCH IM SELBEN
+  Tick, in dem die jeweilige Schwelle erreicht wird. Das Sprache-Gate
+  sitzt dagegen am Anfang des NÄCHSTEN Ticks (vor dem Lesen des neuen
+  Analysefensters) und hätte den Zähler dadurch fast immer schon wieder
+  auf 0 vorgefunden — mit dem ursprünglichen `speech_gate_streak`-Default
+  (3, zufällig identisch mit `CONSECUTIVE_SPEECH_TO_SWITCH`) live
+  reproduziert: die bestehende "Moderation erkannt"-Logik gewann JEDES
+  Mal, das Gate sah nie einen Streak ≥3. Lösung: solange
+  `speech_gate_active` true ist (enges Fenster erreicht, Feature an,
+  Sabbelfilter an), werden BEIDE bestehenden Trigger (Fingerprint-Match
+  UND `CONSECUTIVE_SPEECH_TO_SWITCH`) ausgesetzt — sustained speech soll
+  in diesem engen Fenster als "das ist wahrscheinlich die Nachrichten-
+  Anmoderation" interpretiert werden, nicht als "das ist Werbung, weg
+  damit". Außerhalb des engen Fensters (auch wenn `window_minutes`
+  selbst noch träfe) ist die bestehende Skip-Logik komplett unverändert
+  aktiv.
+- **`speech_gate_window_minutes` sollte ≤ `window_minutes` bleiben** —
+  nicht hart erzwungen (gleiche "grobe Leitplanke, keine strenge
+  Produktentscheidung"-Philosophie wie bei den übrigen `LIMITS`), aber
+  bei einem größeren Wert könnte das enge Fenster theoretisch erreicht
+  sein, während der äußere `slot`-Check (der weiterhin zusätzlich geprüft
+  wird) noch `None` liefert — der Trigger bleibt dann bis zum äußeren
+  Fenster stumm, kein Absturz, nur ein überraschendes Timing bei
+  Fehlkonfiguration.
+- **Bypass bei deaktiviertem Sabbelfilter**: ohne ihn wird `speech_streak`
+  nirgends mehr fortgeschrieben (derselbe `if not state.filter_enabled:
+  continue`-Zweig, der auch die restliche Klassifikation überspringt) —
+  das Gate würde sonst dauerhaft blockieren, obwohl der Nutzer nur die
+  automatische ERKENNUNG abschalten wollte, nicht News-Break selbst.
+  Verifiziert: Gate an + Filter aus verhält sich exakt wie Gate aus.
+- **Fenster verstreicht ohne genug Sprache**: braucht keinen eigenen
+  Code-Pfad — `news_break.active_slot()` liefert danach von selbst
+  `None`, die äußere `if slot and ...`-Bedingung greift dann nicht mehr,
+  `news_break_served_slot` bleibt unangetastet (wird erst beim
+  TATSÄCHLICHEN Pause-Start gesetzt) — keine Gefahr eines doppelten
+  Trigger-Versuchs.
+
 ## Radio-/Musik-Modus (Top-Level-Fork)
 
 Der Musik-Modus ist **kein** Sonderfall der Nachrichten-Pause (die

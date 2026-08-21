@@ -8326,3 +8326,93 @@ Code-Duplikat der Datumsmathematik.
   (`/api/status` per HTTPS bestätigt, lief zu dem Zeitpunkt selbst
   gerade in einer echten Nachrichtenpause). Kein Rebuild nötig für diese
   Phase (reine Python-Quelländerung, noch nicht deployt).
+
+## 2026-08-21 (Fortsetzung 6) — Sprache-Gate für News-Break, Phase 2: Verdrahtung + eine echte Race Condition gefunden und behoben
+
+### Auslöser
+
+Fortsetzung des Plans (siehe Eintrag oben, Phase 1). Nutzerfreigabe für
+Phase 2.
+
+### Umsetzung
+
+Die Trigger-Zeile in `radiosabbelnich.py` (`if slot and not
+news_break_active and slot != news_break_served_slot:`) um `speech_gate_ok`
+erweitert: bei `require_speech_in_window=false` oder deaktiviertem
+Sabbelfilter unverändert `True` (altes Verhalten). Sonst muss
+`news_break.active_slot()` mit einer temporär auf
+`speech_gate_window_minutes` überschriebenen Config einen Slot liefern
+UND `speech_streak >= speech_gate_streak` sein.
+
+**Beim ersten Testlauf (Szenario "Sprache-Sender, Gate an") fiel die
+Pause trotz durchgehend erkannter Sprache nie — Ursache gefunden, nicht
+nur vermutet:** `speech_streak` wird bereits von der BESTEHENDEN
+Skip-Logik konsumiert (Fingerprint-Match-Trigger bei
+`FINGERPRINT_TRIGGER_SECONDS=2`, "Moderation erkannt" bei
+`CONSECUTIVE_SPEECH_TO_SWITCH=3`) — und zwar noch IM SELBEN Tick, in dem
+die jeweilige Schwelle erreicht wird, während das neue Gate den Wert
+erst am Anfang des NÄCHSTEN Ticks sieht, zu dem Zeitpunkt aber meist
+schon durch die ältere Logik auf 0 zurückgesetzt. Mit dem ursprünglich
+gewählten Default `speech_gate_streak=3` (zufällig identisch mit
+`CONSECUTIVE_SPEECH_TO_SWITCH`) gewann die alte Logik im Test buchstäblich
+jedes Mal (Log: "🎙 Moderation erkannt auf 'BR24' — schalte um ..."
+alle ~10s, nie ein einziges "📰 Nachrichten-Pause"). Fix: ein neues
+`speech_gate_active`-Flag (true, sobald wir im engen Toleranzfenster UND
+Feature+Filter an sind) hängt jetzt zusätzlich an BEIDEN bestehenden
+Trigger-Stellen (`if ... and not speech_gate_active:`) — während des
+engen Fensters wird sustained speech nicht mehr als "Werbung/Moderation,
+weg damit" interpretiert, sondern als potenzielles Nachrichtensignal
+fürs neue Gate. Außerhalb des Fensters komplett unverändert.
+`ARCHITECTURE.md` dokumentiert diesen Fund ausführlich (Abschnitt
+"Sprache-Gate für den Pause-Start") — genau die Art "ein naheliegender
+Ansatz hat nicht auf Anhieb funktioniert"-Erkenntnis, die dort
+festgehalten gehört.
+
+### Bewusst NICHT gemacht
+
+- Keine Änderung an `FINGERPRINT_TRIGGER_SECONDS`/
+  `CONSECUTIVE_SPEECH_TO_SWITCH` selbst — beide bleiben außerhalb des
+  Sprache-Gate-Fensters exakt wie bisher wirksam.
+- Keine harte Validierung, dass `speech_gate_window_minutes <=
+  window_minutes` ist — dieselbe "grobe Leitplanke statt strenger
+  Regel"-Philosophie wie bei den übrigen `LIMITS`, Fehlkonfiguration
+  führt zu überraschendem Timing, nicht zu einem Fehler/Crash (siehe
+  ARCHITECTURE.md).
+
+### Verifiziert
+
+- `python3 -m py_compile radiosabbelnich.py` sauber.
+- Voller End-to-End-Test im Container (eingefrorene News-Break-Uhr, wie
+  in den vorherigen Phasen, separate Test-Sender, Produktivprozess
+  durchgehend unberührt), vier Szenarien:
+  1. **Gate aus** (`GATE_ENABLED=0`), Musik-Sender (80s80s): Pause startet
+     praktisch sofort trotz Musik — Regression-Check für unverändertes
+     Altverhalten bestanden.
+  2. **Gate an, Musik-Sender**: 20+ Sekunden durchgehend `label=music`
+     geloggt, Pause startet korrekt NICHT.
+  3. **Gate an, Sprache-Sender** (BR24): nach dem Fix Pause-Start
+     innerhalb weniger Sekunden, KEIN vorheriges "Moderation erkannt"
+     mehr im Log — vor dem Fix hatte dasselbe Szenario nie ausgelöst.
+  4. **Gate an, Sabbelfilter währenddessen per `/api/filter/toggle`
+     deaktiviert**, Musik-Sender: Bypass greift, Pause startet sofort
+     wie im Fall "Gate aus" — bestätigt die dokumentierte
+     Design-Entscheidung.
+  - Test-Setup-Fehler unterwegs bemerkt und korrigiert: erster
+    Testlauf zeigte eine ~30s-Verzögerung vor dem allerersten
+    Pause-Start, weil versehentlich der ECHTE Produktiv-`mp3_folder`
+    (`/app/news_mp3`, tausende Dateien) statt eines kleinen Test-Ordners
+    verwendet wurde — `music_library.iter_files_recursive()` brauchte
+    entsprechend lange. Kein Code-Bug, nur ein Testartefakt; für alle
+    weiteren Läufe auf einen 1-Datei-Test-Ordner umgestellt.
+  - Prozess-Cleanup-Falle bemerkt: `kill` nach cmdline-Grep auf
+    `gatetest` traf den eigentlichen `python3 -u run_test.py`-Prozess
+    NICHT (das Wort "gatetest" kommt in dessen eigener Kommandozeile gar
+    nicht vor, nur in der URL des Icecast-Ausgabe-ffmpeg-Kindprozesses) —
+    ein Icecast-Reconnect-Mechanismus (`IcecastOutput`, siehe
+    ARCHITECTURE.md) ließ nach dem Töten nur des ffmpeg-Kindes
+    unbeabsichtigt einen neuen Kindprozess respawnen. Für alle weiteren
+    Aufräum-Schritte zusätzlich nach `run_test.py` gegrept.
+  - Produktivprozess während der gesamten Testreihe durchgehend gesund
+    (`/api/status` per HTTPS bestätigt), alle Testverzeichnisse aus
+    Container und Host-Scratchpad danach gelöscht, keine verwaisten
+    Prozesse übrig (verifiziert per PID-Scan).

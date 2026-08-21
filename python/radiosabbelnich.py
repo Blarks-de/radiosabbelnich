@@ -1517,7 +1517,41 @@ def main():
             # aktualisiert hat) hat Vorrang vor einem Neueintritt hier.
             news_break_cfg = state.news_break_cfg
             slot = news_break.active_slot(news_break_cfg)
-            if slot and not news_break_active and slot != news_break_served_slot:
+            # Sprache-Gate (siehe ARCHITECTURE.md/SESSION.md 2026-08-21):
+            # verhindert ein rein zeitbasiertes Starten, während der
+            # Live-Sender noch erkennbar Musik spielt -- zusätzlich zum
+            # normalen Zeitfenster muss ein eigenes, meist engeres
+            # Toleranzfenster (speech_gate_window_minutes) UND
+            # speech_gate_streak Sprache-Analysefenster am Stück erfüllt
+            # sein. Bewusst news_break.active_slot() WIEDERVERWENDET statt
+            # einer eigenen Funktion -- dieselbe Datumsmathematik, nur mit
+            # temporär überschriebenem window_minutes, kein Duplikat der
+            # Slot-/Stunden-Logik. Bypass (= altes rein zeitbasiertes
+            # Verhalten), wenn der Sabbelfilter deaktiviert ist: ohne ihn
+            # wird speech_streak nirgends mehr fortgeschrieben (siehe
+            # dessen Reset im Filter-Toggle-Handler oben), das Gate könnte
+            # sonst nie mehr durchlassen, obwohl der Nutzer nur die
+            # automatische ERKENNUNG abschalten wollte, nicht News-Break.
+            # speech_gate_active ("befinden wir uns gerade im engen
+            # Erkennungsfenster") wird weiter unten im Tick AUCH benutzt,
+            # um die bestehende Skip-Logik (Fingerprint-Match/
+            # CONSECUTIVE_SPEECH_TO_SWITCH) für die Dauer des Fensters
+            # auszusetzen -- ohne das würde die ältere Skip-Logik
+            # speech_streak regelmäßig VOR diesem Gate zurücksetzen
+            # (sie feuert noch im selben Tick, in dem die Schwelle
+            # erreicht wird; dieses Gate hier sieht den Wert erst einen
+            # Tick später und damit oft schon auf 0 zurückgesetzt -- live
+            # beim Testen beobachtet, siehe SESSION.md).
+            speech_gate_active = False
+            if news_break_cfg.get("require_speech_in_window") and state.filter_enabled:
+                gate_window_cfg = {**news_break_cfg, "window_minutes":
+                                    news_break_cfg.get("speech_gate_window_minutes", 2.0)}
+                speech_gate_active = news_break.active_slot(gate_window_cfg) is not None
+            speech_gate_ok = (not news_break_cfg.get("require_speech_in_window")
+                               or not state.filter_enabled
+                               or (speech_gate_active
+                                   and speech_streak >= news_break_cfg.get("speech_gate_streak", 3)))
+            if slot and not news_break_active and slot != news_break_served_slot and speech_gate_ok:
                 news_break_served_slot = slot
                 news_break_resume_id = current["id"]
                 if start_news_break_mp3(news_break_cfg):
@@ -1726,7 +1760,17 @@ def main():
                 # Sobald genug Sprache am Stück da ist: einmal pro Lauf
                 # gegen die Fingerprint-DB prüfen. Treffer -> sofort
                 # switchen, ohne auf CONSECUTIVE_SPEECH_TO_SWITCH zu warten.
-                if fp_db and not fp_checked_this_run and speech_streak >= FINGERPRINT_TRIGGER_SECONDS:
+                # "and not speech_gate_active": während des engen
+                # Sprache-Gate-Fensters (siehe oben) soll sustained speech
+                # gerade NICHT zum Wegschalten führen, sondern
+                # speech_streak für das News-Break-Gate unangetastet
+                # weiterlaufen -- sonst würde dieser Check (Trigger-
+                # Schwelle FINGERPRINT_TRIGGER_SECONDS=2, oft niedriger als
+                # speech_gate_streak) den Streak fast immer zuerst
+                # zurücksetzen, bevor das Gate ihn je sieht.
+                if (fp_db and not fp_checked_this_run
+                        and speech_streak >= FINGERPRINT_TRIGGER_SECONDS
+                        and not speech_gate_active):
                     fp_checked_this_run = True
                     combined = np.concatenate(speech_buffer)
                     match = fp_db.match_or_learn(combined, SAMPLE_RATE, current["name"])
@@ -1757,7 +1801,13 @@ def main():
                 speech_buffer = []
                 fp_checked_this_run = False
 
-            if speech_streak >= CONSECUTIVE_SPEECH_TO_SWITCH:
+            # "and not speech_gate_active": gleicher Grund wie beim
+            # Fingerprint-Check oben -- während des engen Sprache-Gate-
+            # Fensters darf die bestehende Skip-Logik speech_streak nicht
+            # wegen "Moderation erkannt" zurücksetzen, das würde dem
+            # News-Break-Gate (das denselben Zähler braucht) fast immer
+            # zuvorkommen (live beim Testen beobachtet, siehe SESSION.md).
+            if speech_streak >= CONSECUTIVE_SPEECH_TO_SWITCH and not speech_gate_active:
                 speech_streak = 0
                 speech_buffer = []
                 fp_checked_this_run = False

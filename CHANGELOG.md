@@ -42,6 +42,16 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
   `speech_gate_window_minutes`/`speech_gate_streak` (alle noch
   wirkungslos, Trigger-Verdrahtung folgt) — Vorbereitung für "Pause nur
   bei erkannter Sprache starten".
+- Neu (experimentell, standardmäßig AUS): News-Break startet optional
+  nur noch, wenn zusätzlich zum Zeitfenster gerade Sprache auf dem
+  Live-Sender erkannt wird — verhindert rein zeitbasiertes Starten
+  während noch Musik läuft. Einstellbar unter "📰 Nachrichten-Pause"
+  (`require_speech_in_window`/`speech_gate_window_minutes`/
+  `speech_gate_streak`).
+- Fix: die bestehende "Moderation erkannt"/Fingerprint-Match-Skip-Logik
+  hätte den neuen Sprache-Gate-Zähler fast immer vor dessen eigener
+  Prüfung zurückgesetzt (beide nutzen denselben Zähler) — während des
+  engen Sprache-Gate-Fensters jetzt ausgesetzt.
 
 ## 2026-08-20
 
