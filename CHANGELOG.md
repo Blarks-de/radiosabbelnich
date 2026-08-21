@@ -31,6 +31,10 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
   Pause-Ende direkt in die Musik ein, falls die Werbung dort rechtzeitig
   vorbei ist. Einstellbar auf der Config-Seite unter "📰
   Nachrichten-Pause" (`ad_prebuffer_enabled`/`ad_prebuffer_lead_seconds`).
+- Fix: Dockerfile kopierte die beiden neuen Module `stream_source.py`/
+  `ad_skip_prebuffer.py` nicht ins Image — verursachte kurzzeitig eine
+  Crash-Loop nach dem Deploy, bevor die fehlenden `COPY`-Zeilen ergänzt
+  wurden.
 
 ## 2026-08-20
 

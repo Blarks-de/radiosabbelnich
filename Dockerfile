@@ -54,8 +54,10 @@ WORKDIR /app
 # "Host-Layout und Container-Layout") -- Container-intern bleibt trotzdem
 # alles flach in /app/, nur die COPY-Quelle (links) folgt der Host-Struktur.
 COPY python/radiosabbelnich.py .
+COPY python/stream_source.py .
 COPY python/fingerprint.py .
 COPY python/speech_detector.py .
+COPY python/ad_skip_prebuffer.py .
 COPY python/webui.py .
 COPY python/stations_store.py .
 COPY python/settings_store.py .

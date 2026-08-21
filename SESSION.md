@@ -8122,3 +8122,52 @@ gegengeprüft, keine fehlenden Keys.
 - Noch NICHT getestet: echte Browser-Darstellung der beiden neuen
   Config-Formularfelder (Checkbox + Zahlenfeld) — HTML/JS/i18n-Coverage
   geprüft, aber keine claude-in-chrome-Session in diesem Lauf verfügbar.
+
+## 2026-08-21 (Fortsetzung 3) — Deploy-Fehler beim Rebuild: neue Module fehlten im Dockerfile
+
+### Auslöser
+
+Nutzerfreigabe, den Container für Phase 2 ohne Rückfrage neu zu bauen.
+`docker compose up -d --build radiosabbelnich` gebaut und gestartet —
+Produktivcontainer ging sofort in eine Crash-Loop:
+`ModuleNotFoundError: No module named 'ad_skip_prebuffer'`. Ursache: die
+beiden in Phase 1/2 neuen Dateien `stream_source.py`/
+`ad_skip_prebuffer.py` wurden zwar committet, aber NICHT ins Dockerfile
+eingetragen — das Docker-Layout kopiert bewusst jede `.py`-Datei einzeln
+statt den ganzen `python/`-Ordner (siehe ARCHITECTURE.md, "Docker: Host-
+vs. Container-Layout"), eine neue Datei braucht deshalb IMMER eine eigene
+`COPY`-Zeile, sonst landet sie nicht im Image. In den vorherigen Phasen
+lief kein Rebuild, deshalb fiel das nicht früher auf.
+
+### Umsetzung
+
+`COPY python/stream_source.py .` und `COPY python/ad_skip_prebuffer.py .`
+im Dockerfile ergänzt, direkt neu gebaut/gestartet.
+
+### Verifiziert
+
+- Container-Log nach dem Fix: sauberer Start ("🎬 RadioSabbelNich
+  startet." bis "🌐 Web-Interface läuft auf Port 5000 (https)"), keine
+  Tracebacks mehr.
+- `/api/status` per HTTPS gegen den echten Produktiv-Port abgefragt:
+  antwortet korrekt, zeigt den tatsächlichen Live-Zustand (Container
+  landete beim Neustart zufällig direkt in einer echten
+  Nachrichtenpause, unabhängig von diesem Feature).
+- `ad_prebuffer_enabled` ist im echten `settings.json` des Nutzers nicht
+  gesetzt → Default `false` greift → Feature bleibt für den Nutzer
+  inaktiv, das eigentliche Verhalten hat sich durch diesen Deploy NICHT
+  geändert (nur der Phase-0-Bugfix ist jetzt live).
+- **Tatsächliche Ausfallzeit**: von der ersten `docker compose up -d
+  --build` (crashende Version) bis zum funktionierenden Rebuild einige
+  Minuten Crash-Loop-Neustarts des Radioprozesses — Icecast-Container
+  selbst lief durchgehend weiter, nur `radiosabbelnich` war betroffen.
+  Kein Datenverlust (stations.json/settings.json/fingerprints.db
+  unberührt, alles bind-gemountet).
+
+### Lehre für künftige neue Module
+
+Vor jedem `docker compose up -d --build` nach dem Hinzufügen einer neuen
+`python/*.py`-Datei: prüfen, ob eine passende `COPY`-Zeile im Dockerfile
+existiert — dieser Fehler ist leicht zu wiederholen, weil `py_compile`
+und selbst container-interne Tests (die die Datei manuell reinkopieren)
+ihn nicht aufdecken, nur ein echter Image-Build tut das.
