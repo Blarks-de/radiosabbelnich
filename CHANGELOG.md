@@ -17,6 +17,15 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 
 ## 2026-08-21
 
+- Doku: Feature-Beschreibungen in README.md von historischen
+  Datums-/Changelog-Details befreit, beschreiben jetzt durchgängig den
+  aktuellen Ist-Zustand (deutscher + englischer Teil).
+- Doku: Inhaltsverzeichnis für README.md ergänzt (analog zu
+  ARCHITECTURE.md), Anker per `github-slugger` erzeugt.
+- Doku: Inhaltsverzeichnis für ARCHITECTURE.md ergänzt.
+- Doku: GitHub- und Forgejo-Repo-Umbenennung radiozapper →
+  radiosabbelnich nachgezogen (lokaler `github`-Remote sowie
+  `origin`/Forgejo-Remote-URL).
 - Lizenz: Projekt unter GPLv3 lizenziert — `LICENSE` (voller Originaltext)
   im Repo-Root, Lizenz-Badge/-Abschnitt in README.md, GPLv3-Kurzheader
   in allen `python/`-Modulen sowie **Android:** allen Kotlin-Klassen

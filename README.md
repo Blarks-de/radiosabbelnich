@@ -4,6 +4,59 @@
 
 # RadioSabbelNich
 
+## Inhaltsverzeichnis
+
+- [⚠️ Nur privat, nur hinter VPN — kein öffentlicher Betrieb](#️-nur-privat-nur-hinter-vpn--kein-öffentlicher-betrieb)
+- [Wie die Erkennung funktioniert](#wie-die-erkennung-funktioniert)
+- [Umgang mit toten Sendern (Watchdog)](#umgang-mit-toten-sendern-watchdog)
+- [Vorausschauendes Puffern & Playout-Delay](#vorausschauendes-puffern--playout-delay)
+- [Nachrichten-Pause](#nachrichten-pause)
+- [Player-Modus (Grundgerüst)](#player-modus-grundgerüst)
+- [STT-Sprachfilter](#stt-sprachfilter)
+  - [Mehrsprachigkeit: Sprache pro Sender-Kategorie](#mehrsprachigkeit-sprache-pro-sender-kategorie)
+  - [Kalibrierungs-Wizard](#kalibrierungs-wizard)
+  - [Konfiguration im Detail](#konfiguration-im-detail)
+- [Sprache des Web-Interfaces](#sprache-des-web-interfaces)
+- [Web-Interface](#web-interface)
+  - [Als App installieren (PWA)](#als-app-installieren-pwa)
+- [Android-App (eigenständige Zweitumsetzung)](#android-app-eigenständige-zweitumsetzung)
+- [Architektur](#architektur)
+- [Setup](#setup)
+  - [Wichtige `.env`-Variablen](#wichtige-env-variablen)
+  - [HTTPS/TLS (optional)](#httpstls-optional)
+- [Deploy-Befehle](#deploy-befehle)
+  - [Logging](#logging)
+- [Bekannte Einschränkungen](#bekannte-einschränkungen)
+- [Zukünftige Features](#zukünftige-features)
+  - [Eigene Musik-Library & Kategorisierung (geplant)](#eigene-musik-library--kategorisierung-geplant)
+  - [iOS-App (Idee, noch nicht terminiert)](#ios-app-idee-noch-nicht-terminiert)
+- [Lizenz](#lizenz)
+- [⚠️ Private use only, behind a VPN — no public deployment](#️-private-use-only-behind-a-vpn--no-public-deployment)
+- [How detection works](#how-detection-works)
+- [Handling dead stations (watchdog)](#handling-dead-stations-watchdog)
+- [Look-ahead buffering & playout delay](#look-ahead-buffering--playout-delay)
+- [News break](#news-break)
+- [Player mode (foundation)](#player-mode-foundation)
+- [STT speech filter](#stt-speech-filter)
+  - [Multi-language: language per station category](#multi-language-language-per-station-category)
+  - [Calibration wizard](#calibration-wizard)
+  - [Configuration in detail](#configuration-in-detail)
+- [Web interface language](#web-interface-language)
+- [Web interface](#web-interface-1)
+  - [Installing as an app (PWA)](#installing-as-an-app-pwa)
+- [Android app (separate second implementation)](#android-app-separate-second-implementation)
+- [Architecture](#architecture)
+- [Setup](#setup-1)
+  - [Important `.env` variables](#important-env-variables)
+  - [HTTPS/TLS (optional)](#httpstls-optional-1)
+- [Deploy commands](#deploy-commands)
+  - [Logging](#logging-1)
+- [Known limitations](#known-limitations)
+- [Future features](#future-features)
+  - [Own music library & categorization (planned)](#own-music-library--categorization-planned)
+  - [iOS app (idea, not yet scheduled)](#ios-app-idea-not-yet-scheduled)
+- [License](#license)
+
 ![License](https://img.shields.io/badge/license-GPLv3-blue.svg)
 
 *[🇬🇧 English version further below](#radiosabbelnich-english-version)*
@@ -167,7 +220,7 @@ Senderliste auf der Config-Seite (`/config`) oder direkt per API:
   Der eigentliche Host-Ordner wird über `NEWS_MP3_FOLDER` in `.env` von
   außen reingemountet (siehe `docker-compose.yml`), typischerweise ein
   SMB-Mount — dafür braucht es einen Container-Neustart, kein Feld auf der
-  Config-Seite. Die Auswahl durchsucht seit 2026-08-14 auch Unterordner,
+  Config-Seite. Die Auswahl durchsucht auch Unterordner,
   bis zu 5 Ebenen tief. Ordner fehlt/ist leer/enthält (auch in den
   Unterordnern) keine MP3s/nicht lesbar → Feature wird für dieses
   Zeitfenster einfach übersprungen, mit Logeintrag, kein Fehler.
@@ -179,7 +232,7 @@ Senderliste auf der Config-Seite (`/config`) oder direkt per API:
 - **`enabled_hours`** — optional `[start, end]`, z.B. `[6, 22]` für "nur
   6–22 Uhr"; `null` = rund um die Uhr. Kein Übernacht-Wraparound (22–6
   wird nicht unterstützt).
-- **`ad_prebuffer_enabled`** (seit 2026-08-21, standardmäßig AUS) —
+- **`ad_prebuffer_enabled`** (standardmäßig AUS) —
   "Werbeblock nach der Pause überspringen (experimentell)" auf der
   Config-Seite. In den letzten `ad_prebuffer_lead_seconds` der laufenden
   Pause-MP3 verbindet sich RadioSabbelNich schon im Hintergrund mit dem
@@ -195,7 +248,7 @@ Senderliste auf der Config-Seite (`/config`) oder direkt per API:
   beginnt (Default 20s, Bereich 1–120s). Die MP3-Dauer wird dafür beim
   Start jeder Pause-MP3 per `mutagen` gelesen — ist die Datei damit nicht
   lesbar, bleibt der Trigger für diese MP3 einfach inaktiv.
-- **`require_speech_in_window`** (seit 2026-08-21, standardmäßig AUS) —
+- **`require_speech_in_window`** (standardmäßig AUS) —
   "Pause nur bei erkannter Sprache starten (experimentell)" auf der
   Config-Seite. Ohne dieses Feature startet die Pause rein zeitbasiert,
   auch wenn der Live-Sender gerade noch Musik spielt. Mit aktiviertem
@@ -235,7 +288,7 @@ Automatik, wie überall sonst in RadioSabbelNich auch). Während der Pause
 pausiert auch die automatische Sprache-Erkennung (VAD/Heuristik/
 Fingerprint) — die MP3 selbst enthält u.U. Sprache, das soll nicht als
 "Moderation" auf dem eigentlichen Sender fehlgedeutet werden. Auf der
-Radio-Startseite zeigt eine Tag-Anzeige (seit 2026-08-15, per mutagen,
+Radio-Startseite zeigt eine Tag-Anzeige (per mutagen,
 format-übergreifend) währenddessen Titel/Interpret/Album/Jahr der
 laufenden MP3 statt nur des Dateinamens — Details siehe "Player-Modus"
 unten (dieselbe Anzeige, gleiches Fallback-Verhalten).
@@ -246,27 +299,21 @@ Erster Umsetzungsschritt der unten unter "Zukünftige Features"
 beschriebenen Musik-Library-Idee: ein **eigenständiger, persistierter
 Modus** neben dem normalen Radio-Betrieb — oben auf der Radio- UND der
 Player-Seite per gut sichtbarem Umschalter ("📻 Radio" / "🎵 Player")
-wechselbar (die Funktion hieß bis 2026-08-13 "Musiksammlung" — intern,
-in `settings.json`/Code, heißt der Modus weiterhin `music`, nur die
-Bezeichnung im Web-Interface wurde vereinfacht). Im Player-Modus ist die
+wechselbar (intern, in `settings.json`/Code, heißt der Modus `music`).
+Im Player-Modus ist die
 komplette automatische Erkennung (VAD/Heuristik/STT/Fingerprint) aus,
 nicht nur pausiert — es läuft ausschließlich lokale Musik, nichts wird
 analysiert. Der Modus übersteht einen Container-Neustart (in
-`settings.json` gespeichert) — seit 2026-08-15 startet dabei außerdem
+`settings.json` gespeichert) und startet dabei außerdem
 **automatisch die Wiedergabe** (erster Track des konfigurierten Ordners),
 sowohl nach einem Neustart mit bereits gespeichertem Player-Modus als
-auch bei einem manuellen Wechsel Radio→Player. Vorher blieb die
-Wiedergabe in beiden Fällen inaktiv, bis manuell auf ▶ getippt wurde —
-der Modus selbst war zwar korrekt gemerkt, aber es kam kein Ton, bis
-jemand aktiv Play drückte.
+auch bei einem manuellen Wechsel Radio→Player.
 
 Auf der eigenständigen Seite `/musik` ("🎵 Player"):
 
-- Der ausgewählte Musik-Ordner wird angezeigt — seit 2026-08-13 der
+- Der ausgewählte Musik-Ordner wird angezeigt — der
   **echte Host-Pfad** (serverseitig aus dem Container-Pfad
-  zurückübersetzt, per `MUSIC_LIBRARY_FOLDER` aus `.env`), vorher stand
-  dort der technisch korrekte, aber für den Nutzer bedeutungslose
-  Container-Pfad (`/app/music_library/...`). Ein Knopf "Pfad ändern"
+  zurückübersetzt, per `MUSIC_LIBRARY_FOLDER` aus `.env`). Ein Knopf "Pfad ändern"
   führt zur eigentlichen Ordnerauswahl auf der Config-Seite (siehe
   unten).
 - Zwei Gruppen von Buttons, "Kategorien" (schnell/langsam/rock/klassik)
@@ -275,18 +322,15 @@ Auf der eigenständigen Seite `/musik` ("🎵 Player"):
   Favoriten auf den Künstler-Tag) kommt erst mit dem Musik-Scan (Phase 1
   der Roadmap unten).
 - Ein großer Play/Stop-Button und Zurück/Nächster — spielt die Musikdateien
-  im konfigurierten Ordner samt Unterordnern (seit 2026-08-14, bis zu
+  im konfigurierten Ordner samt Unterordnern (bis zu
   5 Ebenen tief), alphabetisch, endlos im Kreis, bis Stop gedrückt wird.
-  Seit 2026-08-13 ist dieser eine Button
+  Dieser eine Button ist
   auch der einzige sichtbare Knopf fürs tatsächliche Zuhören: ein
   unsichtbares `<audio>`-Element (ohne eigene Bedienleiste) folgt
-  automatisch dem Wiedergabestatus. Vorher gab es zusätzlich einen
-  nativen Browser-Player mit eigenem Play-Knopf, der unabhängig vom
-  großen Button reagierte — zwei "Play"-Knöpfe, die sich gegenseitig
-  nicht kannten und sich dadurch in die Quere kamen.
-- Kein Banner-Bild mehr auf dieser Seite (seit 2026-08-13, aufgeräumtere
-  eigenständige Optik statt der Radio-Seiten-Elemente).
-- **Tag-Anzeige** (seit 2026-08-15): unter dem Dateinamen/Fortschritt
+  automatisch dem Wiedergabestatus.
+- Kein Banner-Bild auf dieser Seite — aufgeräumtere
+  eigenständige Optik statt der Radio-Seiten-Elemente.
+- **Tag-Anzeige**: unter dem Dateinamen/Fortschritt
   ("Track (i/total)") zeigt eine zweite/dritte Zeile die per mutagen
   ausgelesenen Metadaten — "Interpret – Titel" und "Album (Jahr)",
   format-übergreifend (MP3, FLAC, OGG, M4A/AAC, WAV, APE). Kein Titel-Tag
@@ -568,9 +612,9 @@ Erreichbar unter `http://<host>:5000/`:
   Sabbelfilter aus ist, weil dann gar nicht klassifiziert wird.
 - **🗣 STT (Speech-to-Text)-Sprachfilter-Balken** — gleiche Optik wie das
   Bullshitometer, zeigt aber die rohe Konfidenz des STT-Sprachfilters
-  (siehe eigener Abschnitt oben), nicht die von VAD/Heuristik. Label seit
-  2026-08-20 ausgeschrieben statt nur "STT" (Nutzer-Feedback: die
-  Abkürzung allein war nicht auf Anhieb verständlich). Friert zusätzlich
+  (siehe eigener Abschnitt oben), nicht die von VAD/Heuristik. Das Label
+  steht ausgeschrieben da statt nur als "STT", damit die Abkürzung nicht
+  unerklärt bleibt. Friert zusätzlich
   grau ein ("STT aus"), wenn der STT-Filter selbst deaktiviert ist oder
   noch kein frischer Befund vorliegt — unabhängig vom Sabbelfilter-
   Zustand, da der STT-Filter eine eigene An/Aus-Einstellung hat.
@@ -579,15 +623,15 @@ Erreichbar unter `http://<host>:5000/`:
   &lt;Name&gt;" bei einer erkannten Werbung/Jingle (löst den automatischen
   Wechsel aus), 🟢 "Gelernt" bei einem neuen, noch unbekannten Clip.
   Fällt 5s nach dem letzten Ereignis von selbst auf ⚪ "Idle" zurück.
-  Darunter (seit 2026-08-20) eine dauerhafte Historien-Zeile "Zuletzt
+  Darunter eine dauerhafte Historien-Zeile "Zuletzt
   gelernt: hh:mm:ss Uhr · Zuletzt erkannt: hh:mm:ss Uhr" ("nie", falls
   seit Prozessstart noch nicht vorgekommen) — anders als der Chip selbst
   verschwindet die nicht nach 5s, damit auch seltene "Treffer"-Ereignisse
   nachvollziehbar bleiben.
 
 Aktueller Sender, News-Break-Status und Sabbelfilter-Zustand kommen nicht
-nur per Intervall-Polling (alle 1s, vor 2026-08-20 alle 3s — angepasst an
-die tatsächliche 1Hz-Produktionsrate der Analysewerte im Hauptloop),
+nur per Intervall-Polling (alle 1s, passend zur tatsächlichen
+1Hz-Produktionsrate der Analysewerte im Hauptloop),
 sondern zusätzlich über einen Long-Poll (`GET /api/status/wait`) an — ein
 Senderwechsel oder News-Break-Übergang erscheint dadurch binnen
 Millisekunden statt erst beim nächsten Poll-Tick.
@@ -657,7 +701,7 @@ Im Unterverzeichnis [`android-app/`](android-app/) liegt eine **native
 Android-App**, die dasselbe Grundprinzip komplett lokal auf dem Handy
 umsetzt — Kotlin/ExoPlayer/Vosk statt Python/ffmpeg/Silero, ohne
 Web-Wrapper und **ohne jede Abhängigkeit von dieser Docker-Instanz**. Sie
-ist seit dem 2026-08-08 im Sinne ihres Fahrplans fertig: Senderverwaltung
+ist im Sinne ihres Fahrplans fertig: Senderverwaltung
 mit Kategorien, Watchdog gegen tote Sender, Vorwärmung des nächsten
 Senders, M3U-/Kodi-Import, Nachrichten-Pause, Audio-Fingerprinting und
 mehrsprachiges STT samt Kalibrierungs-Wizard sind umgesetzt und im
@@ -879,22 +923,21 @@ scannen, taggen und nach Kategorien abspielbar machen.
 
 - ✅ **Umschaltbar per Toggle** (Radio-Modus vs. Player-Modus, STT/VAD im
   Musik-Modus komplett aus) **und ein minimaler Player** (Play/Stop/
-  Zurück/Nächster über einen konfigurierbaren Ordner, seit 2026-08-14
+  Zurück/Nächster über einen konfigurierbaren Ordner,
   rekursiv bis zu 5 Unterordner-Ebenen tief, keine Kategorisierung) sind
   umgesetzt — siehe "Player-Modus (Grundgerüst)" weiter oben.
-- ✅ **Format-Unterstützung erweitert** (seit 2026-08-12): Scan UND
-  Playback laufen jetzt über MP3 hinaus auch für FLAC, OGG (Vorbis),
+- ✅ **Format-Unterstützung**: Scan UND
+  Playback laufen über MP3 hinaus auch für FLAC, OGG (Vorbis),
   M4A (MP4-Container), rohes ADTS-AAC, WAV und APE (Monkey's Audio,
-  nur Text-Tags — siehe unten). Playback brauchte keine Änderung
-  (ffmpeg ist bereits format-agnostisch), Metadaten/Cover-Extraktion
+  nur Text-Tags — siehe unten). Playback braucht dafür keine Sonderbehandlung
+  (ffmpeg ist format-agnostisch), Metadaten/Cover-Extraktion
   in `music_scan.py` dagegen schon: FLAC/OGG/MP4 legen Cover-Bilder an
   komplett unterschiedlichen Stellen ab (kein gemeinsames mutagen-API
   wie bei den Text-Tags), WAV wird von mutagen nicht "easy"-gewrappt
-  (Tags mussten über die rohen ID3-Frames gelesen werden), und
-  getaggtes rohes AAC wurde von mutagens Auto-Erkennung fälschlich als
-  MP3 erkannt und crashte beim Frame-Sync — an echten, per ffmpeg
-  erzeugten und per mutagen getaggten Testdateien gefunden und behoben,
-  nicht nur aus der Doku übernommen (siehe SESSION.md). **APE-Cover
+  (Tags werden über die rohen ID3-Frames gelesen), und
+  getaggtes rohes AAC wird von mutagens Auto-Erkennung sonst fälschlich als
+  MP3 erkannt (eigene Sonderbehandlung dafür in `music_scan.py`,
+  siehe SESSION.md für Details). **APE-Cover
   werden bewusst nicht extrahiert** (kein standardisiertes Feld dafür,
   kein mutagen-API) und die APE-Unterstützung selbst ist mangels
   Encoder im Image **nicht gegen eine echte `.ape`-Datei verifiziert**
@@ -939,7 +982,7 @@ scannen, taggen und nach Kategorien abspielbar machen.
   402-Track-Sammlung gemessen fielen dadurch spürbar mehr Tracks unter
   "schnell" als musikalisch stimmen dürfte. Energy-Erkennung/Browse-UI
   aus der ursprünglichen Phase-3-Idee bleiben offen.
-- ✅ **Duplikat-Erkennung umgesetzt** (seit 2026-08-12): `music_query.
+- ✅ **Duplikat-Erkennung**: `music_query.
   find_duplicates()` gruppiert Tracks mit demselben normalisierten
   Artist+Titel-Paar (klein geschrieben, Whitespace getrimmt) — bewusst
   reiner Metadaten-Abgleich, kein Audio-Fingerprint-Vergleich (der
@@ -1138,8 +1181,8 @@ on the config page (`/config`), or directly via the API:
   subfolders of `/app/news_mp3` instead of typing the path). The
   actual host folder is mounted in from outside via `NEWS_MP3_FOLDER`
   in `.env` (see `docker-compose.yml`), typically an SMB mount — that
-  needs a container restart, not a field on the config page. Since
-  2026-08-14 the picker also searches subfolders, up to 5 levels deep.
+  needs a container restart, not a field on the config page.
+  The picker also searches subfolders, up to 5 levels deep.
   Folder missing/empty/no MP3s (including in subfolders)/unreadable →
   the feature is simply skipped for that time window, with a log entry,
   no error. Below the field, the config
@@ -1152,7 +1195,7 @@ on the config page (`/config`), or directly via the API:
 - **`enabled_hours`** — optional `[start, end]`, e.g. `[6, 22]` for
   "only 6am–10pm"; `null` = around the clock. No overnight wraparound
   (22–6 is not supported).
-- **`ad_prebuffer_enabled`** (since 2026-08-21, off by default) — "skip
+- **`ad_prebuffer_enabled`** (off by default) — "skip
   the ad block after the break (experimental)" on the config page. In
   the last `ad_prebuffer_lead_seconds` of the running break MP3,
   RadioSabbelNich already connects to the paused station in the
@@ -1167,7 +1210,7 @@ on the config page (`/config`), or directly via the API:
   (default 20s, range 1–120s). The MP3's duration is read via `mutagen`
   each time a break MP3 starts — if the file isn't readable that way,
   the trigger simply stays inactive for that MP3.
-- **`require_speech_in_window`** (since 2026-08-21, off by default) —
+- **`require_speech_in_window`** (off by default) —
   "only start the break when speech is detected (experimental)" on the
   config page. Without it, the break starts purely on a timer, even if
   the live station is still playing music. With it enabled, in addition
@@ -1206,8 +1249,8 @@ cancels it immediately (a manual decision beats automation, as
 everywhere else in RadioSabbelNich). During the break, automatic speech
 detection (VAD/heuristic/fingerprint) is also paused — the MP3 itself
 may well contain speech, and that shouldn't be misread as "presenting"
-on the actual station. On the radio home page, a tag display (since
-2026-08-15, via mutagen, format-agnostic) shows the playing MP3's
+on the actual station. On the radio home page, a tag display (via
+mutagen, format-agnostic) shows the playing MP3's
 title/artist/album/year instead of just the filename — see "Player
 mode" below for details (same display, same fallback behavior).
 
@@ -1216,27 +1259,21 @@ mode" below for details (same display, same fallback behavior).
 First implementation step of the music library idea described further
 below under "Future features": a **standalone, persisted mode**
 alongside normal radio operation — switchable on both the radio and the
-player page via a clearly visible toggle ("📻 Radio" / "🎵 Player") (the
-feature was called "Music library" until 2026-08-13 — internally, in
-`settings.json`/code, the mode is still named `music`, only the
-web interface label was simplified). In player mode, all automatic
+player page via a clearly visible toggle ("📻 Radio" / "🎵 Player")
+(internally, in `settings.json`/code, the mode is named `music`).
+In player mode, all automatic
 detection (VAD/heuristic/STT/fingerprint) is off, not just paused —
 only local music plays, nothing gets analyzed. The mode survives a
-container restart (stored in `settings.json`) — since 2026-08-15 it also
+container restart (stored in `settings.json`) and also
 **automatically starts playback** (first track of the configured
 folder), both after a restart with the player mode already saved and on
-a manual switch from radio to player. Before, playback stayed inactive
-in both cases until ▶ was tapped manually — the mode itself was
-correctly remembered, but no sound played until someone actively hit
-play.
+a manual switch from radio to player.
 
 On the standalone `/musik` page ("🎵 Player"):
 
-- The selected music folder is displayed — since 2026-08-13 the **real
+- The selected music folder is displayed — the **real
   host path** (translated server-side from the container path, via
-  `MUSIC_LIBRARY_FOLDER` from `.env`), previously it showed the
-  technically correct but meaningless-to-the-user container path
-  (`/app/music_library/...`). A "Change path" button leads to the
+  `MUSIC_LIBRARY_FOLDER` from `.env`). A "Change path" button leads to the
   actual folder picker on the config page (see below).
 - Two button groups, "Categories" (schnell/langsam/rock/klassik) and
   "Favorites" (Queen/Pavarotti) — currently pure placeholders with no
@@ -1244,18 +1281,15 @@ On the standalone `/musik` page ("🎵 Player"):
   favorites on the artist tag) arrives with the music scan (roadmap
   phase 1 below).
 - A big play/stop button plus back/next — plays the music files in the
-  configured folder including subfolders (since 2026-08-14, up to
+  configured folder including subfolders (up to
   5 levels deep), alphabetically, looping forever until stop is pressed.
-  Since 2026-08-13 this single button is
+  This single button is
   also the only visible control for actually listening: a hidden
   `<audio>` element (no control bar of its own) automatically follows
-  the playback state. Before, there was also a native browser player
-  with its own play button reacting independently from the big button —
-  two "play" buttons that didn't know about each other and got in each
-  other's way.
-- No more banner image on this page (since 2026-08-13, a tidier,
-  standalone look instead of the radio page's elements).
-- **Tag display** (since 2026-08-15): below the filename/progress line
+  the playback state.
+- No banner image on this page — a tidier,
+  standalone look instead of the radio page's elements.
+- **Tag display**: below the filename/progress line
   ("Track (i/total)"), a second/third line shows the metadata read via
   mutagen — "Artist – Title" and "Album (Year)", format-agnostic (MP3,
   FLAC, OGG, M4A/AAC, WAV, APE). No title tag → falls back to the
@@ -1525,9 +1559,9 @@ Reachable at `http://<host>:5000/`:
   off, because nothing is being classified then.
 - **🗣 STT (speech-to-text) filter bar** — same look as the
   bullshit-o-meter, but shows the raw confidence of the STT speech
-  filter (see its own section above) instead of VAD/heuristic. Label
-  spelled out since 2026-08-20 instead of just "STT" (user feedback: the
-  bare abbreviation wasn't self-explanatory). Also freezes gray ("STT
+  filter (see its own section above) instead of VAD/heuristic. The label
+  is spelled out instead of just "STT", so the abbreviation doesn't stand
+  unexplained. Also freezes gray ("STT
   off") when the STT filter itself is disabled or no fresh reading is
   available yet — independent of the chatter filter state, since the
   STT filter has its own on/off setting.
@@ -1535,15 +1569,15 @@ Reachable at `http://<host>:5000/`:
   continuous value but a briefly flashing event: 🔴 "Match: &lt;name&gt;"
   on a recognized ad/jingle (triggers the automatic switch), 🟢 "Learned"
   on a new, previously unknown clip. Falls back to ⚪ "Idle" on its own
-  5s after the last event. Below it (since 2026-08-20) a persistent
+  5s after the last event. Below it, a persistent
   history line "Last learned: hh:mm:ss · Last recognized: hh:mm:ss"
   ("never" if it hasn't happened yet this process run) — unlike the chip
   itself this doesn't disappear after 5s, so rare "match" events stay
   visible.
 
 Current station, news-break status and chatter-filter state arrive not
-just via interval polling (every 1s, was 3s before 2026-08-20 — tightened
-to match the main loop's actual 1Hz production rate for analysis values)
+just via interval polling (every 1s, matching the main loop's actual
+1Hz production rate for analysis values)
 but additionally via long polling (`GET /api/status/wait`) — a station
 switch or news-break transition appears within milliseconds instead of
 waiting for the next poll tick.
@@ -1612,7 +1646,7 @@ instead of a frozen stale state. The icons at `icon-192.png`/
 The [`android-app/`](android-app/) subdirectory contains a **native Android
 app** that implements the same idea entirely on the phone — Kotlin/ExoPlayer/
 Vosk instead of Python/ffmpeg/Silero, no web wrapper and **no dependency on
-this Docker instance whatsoever**. As of 2026-08-08 it is complete with
+this Docker instance whatsoever**. It is complete with
 respect to its own roadmap: station management with categories, a watchdog
 for dead stations, pre-warming of the next station, M3U/Kodi import, the
 news break, audio fingerprinting and multilingual STT including a
@@ -1832,20 +1866,19 @@ tag it, and make it playable by category.
 
 - ✅ **Switchable via toggle** (radio mode vs. player mode, STT/VAD fully
   off in music mode) **and a minimal player** (play/stop/back/next over
-  a configurable folder, recursive up to 5 subfolder levels since
-  2026-08-14, no categorization) are implemented — see "Player mode
+  a configurable folder, recursive up to 5 subfolder levels,
+  no categorization) are implemented — see "Player mode
   (foundation)" further up.
-- ✅ **Expanded format support** (since 2026-08-12): scan AND playback
-  now go beyond MP3 to FLAC, OGG (Vorbis), M4A (MP4 container), raw
+- ✅ **Expanded format support**: scan AND playback
+  go beyond MP3 to FLAC, OGG (Vorbis), M4A (MP4 container), raw
   ADTS AAC, WAV, and APE (Monkey's Audio, text tags only — see below).
-  Playback needed no changes (ffmpeg was already format-agnostic), but
-  metadata/cover extraction in `music_scan.py` did: FLAC/OGG/MP4 store
+  Playback needs no special handling (ffmpeg is format-agnostic), but
+  metadata/cover extraction in `music_scan.py` does: FLAC/OGG/MP4 store
   cover art in completely different places (no shared mutagen API like
-  for the text tags), WAV isn't "easy"-wrapped by mutagen (tags had to
-  be read via the raw ID3 frames instead), and tagged raw AAC was
-  misdetected as MP3 by mutagen's auto-detection and crashed on frame
-  sync — found and fixed against real ffmpeg-generated, mutagen-tagged
-  test files, not just assumed from the docs (see SESSION.md). **APE
+  for the text tags), WAV isn't "easy"-wrapped by mutagen (tags are
+  read via the raw ID3 frames instead), and tagged raw AAC would
+  otherwise be misdetected as MP3 by mutagen's auto-detection (dedicated
+  handling for that in `music_scan.py`, see SESSION.md for details). **APE
   cover art is deliberately not extracted** (no standardized field, no
   mutagen API for it), and APE support itself is **not verified
   against a real `.ape` file** since the image's ffmpeg has no encoder
@@ -1889,7 +1922,7 @@ tag it, and make it playable by category.
   measured against a real 402-track collection, noticeably more tracks
   ended up under "fast" than would musically make sense. Energy
   detection/browse UI from the original phase 3 idea remain open.
-- ✅ **Duplicate detection implemented** (since 2026-08-12):
+- ✅ **Duplicate detection implemented**:
   `music_query.find_duplicates()` groups tracks with the same
   normalized artist+title pair (lowercased, whitespace trimmed) —
   deliberately metadata-only, no audio fingerprint comparison (that

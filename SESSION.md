@@ -8638,3 +8638,111 @@ git@github.com:Blarks-de/radiosabbelnich.git`, danach per `git
 ls-remote github HEAD` verifiziert — liefert den zuletzt gepushten
 Commit-Hash (`042801b…`), Remote also funktionsfähig. Sonst nichts
 geändert (siehe Bestandsaufnahme oben).
+
+## 2026-08-21 (Fortsetzung 12) — Auch das Forgejo-Repo war umbenannt: origin nachgezogen
+
+Direkt beim Pushen des vorigen Commits (`git push origin main`)
+schlug der Forgejo-Remote fehl: `Forgejo: Cannot find repository:
+blarks/radiozapper` — kein Rechteproblem, der Pfad existierte dort
+schlicht nicht mehr. Nicht geraten, sondern beim Nutzer nachgefragt
+(`AskUserQuestion`), ob das Forgejo-Repo analog zu GitHub ebenfalls
+umbenannt wurde. Bestätigt: ja, zu `radiosabbelnich`.
+
+**Umsetzung**: `git remote set-url origin
+ssh://git@dockfish.icefish-ghost.ts.net:222/blarks/radiosabbelnich.git`,
+per `git ls-remote origin HEAD` verifiziert (liefert `042801b…`,
+identisch zum zuletzt gepushten Stand) — erst danach `git push origin
+main` erneut versucht, erfolgreich. `github`-Remote parallel auch
+gepusht (war vom Forgejo-Problem nicht betroffen).
+
+Gespeicherte Memory `reference_git_remotes.md` mit den neuen URLs und
+der Lehre daraus aktualisiert: ein fehlgeschlagener Push auf einen
+dieser beiden Remotes kann ein echtes "wurde umbenannt" sein, nicht nur
+ein transientes Netzwerkproblem — bei einem Not-found/Permission-Fehler
+`git remote -v` prüfen statt blind erneut zu versuchen.
+
+## 2026-08-21 (Fortsetzung 13) — Inhaltsverzeichnis für ARCHITECTURE.md
+
+Nutzer bat um ein Inhaltsverzeichnis für `ARCHITECTURE.md`, direkt
+unter der Hauptüberschrift `# Architektur`, vor dem einleitenden
+Absatz, mit allen `##`/`###`-Überschriften als Markdown-Links mit
+Sprungmarken, `###`-Unterpunkte eingerückt, sonst am restlichen Inhalt
+nichts ändern.
+
+**Umsetzung**: alle 19 Überschriften (17× `##`, 2× `###` — die beiden
+News-Break-Unterabschnitte "Werbeblock-Vorbuffering..." und
+"Sprache-Gate...") per `grep -n "^#\{1,3\} "` erfasst, Anker nach dem
+GitHub-Slug-Algorithmus von Hand abgeleitet (klein geschrieben,
+Satzzeichen wie `()`, `,`, `.`, Backticks und `/` ersatzlos entfernt —
+nicht durch Leerzeichen ersetzt —, Leerzeichen zu `-`; das erzeugt bei
+einigen Überschriften bewusst "hässliche", aber korrekte Anker, z.B.
+`#tlshttps-optional-tls_cert_filetls_key_file-in-env` für die
+TLS/HTTPS-Überschrift mit Inline-Code und Slashes, oder
+`#docker-host--vs-container-layout` mit doppeltem Bindestrich wegen
+des entfernten Doppelpunkts/Punkts neben einem Leerzeichen). Neuer
+Abschnitt `## Inhaltsverzeichnis` mit einer Edit direkt nach der
+`# Architektur`-Zeile eingefügt, `###`-Einträge als verschachtelte
+Liste (zwei Leerzeichen Einrückung) unter ihrem `##`-Elternpunkt.
+
+**Verifiziert**: `git diff ARCHITECTURE.md` zeigt ausschließlich den
+neu eingefügten Block (22 Zeilen) — keine einzige Änderung am
+restlichen Dateiinhalt, wie gefordert.
+
+## 2026-08-21 (Fortsetzung 14) — Inhaltsverzeichnis für README.md
+
+Nutzer bat um dasselbe wie zuvor für `ARCHITECTURE.md`, jetzt für
+`README.md`: Inhaltsverzeichnis direkt unter der Hauptüberschrift, vor
+der Projektbeschreibung, alle `##`/`###`-Überschriften als Links,
+`###`-Unterpunkte eingerückt, sonst nichts am restlichen Inhalt
+ändern. Der Auftragstext nannte als Hauptüberschrift fälschlich
+`# Radio Automation AI Stack` — vermutlich Rest einer generischen
+Vorlage, tatsächlich beginnt die Datei mit `# RadioSabbelNich`; das
+TOC wurde dort eingefügt, wo es der Sache nach hinsollte, statt am
+wörtlich genannten (nicht existierenden) Anker.
+
+**Umsetzung**: anders als beim vorigen ARCHITECTURE.md-Lauf (Anker von
+Hand nach dem GitHub-Slug-Algorithmus abgeleitet) diesmal die
+tatsächliche Bibliothek `github-slugger` (v2.0.0, dieselbe, die GitHub
+selbst für Anchor-IDs verwendet) per Node-Skript über alle 50
+`##`/`###`-Überschriften laufen lassen, um Rateflüchtigkeit bei
+Emoji/Sonderzeichen auszuschließen (z.B. führendes ⚠️ mit unsichtbarem
+Variation-Selector, der einen führenden Bindestrich im Anker erzeugt).
+`README.md` enthält den deutschen Haupttext UND eine komplette
+englische Spiegelfassung im selben Dokument (getrennt per Anker
+`#radiosabbelnich-english-version`) — beide Sprachversionen haben
+identische Überschriften, das TOC deckt beide ab, inklusive der dafür
+nötigen Slugger-Dedup-Suffixe (`web-interface-1`, `setup-1`,
+`logging-1`).
+
+**Verifiziert**: `git diff -- README.md | grep -E "^[+-]#{1,3} "` zeigt
+außer der neuen `## Inhaltsverzeichnis`-Überschrift keine veränderte
+Überschrift im restlichen Dokument.
+
+## 2026-08-21 (Fortsetzung 15) — Feature-Beschreibungen in README.md von Datums-/Changelog-Details befreit
+
+Nutzer bat darum, alle historischen Datumsangaben ("(seit
+YYYY-MM-DD)", "neu seit …", "vorher X, jetzt Y"-Vergleiche) aus den
+Feature-Beschreibungen in `README.md` zu entfernen und die Sätze auf
+den aktuellen Ist-Zustand umzuformulieren, ohne Struktur/Überschriften
+anzufassen — deckt sich mit der ohnehin in `CLAUDE.md` dokumentierten
+Zuständigkeitstrennung (README.md = aktueller Stand, SESSION.md =
+Historie).
+
+**Umsetzung**: alle `2026-08-*`-Treffer per `grep` durchgegangen (~30
+Stellen, deutscher UND englischer Teil, da beide Sprachversionen im
+selben Dokument identisch aufgebaut sind), echte Datums-/
+Vorher-Nachher-Passagen umformuliert — u.a. Player-Modus-Autoplay,
+Musik-Ordner-Pfadanzeige, Play-Button-Redesign (zwei konkurrierende
+Play-Knöpfe), STT-Balken-Label, Polling-Intervall-Anpassung,
+Format-Unterstützung-Roadmap-Punkt (AAC/WAV/FLAC-Tag-Sonderfälle),
+Duplikat-Erkennung. Rein prozedurale/zeitliche Verwendungen von
+"vorher"/"seit" ohne Bezug zur Projekthistorie (z.B.
+Kalibrierungs-Workflow-Reihenfolge, TLS-Parallelbetrieb HTTP+HTTPS,
+empirische Herleitung des STT-Schwellwerts) bewusst unverändert
+gelassen — dort beschreibt das Wort laufendes Verhalten, keine
+Änderungshistorie.
+
+**Verifiziert**: `grep -n "2026-0[1-9]-[0-9][0-9]" README.md` liefert
+danach 0 Treffer; `git diff -- README.md | grep -E "^[+-]#{1,3} "`
+zeigt weiterhin nur die neue TOC-Überschrift als Diff, keine
+bestehende Überschrift verändert.
