@@ -291,6 +291,45 @@ class MainActivity : AppCompatActivity() {
             NewsBreakSettings.setWindowMinutes(this, minutes)
             Toast.makeText(this, getString(R.string.news_break_window_saved, minutes.toString()), Toast.LENGTH_SHORT).show()
         }
+
+        // Sprache-Gate (siehe PlaybackService.speechGateActive()).
+        binding.newsBreakSpeechGateCheckbox.isChecked = cfg.requireSpeechInWindow
+        binding.newsBreakSpeechGateCheckbox.setOnCheckedChangeListener { _, checked ->
+            NewsBreakSettings.setRequireSpeechInWindow(this, checked)
+        }
+        binding.newsBreakSpeechGateWindowMinutesInput.setText(cfg.speechGateWindowMinutes.toString())
+        binding.newsBreakSpeechGateStreakSecondsInput.setText(cfg.speechGateStreakSeconds.toString())
+        binding.saveNewsBreakSpeechGateButton.setOnClickListener {
+            val minutes = binding.newsBreakSpeechGateWindowMinutesInput.text.toString().toDoubleOrNull()
+            val streakSeconds = binding.newsBreakSpeechGateStreakSecondsInput.text.toString().toDoubleOrNull()
+            if (minutes == null || minutes <= 0 || streakSeconds == null || streakSeconds <= 0) {
+                Toast.makeText(this, R.string.news_break_speech_gate_invalid, Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            NewsBreakSettings.setSpeechGateWindowMinutes(this, minutes)
+            NewsBreakSettings.setSpeechGateStreakSeconds(this, streakSeconds)
+            Toast.makeText(
+                this,
+                getString(R.string.news_break_speech_gate_saved, minutes.toString(), streakSeconds.toString()),
+                Toast.LENGTH_SHORT,
+            ).show()
+        }
+
+        // Werbeblock-Vorbuffering (siehe playback/AdSkipPrebuffer.kt).
+        binding.newsBreakAdSkipCheckbox.isChecked = cfg.adPrebufferEnabled
+        binding.newsBreakAdSkipCheckbox.setOnCheckedChangeListener { _, checked ->
+            NewsBreakSettings.setAdPrebufferEnabled(this, checked)
+        }
+        binding.newsBreakAdSkipLeadSecondsInput.setText(cfg.adPrebufferLeadSeconds.toString())
+        binding.saveNewsBreakAdSkipButton.setOnClickListener {
+            val leadSeconds = binding.newsBreakAdSkipLeadSecondsInput.text.toString().toDoubleOrNull()
+            if (leadSeconds == null || leadSeconds <= 0) {
+                Toast.makeText(this, R.string.news_break_ad_skip_invalid, Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            NewsBreakSettings.setAdPrebufferLeadSeconds(this, leadSeconds)
+            Toast.makeText(this, getString(R.string.news_break_ad_skip_saved, leadSeconds.toString()), Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun renderNewsBreakFolderStatus() {

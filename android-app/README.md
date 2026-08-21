@@ -168,7 +168,20 @@ merkt (siehe "Bekannte Grenzen").
   eine, siehe Docker-Projekt-Historie), dieselbe Datei kommt nicht direkt
   zweimal hintereinander. Danach automatische Rueckkehr zum vorher
   laufenden Sender - ein manueller Sendertipp oder "⚡ ZAPPEN!" waehrend der
-  Pause beendet sie sofort.
+  Pause beendet sie sofort. Zwei optionale Zusatzfeatures (Android-Pendants
+  zu den gleichnamigen Docker-Features, siehe dessen `ARCHITECTURE.md`),
+  beide Default AUS, in derselben Sektion:
+  - **Sprache-Gate**: die Pause startet nicht mehr rein zeitbasiert, sondern
+    erst, wenn zusaetzlich zum normalen Zeitfenster ein engeres
+    Toleranzfenster (Minuten) erreicht UND eine konfigurierbare Sprache-Serie
+    (Sekunden) am Stück erkannt wurde - verhindert einen Start mitten in
+    laufender Musik.
+  - **Werbeblock-Vorbuffering**: in den letzten X Sekunden der laufenden
+    Pause-MP3 verbindet die App im Hintergrund schon stumm mit dem
+    pausierten Sender. Ist er beim Pause-Ende erkennbar schon wieder bei
+    Musik, wird diese bereits laufende Verbindung direkt uebernommen statt
+    neu zu verbinden (kein Vorspulen - geht bei Livestreams nicht -, sondern
+    doppelte Nutzung der ohnehin verstreichenden Pause-Zeit).
 - **Audio-Fingerprinting** (`fingerprint/Fingerprint.kt`,
   `fingerprint/FingerprintDb.kt`, Vorbild `fingerprint.py` - siehe eigener
   Architektur-Abschnitt unten fuer die volle Herleitung) - erkennt
@@ -621,6 +634,89 @@ Docker-Projekt, dessen ffmpeg-Pipe eine lokale Datei sonst in
 Sekundenbruchteilen durchreicht) - ExoPlayer spielt eine lokale Datei
 ohnehin in ihrem eigenen Tempo ab, unabhaengig von der Quelle.
 
+### Sprache-Gate für den Pause-Start
+
+Vorbild: `require_speech_in_window` im Docker-Projekt (seit 2026-08-21,
+siehe dessen `ARCHITECTURE.md`, Abschnitt "Sprache-Gate für den
+Pause-Start"). Optional (`NewsBreakConfig.requireSpeechInWindow`, Default
+AUS): die Pause startet nicht mehr rein zeitbasiert
+(`NewsBreak.activeSlot()`), sondern erst, wenn zusaetzlich ein engeres
+Toleranzfenster (`speechGateWindowMinutes`) erreicht UND
+`speechGateStreakSeconds` Sekunden Sprache am Stück erkannt wurden
+(`PlaybackService.speechGateActive()`/`checkNewsBreak()`).
+
+Kein Duplikat der Datumsmathematik: die enge Pruefung ruft
+`NewsBreak.activeSlot()` unveraendert mit `cfg.copy(windowMinutes =
+speechGateWindowMinutes)` auf - exakt derselbe Trick wie im Docker-Vorbild
+(`{**news_break_cfg, "window_minutes": speech_gate_window_minutes}`).
+
+Der Streak selbst kommt aus `StreamAnalyzer.rawSpeechStreakSeconds` - dem
+bereits vorhandenen rohen, ungeglaetteten Chunk-Zaehler, der intern schon
+fuers Fingerprint-Timing mitlaeuft (siehe unten), hier zusaetzlich in
+kontinuierlichen Sekunden veroeffentlicht. Bewusste Abweichung vom
+Docker-Vorbild: dort ist `speech_streak` eine Anzahl diskreter 1s-Fenster
+(`WINDOW_SECONDS=1.0`), hier eine Sekunden-Dauer (0.5s-Chunks) - beide
+Defaults (3) meinen inhaltlich dasselbe, die Sekunden-Einheit ist nur
+robuster gegen eine andere Chunk-Groesse.
+
+Dieselbe Race wie im Docker-Vorbild (dort live gefunden, siehe dessen
+`ARCHITECTURE.md`): die normale Skip-Logik (`handleStatusForAutoSwitch()`
+bei `PlaybackStatus.SPEECH`, `handleFingerprintOutcome()` bei `Match`)
+wuerde den Sender sonst fast immer schon wegschalten, BEVOR das Gate
+ueberhaupt einen Streak sehen kann. Fix: beide pruefen zusaetzlich
+`!speechGateActive(cfg)`, bevor sie `attemptAutoSwitch()` aufrufen -
+solange das enge Fenster aktiv ist, soll sustained speech als
+"wahrscheinlich die Nachrichten-Anmoderation" gelten, nicht als "Werbung,
+weg damit". Android hat keinen Docker-Sabbelfilter-Toggle
+(`filter_enabled`) - der entsprechende Bypass im Vorbild entfaellt
+ersatzlos, es gibt nichts, das die Analyse pausieren koennte.
+
+### Werbeblock-Vorbuffering
+
+Vorbild: `ad_prebuffer_enabled`/`AdSkipPrebuffer` im Docker-Projekt (seit
+2026-08-21, siehe dessen `ARCHITECTURE.md`, Abschnitt
+"Werbeblock-Vorbuffering"). Optional
+(`NewsBreakConfig.adPrebufferEnabled`, Default AUS): nach der Pause-MP3
+folgt auf vielen Sendern erst ein Werbeblock, bevor wieder Musik laeuft -
+der Hoerer bekaeme den live komplett ab. Ein Live-Stream laesst sich nicht
+schneller als Echtzeit lesen, "vorspulen" geht nicht - der Trick ist
+deshalb, die ohnehin verstreichende Pause-Zeit doppelt zu nutzen: in den
+letzten `adPrebufferLeadSeconds` der Pause-MP3 schon im Hintergrund auf
+den pausierten Sender verbinden und mitklassifizieren.
+
+Docker "übernimmt" dafuer eine bereits offene ffmpeg-Pipe als neue
+Playback-Quelle. ExoPlayer erlaubt kein Andocken an eine fremde
+Decoder-Pipeline - das 1:1-Nachbauen waere unverhaeltnismaessig riskant
+gewesen. Stattdessen nutzt `playback/AdSkipPrebuffer.kt` dasselbe
+Vorwaermungsmuster, das die App fuer den wahrscheinlichsten naechsten
+Ringkandidaten ohnehin schon hat (`preloadedPlayer`/`refreshPreload()`):
+ein zweiter, stummer `ExoPlayer` + eine eigene `StreamAnalyzer`-Instanz
+verbinden sich auf den PAUSIERTEN (Resume-)Sender selbst statt auf den
+Ring-Nachfolger. `readyForPromotion` (= der geglaettete Analyse-Status
+steht auf MUSIC) nutzt dieselbe, bereits getunte Hysterese wie ueberall
+sonst im Projekt statt eines eigenen rohen Streak-Zaehlers wie im
+Docker-Vorbild (dessen `music_confirm_windows`).
+
+Ist der Hintergrund-Reader beim Pause-Ende bereit, uebernimmt
+`PlaybackService.resumeFromNewsBreak()` seinen bereits verbundenen Player
+direkt (Listener umhaengen, Lautstaerke von stumm auf hoerbar) statt kalt
+neu zu verbinden - dieselbe Warm-Uebernahme wie bei `preloadedPlayer` in
+`play()`. Trifft der Hintergrund-Reader nicht mehr genau das tatsaechliche
+Resume-Ziel (Sender waehrend der Pause geaendert) oder ist er nicht
+rechtzeitig fertig, faellt der Code auf den normalen `play()`-Pfad zurueck
+- keine Verschlechterung gegenueber dem Verhalten ohne dieses Feature.
+
+Bewusste Abweichung vom Docker-Vorbild: Docker nutzt dafuer bewusst NUR
+VAD (kein STT), weil eine zweite Vosk-artige Instanz dort RAM verdoppeln
+wuerde. Android hat gar kein VAD - Vosk/`StreamAnalyzer` ist das einzige
+verfuegbare Klassifikationswerkzeug im Projekt (siehe oben, "Zwei
+unabhaengige Dekodierungen") und wird hier bewusst dafuer wiederverwendet.
+Kostet eine DRITTE parallele Dekodierung, aber nur fuer die kurze
+Lead-Zeit kurz vor Pause-Ende (siehe "Bekannte Grenzen" unten fuer die
+Ticker-Granularitaet, mit der dieses Fenster erkannt wird). Bewusst OHNE
+`FingerprintDb` fuer diese Hintergrund-Instanz: ein Treffer auf einem
+stummen Stream liesse sich keinem sinnvollen Nutzer-Erlebnis zuordnen.
+
 ### Audio-Fingerprinting
 
 Vorbild: `fingerprint.py` im Docker-Projekt (siehe dessen Moduldoc fuer
@@ -925,6 +1021,19 @@ echten Stand zurueckgesetzt.
   In-Memory-Feld) - nach einem Neustart mitten in einem bereits bedienten
   Fenster koennte die Pause theoretisch ein zweites Mal fuer denselben Slot
   anspringen.
+- **Sprache-Gate/Werbeblock-Vorbuffering: Ticker-Granularitaet statt
+  Sekundentakt** (siehe eigene Abschnitte oben) - der Sprache-Gate-Streak
+  wird nur alle 15s (`checkNewsBreak()`) ausgewertet, der
+  Vorbuffering-Trigger alle 3s (`checkAdSkipPrebuffer()`), gegenueber
+  Dockers ~1s-Hauptloop-Tick. Fuer die betroffenen Zeitraeume (Minuten
+  bzw. typischerweise 10-30s Lead-Zeit) unerheblich, aber beide Features
+  reagieren etwas traeger als ihr Docker-Vorbild. Das Werbeblock-
+  Vorbuffering nutzt außerdem STT (Vosk/`StreamAnalyzer`) statt VAD wie im
+  Docker-Vorbild, weil Android kein VAD hat - kostet fuer die kurze
+  Lead-Zeit eine dritte parallele Dekodierung samt Vosk-Modell fuer die
+  Sprache des Resume-Senders (muss dafuer bereits heruntergeladen sein,
+  sonst bleibt das Feature fuer diese Pause inaktiv, siehe
+  `AdSkipPrebuffer.start()`).
 - **`MIN_HASH_MATCHES=25` fuers Fingerprinting ist ein Startwert, keine
   Messung** (siehe "Audio-Fingerprinting" oben) - identisch zum
   Python-Wert uebernommen, aber NICHT automatisch gueltig fuer die andere

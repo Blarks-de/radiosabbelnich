@@ -1588,3 +1588,115 @@ leicht nachrüstbar sein. Für Android war das vorab schon fast erledigt:
   korrekt sowohl einen Default-Eintrag (`() "Stopped"`) als auch einen
   `(de)`-Override (`"Gestoppt"`) — der Android-Ressourcenmechanismus
   greift wie beabsichtigt.
+
+## 2026-08-21 — Sprache-Gate + Werbeblock-Vorbuffering (Nachrichten-Pause, Plan-Mode, Vorbild dieselben Features im Docker-Projekt)
+
+Auslöser: Nutzer bat, die Android-App auf den Stand der Docker-Version zu
+bringen, nachdem dort dieselben zwei Nachrichten-Pause-Erweiterungen
+(`require_speech_in_window`, `ad_prebuffer_enabled`) fertig implementiert
+waren (siehe `../SESSION.md`, `../ARCHITECTURE.md`). Plan vorab erstellt
+und freigegeben (siehe Konversation), dann umgesetzt.
+
+### Umsetzung
+
+- **Sprache-Gate** 1:1 vom Docker-Vorbild übernommen, inklusive des dort
+  live gefundenen Race-Fixes: `NewsBreakConfig` (`newsbreak/NewsBreak.kt`)
+  um `requireSpeechInWindow`/`speechGateWindowMinutes`/
+  `speechGateStreakSeconds` erweitert (Defaults `false`/`2.0`/`3.0`,
+  inhaltlich identisch zu den Docker-Defaults). `PlaybackService.
+  speechGateActive()` ruft `NewsBreak.activeSlot()` unverändert mit
+  `cfg.copy(windowMinutes = speechGateWindowMinutes)` auf — derselbe
+  Trick wie im Vorbild, kein Duplikat der Datumsmathematik.
+  `handleStatusForAutoSwitch()` (Zweig `SPEECH`) und
+  `handleFingerprintOutcome()` (Zweig `Match`) unterdrücken zusätzlich
+  `attemptAutoSwitch()`, solange das Gate aktiv ist — ohne das hätte die
+  bestehende Skip-Logik den Sender fast immer schon weggeschaltet, bevor
+  das Gate je einen Streak sehen konnte (exakt die Race, die im
+  Docker-Projekt live gefunden und dokumentiert wurde).
+- Streak-Quelle bewusst NICHT 1:1 wie im Vorbild: `StreamAnalyzer` hatte
+  bereits einen rohen, ungeglätteten Chunk-Zähler fürs
+  Fingerprint-Timing (`rawSpeechStreak`, 0.5s-Chunks) — als
+  `rawSpeechStreakSeconds: StateFlow<Double>` veröffentlicht statt eines
+  zweiten, diskreten Fenster-Zählers wie Dockers `speech_streak`
+  (1s-Fenster). Kein neuer Analyse-Durchlauf nötig.
+- **Werbeblock-Vorbuffering**: `NewsBreakConfig` zusätzlich um
+  `adPrebufferEnabled`/`adPrebufferLeadSeconds` erweitert (Defaults
+  `false`/`20.0`). Neue Datei `playback/AdSkipPrebuffer.kt`: kapselt
+  einen zweiten, stummen (`volume = 0f`, aber `playWhenReady = true` —
+  muss wirklich laufen, sonst bekommt die Analyse keine echten Daten)
+  `ExoPlayer` + eine eigene `StreamAnalyzer`-Instanz (ohne
+  `FingerprintDb`) auf den Resume-Sender. Bewusst NICHT wie im
+  Docker-Vorbild 1:1 nachgebaut (dortiges `promote()` übernimmt eine
+  bereits offene ffmpeg-Pipe — ExoPlayer erlaubt kein Andocken an eine
+  fremde Decoder-Pipeline), sondern als Variante des bereits
+  vorhandenen `preloadedPlayer`-Vorwärmungsmusters: ein zweiter Kandidat,
+  diesmal für den PAUSIERTEN statt den Ring-Nachfolger-Sender.
+  `PlaybackService`: neuer 3s-Ticker (`startNewsBreakAdSkipTicker()`/
+  `checkAdSkipPrebuffer()`, feiner als der bestehende 15s-News-Break-
+  Ticker, weil `adPrebufferLeadSeconds` typischerweise kürzer als 15s
+  sein kann) startet den Hintergrund-Reader, sobald die MP3-Restzeit
+  (`player.duration` erst ab `STATE_READY` bekannt, anders als Dockers
+  `mutagen`-Vorablesen) unter die Lead-Zeit fällt. `resumeFromNewsBreak()`
+  übernimmt den Player bei `readyForPromotion` direkt (Listener
+  umhängen, Lautstaerke auf 1f), sonst normaler `play()`-Pfad.
+  `interruptNewsBreak()`/`stopPlayback()`/`onDestroy()` räumen einen
+  laufenden Hintergrund-Reader konsequent auf.
+- Beim ersten Entwurf von `resumeFromNewsBreak()` einen Bug selbst vor
+  dem Testen gefunden und korrigiert: der frühe `return` bei
+  `_currentStation.value == null` (keine aktiven Sender mehr) lag VOR
+  dem Aufräumen des Hintergrund-Readers — der wäre in diesem Randfall
+  hängen geblieben (ExoPlayer/StreamAnalyzer liefen weiter, ohne dass
+  irgendwer sie je stoppt). Fix: `bg`/`adSkipPrebuffer` VOR dem
+  Null-Check auslesen und im Null-Fall trotzdem `bg?.stop()` aufrufen.
+- UI: zwei neue Gruppen in der Nachrichten-Pause-Sektion
+  (`activity_main.xml`, `MainActivity.setupNewsBreakSection()`) nach
+  demselben Checkbox+Zahlenfeld(er)+Save-Button-Muster wie die
+  bestehende Fensterlänge. `res/values/strings.xml` +
+  `res/values-de/strings.xml` um je 10 neue `news_break_*`-Keys
+  ergänzt (parallel, identische Platzhalter).
+- `CLAUDE.md` (Abschnitt `PlaybackService.kt`) und `README.md` (neuer
+  Feature-Bullet, zwei neue Architektur-Abschnitte, neuer Bullet in
+  "Bekannte Grenzen") nachgezogen.
+
+### Bewusst NICHT gemacht
+
+- Kein 1:1-Nachbau von Dockers `promote()`/geteilter ffmpeg-Pipe für
+  das Vorbuffering — architektonisch auf Android nicht sinnvoll
+  nachbaubar (siehe oben), stattdessen die vorhandene
+  Vorwärmungs-Infrastruktur wiederverwendet. Ergebnis ist funktional
+  gleichwertig (bereits verbundener, vorklassifizierter Player wird bei
+  Bereitschaft direkt übernommen), nur technisch anders umgesetzt.
+- Kein Sekundentakt wie im Docker-Hauptloop — 15s- bzw. 3s-Ticker statt
+  eines Dauerloops, siehe README "Bekannte Grenzen" für die
+  Konsequenzen.
+- Kein eigenes VAD eingeführt — Vosk/`StreamAnalyzer` bewusst für den
+  Hintergrund-Reader wiederverwendet, siehe README-Begründung.
+
+### Verifiziert
+
+- `./gradlew assembleDebug`: `BUILD SUCCESSFUL` (erster Versuch, keine
+  Compile-Fehler).
+- Skriptgestützter Vergleich `values/strings.xml` ↔ `values-de/
+  strings.xml`: identisches Key-Set (121/121), kein Diff.
+- Install + Start auf dem lokalen Emulator (`test_device`): App startet
+  ohne Absturz, neue Nachrichten-Pause-Sektion rendert mit den
+  erwarteten Defaults (2.0 Min. / 3.0 s Sprache-Gate, 20.0 s
+  Vorbuffering-Lead). Beide neuen Checkboxen + beide neuen
+  Save-Buttons per `adb shell input tap` betätigt — keine
+  `AndroidRuntime`/`FATAL EXCEPTION`-Zeilen in Logcat. Einstellungen
+  überleben `am force-stop` + Neustart (SharedPreferences-Persistenz
+  bestätigt per Screenshot-Vergleich).
+- SWR3 abgespielt (`adb shell input tap` auf den Play-Button), ca. 65s
+  laufen lassen (inkl. mindestens ein 15s- und mehrere 3s-Ticker-Durchläufe
+  über den laufenden `newsBreakTickerJob`) — keine Exceptions in den neuen
+  Codepfaden (`checkNewsBreak()`/`speechGateActive()`/
+  `checkAdSkipPrebuffer()` liefen mit, ohne dass eine echte Pause aktiv
+  war).
+- **Nicht verifizierbar in dieser Session** (wie schon bei der
+  Docker-Erstimplementierung, siehe dortiges SESSION.md): ein echter
+  Live-Trigger beider Features (tatsächliches Erreichen des
+  Sprache-Gates bzw. eine echte Werbeblock-Übernahme auf einem realen
+  Sender zur vollen/halben Stunde) — das braucht laufenden Realbetrieb
+  über Zeit. Offen für eine spätere Session mit echten Beobachtungen.
+- Build + Upload nach `blarks.de/radio/update/` (Pflicht laut
+  `CLAUDE.md`) im Anschluss an diesen Eintrag durchgeführt.

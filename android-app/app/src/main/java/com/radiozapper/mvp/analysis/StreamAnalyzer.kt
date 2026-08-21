@@ -29,6 +29,7 @@ private const val TAG = "StreamAnalyzer"
 
 private const val TARGET_SAMPLE_RATE = 16_000
 private const val CHUNK_SAMPLES = TARGET_SAMPLE_RATE / 2 // 0.5s je Analyse-Haeppchen
+private const val CHUNK_SECONDS = CHUNK_SAMPLES.toDouble() / TARGET_SAMPLE_RATE
 private const val CODEC_TIMEOUT_US = 20_000L
 
 // Fingerprinting (siehe fingerprint/Fingerprint.kt): ROHER, ungeglaetteter
@@ -125,6 +126,15 @@ class StreamAnalyzer(private val scope: CoroutineScope) {
     private val _speechRatioSamples = MutableSharedFlow<Double>(extraBufferCapacity = 16)
     val speechRatioSamples: SharedFlow<Double> = _speechRatioSamples
 
+    // Veroeffentlichte Sicht auf denselben rohen Streak, der intern schon fuer
+    // den Fingerprint-Trigger mitgezaehlt wird (siehe runAnalysis()) - in
+    // kontinuierlichen Sekunden statt Haeppchen-Anzahl, damit er unabhaengig
+    // von CHUNK_SAMPLES verwendbar bleibt. Basis fuer das Sprache-Gate der
+    // Nachrichten-Pause in PlaybackService.checkNewsBreak() (Android-Pendant
+    // zu Dockers speech_streak, siehe newsbreak/NewsBreak.kt).
+    private val _rawSpeechStreakSeconds = MutableStateFlow(0.0)
+    val rawSpeechStreakSeconds: StateFlow<Double> = _rawSpeechStreakSeconds
+
     // Fingerprint-Ergebnisse (siehe fingerprint/FingerprintDb.kt) sind
     // einmalige Ereignisse, kein Dauerzustand - bewusst SharedFlow statt
     // StateFlow: dessen "letzter-Wert-bleibt-haengen"-Semantik wuerde bei
@@ -169,6 +179,7 @@ class StreamAnalyzer(private val scope: CoroutineScope) {
         _status.value = PlaybackStatus.IDLE
         _speechRatio.value = null
         _analyzerError.value = null
+        _rawSpeechStreakSeconds.value = 0.0
     }
 
     /** True, solange `runGeneration` noch der aktuell gueltige Lauf ist (siehe Klassen-Doc). */
@@ -296,6 +307,9 @@ class StreamAnalyzer(private val scope: CoroutineScope) {
                                 // radiosabbelnich.py main().
                                 if (chunkIsSpeech) {
                                     rawSpeechStreak++
+                                    if (isCurrent(runGeneration)) {
+                                        _rawSpeechStreakSeconds.value = rawSpeechStreak * CHUNK_SECONDS
+                                    }
                                     if (fingerprintDb != null && !fingerprintCheckedThisRun) {
                                         val room = fingerprintBuffer.size - fingerprintFilled
                                         val take = minOf(room, chunk.size)
@@ -317,6 +331,7 @@ class StreamAnalyzer(private val scope: CoroutineScope) {
                                     rawSpeechStreak = 0
                                     fingerprintFilled = 0
                                     fingerprintCheckedThisRun = false
+                                    if (isCurrent(runGeneration)) _rawSpeechStreakSeconds.value = 0.0
                                 }
 
                                 recentChunks.addLast(chunkIsSpeech)
@@ -371,6 +386,7 @@ class StreamAnalyzer(private val scope: CoroutineScope) {
                 Log.w(TAG, "Analyse-Stream beendet fuer $url")
                 _status.value = PlaybackStatus.ERROR
                 _speechRatio.value = null
+                _rawSpeechStreakSeconds.value = 0.0
                 _analyzerError.value = "Analyse-Datenstrom beendet"
             }
         } catch (e: Exception) {
@@ -380,6 +396,7 @@ class StreamAnalyzer(private val scope: CoroutineScope) {
                 Log.e(TAG, "Analyse abgebrochen fuer $url", e)
                 _status.value = PlaybackStatus.ERROR
                 _speechRatio.value = null
+                _rawSpeechStreakSeconds.value = 0.0
                 _analyzerError.value = e.message ?: e.toString()
             } else {
                 Log.d(TAG, "Fehler eines abgeloesten Analyse-Laufs verworfen ($url): ${e.message}")

@@ -268,6 +268,76 @@
                 android:text="@string/btn_save_update_server" />
         </LinearLayout>
 
+        <!-- Sprache-Gate (siehe PlaybackService.speechGateActive()) -->
+        <CheckBox
+            android:id="@+id/newsBreakSpeechGateCheckbox"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/news_break_speech_gate_enabled" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <EditText
+                android:id="@+id/newsBreakSpeechGateWindowMinutesInput"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:inputType="numberDecimal"
+                android:hint="@string/news_break_speech_gate_window_hint"
+                android:textSize="12sp" />
+
+            <EditText
+                android:id="@+id/newsBreakSpeechGateStreakSecondsInput"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginStart="4dp"
+                android:inputType="numberDecimal"
+                android:hint="@string/news_break_speech_gate_streak_hint"
+                android:textSize="12sp" />
+
+            <Button
+                android:id="@+id/saveNewsBreakSpeechGateButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/btn_save_update_server" />
+        </LinearLayout>
+
+        <!-- Werbeblock-Vorbuffering (siehe playback/AdSkipPrebuffer.kt) -->
+        <CheckBox
+            android:id="@+id/newsBreakAdSkipCheckbox"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/news_break_ad_skip_enabled" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <EditText
+                android:id="@+id/newsBreakAdSkipLeadSecondsInput"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:inputType="numberDecimal"
+                android:hint="@string/news_break_ad_skip_lead_hint"
+                android:textSize="12sp" />
+
+            <Button
+                android:id="@+id/saveNewsBreakAdSkipButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/btn_save_update_server" />
+        </LinearLayout>
+
         <View
             android:layout_width="match_parent"
             android:layout_height="1dp"

@@ -24,6 +24,7 @@ import com.radiozapper.mvp.fingerprint.FingerprintOutcome
 import com.radiozapper.mvp.model.Station
 import com.radiozapper.mvp.model.StationRepository
 import com.radiozapper.mvp.newsbreak.NewsBreak
+import com.radiozapper.mvp.newsbreak.NewsBreakConfig
 import com.radiozapper.mvp.newsbreak.NewsBreakSettings
 import com.radiozapper.mvp.stt.CalibrationLevel
 import com.radiozapper.mvp.stt.CalibrationSuggestion
@@ -159,6 +160,36 @@ private const val ANALYZER_MAX_RETRIES = 3
  * Watchdog oben) unterscheiden - sonst wuerde ein MP3-Fehler faelschlich den
  * gesunden, nur pausierten Sender als tot markieren.
  *
+ * Sprache-Gate für den Pause-Start (Android-Pendant zu Dockers
+ * `require_speech_in_window`, siehe dessen `ARCHITECTURE.md`): optional
+ * (`NewsBreakConfig.requireSpeechInWindow`, Default AUS) startet die Pause
+ * nicht mehr rein zeitbasiert, sondern erst, wenn zusätzlich zum normalen
+ * Zeitfenster ein engeres Toleranzfenster (`speechGateWindowMinutes`)
+ * erreicht UND `speechGateStreakSeconds` Sekunden Sprache am Stück erkannt
+ * wurden (`speechGateActive()`/`checkNewsBreak()`, Streak aus
+ * `StreamAnalyzer.rawSpeechStreakSeconds`). Solange das Gate aktiv ist,
+ * unterdrücken `handleStatusForAutoSwitch()`/`handleFingerprintOutcome()`
+ * bewusst den normalen `attemptAutoSwitch()` — sonst würde die bestehende
+ * Skip-Logik den Sender fast immer schon wegschalten, bevor das Gate
+ * überhaupt einen Streak sehen kann (dieselbe Race wie im Docker-Vorbild,
+ * dort live gefunden).
+ *
+ * Werbeblock-Vorbuffering (Android-Pendant zu Dockers
+ * `ad_prebuffer_enabled`/`AdSkipPrebuffer`): optional
+ * (`NewsBreakConfig.adPrebufferEnabled`, Default AUS), siehe
+ * `playback/AdSkipPrebuffer.kt` für die Klasse selbst. In den letzten
+ * `adPrebufferLeadSeconds` einer laufenden Pause-MP3 (eigener 3s-Ticker,
+ * `startNewsBreakAdSkipTicker()`/`checkAdSkipPrebuffer()`) wird ein
+ * zweiter, stummer `ExoPlayer` + `StreamAnalyzer` auf den Resume-Sender
+ * verbunden. Ist er beim Pause-Ende schon wieder bei Musik
+ * (`readyForPromotion`), übernimmt `resumeFromNewsBreak()` diesen bereits
+ * verbundenen Player direkt statt kalt neu zu verbinden — dieselbe
+ * Warm-Übernahme wie bei `preloadedPlayer`, nur für den PAUSIERTEN statt
+ * den nächsten Ring-Sender. Anders als im Docker-Vorbild (dort bewusst NUR
+ * VAD) nutzt das hier Vosk/`StreamAnalyzer`, weil Android kein VAD hat —
+ * kostet eine dritte parallele Dekodierung, aber nur für die kurze Lead-Zeit
+ * kurz vor Pause-Ende.
+ *
  * Audio-Fingerprinting (Phase 4, siehe fingerprint/Fingerprint.kt fuer die
  * reine Erkennungs-Logik und fingerprint/FingerprintDb.kt fuer die
  * SQLite-Persistenz): eine einzige, langlebige `FingerprintDb`-Instanz
@@ -235,6 +266,26 @@ class PlaybackService : LifecycleService() {
     private var newsBreakServedSlot: String? = null
     private var newsBreakTickerJob: Job? = null
 
+    // Werbeblock-Vorbuffering (siehe playback/AdSkipPrebuffer.kt): Dauer/
+    // Startzeit der AKTUELLEN Pause-MP3 (gesetzt in playNextNewsBreakFile()/
+    // dem STATE_READY-Zweig unten) sind die Grundlage fuer den
+    // Restzeit-Trigger in checkAdSkipPrebuffer(). adSkipPrebuffer ist nur
+    // gesetzt, waehrend innerhalb einer laufenden Pause bereits ein
+    // Hintergrund-Reader auf den Resume-Sender laeuft - bleibt ueber
+    // mehrere Pause-MP3s im selben Fenster hinweg bestehen (kein Reset in
+    // playNextNewsBreakFile()), analog zu ad_skip_bg im Docker-Projekt.
+    private var adSkipPrebuffer: AdSkipPrebuffer? = null
+    private var newsBreakMp3DurationMs: Long? = null
+    private var newsBreakMp3StartedAtMs: Long = 0L
+    private var newsBreakAdSkipTickerJob: Job? = null
+
+    private fun stopAdSkipPrebuffer() {
+        adSkipPrebuffer?.stop()
+        adSkipPrebuffer = null
+        newsBreakAdSkipTickerJob?.cancel()
+        newsBreakAdSkipTickerJob = null
+    }
+
     // Fingerprinting (siehe Klassen-Doc oben).
     private lateinit var fingerprintDb: FingerprintDb
     private val _lastFingerprintOutcome = MutableStateFlow<FingerprintOutcome?>(null)
@@ -310,6 +361,12 @@ class PlaybackService : LifecycleService() {
                         // dessen Sperre hat mit der MP3-Bereitschaft nichts zu tun.
                         _currentStation.value?.let { deadUntil.remove(it.id) }
                         refreshLockedStationsSnapshot()
+                    } else {
+                        // Grundlage fuer checkAdSkipPrebuffer(): ExoPlayer kennt die
+                        // Dauer erst ab STATE_READY (anders als Dockers mutagen-
+                        // Vorablesen vor dem Start), daher hier statt in
+                        // playNextNewsBreakFile() abgegriffen.
+                        player?.duration?.takeIf { it != C.TIME_UNSET }?.let { newsBreakMp3DurationMs = it }
                     }
                 }
                 else -> {
@@ -640,14 +697,30 @@ class PlaybackService : LifecycleService() {
      * Fenster von selbst vorbei ist (analog zum Docker-Projekt).
      */
     private suspend fun checkNewsBreak() {
-        val slot = NewsBreak.activeSlot(NewsBreakSettings.getConfig(this))
-        if (slot != null && !_newsBreakActive.value && slot != newsBreakServedSlot) {
+        val cfg = NewsBreakSettings.getConfig(this)
+        val slot = NewsBreak.activeSlot(cfg)
+        val gateOk = !cfg.requireSpeechInWindow ||
+            (speechGateActive(cfg) && analyzer.rawSpeechStreakSeconds.value >= cfg.speechGateStreakSeconds)
+        if (slot != null && !_newsBreakActive.value && slot != newsBreakServedSlot && gateOk) {
             newsBreakServedSlot = slot
             enterNewsBreak()
         } else if (_newsBreakActive.value && slot == null) {
             resumeFromNewsBreak("Nachrichten-Pause-Fenster abgelaufen")
         }
     }
+
+    /**
+     * Sprache-Gate fuer den Pause-Start (Android-Pendant zu Dockers
+     * `speech_gate_active`, siehe `ARCHITECTURE.md`, Abschnitt "Sprache-Gate
+     * für den Pause-Start"): true, waehrend zusaetzlich zum normalen
+     * Zeitfenster (`windowMinutes`) auch das engere Toleranzfenster
+     * (`speechGateWindowMinutes`) erreicht ist. Ruft `NewsBreak.activeSlot()`
+     * UNVERAENDERT mit einer per `copy()` ueberschriebenen `windowMinutes`
+     * auf - dieselbe Slot-/Datumsmathematik, kein Duplikat.
+     */
+    private fun speechGateActive(cfg: NewsBreakConfig): Boolean =
+        cfg.requireSpeechInWindow &&
+            NewsBreak.activeSlot(cfg.copy(windowMinutes = cfg.speechGateWindowMinutes)) != null
 
     /**
      * Waehlt eine zufaellige, zuletzt nicht gespielte MP3 (siehe
@@ -671,6 +744,12 @@ class PlaybackService : LifecycleService() {
         if (newsBreakRecentFiles.size >= NewsBreak.RECENT_HISTORY_SIZE) newsBreakRecentFiles.removeFirst()
         newsBreakRecentFiles.addLast(name)
 
+        // Dauer erst wieder ab STATE_READY der NEUEN Datei bekannt (siehe
+        // playerListener) - Restzeit-Trigger von checkAdSkipPrebuffer() bleibt
+        // bis dahin inaktiv, exakt wie bei einer unlesbaren Datei im
+        // Docker-Vorbild.
+        newsBreakMp3DurationMs = null
+        newsBreakMp3StartedAtMs = SystemClock.elapsedRealtime()
         player?.apply {
             stop()
             setMediaItem(MediaItem.fromUri(chosen.uri))
@@ -691,10 +770,45 @@ class PlaybackService : LifecycleService() {
         // Sender" fehlgedeutet werden (siehe handleStatusForAutoSwitch()).
         analyzer.stop()
         _newsBreakActive.value = true
+        startNewsBreakAdSkipTicker()
         Log.i(
             TAG,
             "📰 Nachrichten-Pause: spiele '${_newsBreakFileName.value}' " +
                 "(zurueck zu '${_currentStation.value?.name}' danach)"
+        )
+    }
+
+    /** Alle 3s waehrend einer laufenden Pause - feiner als der 15s-News-Break-Ticker, weil `adPrebufferLeadSeconds` typischerweise kurz genug ist, dass 15s-Granularitaet das Fenster verpassen koennte. */
+    private fun startNewsBreakAdSkipTicker() {
+        if (newsBreakAdSkipTickerJob?.isActive == true) return
+        newsBreakAdSkipTickerJob = lifecycleScope.launch {
+            while (isActive) {
+                checkAdSkipPrebuffer()
+                delay(3_000)
+            }
+        }
+    }
+
+    /**
+     * Startet das Werbeblock-Vorbuffering genau einmal pro Pause (siehe
+     * adSkipPrebuffer-Feld-Doc), sobald die Restzeit der laufenden Pause-MP3
+     * unter `adPrebufferLeadSeconds` faellt - Android-Pendant zum
+     * Restzeit-Trigger im Docker-Hauptloop (siehe ARCHITECTURE.md,
+     * "Werbeblock-Vorbuffering").
+     */
+    private fun checkAdSkipPrebuffer() {
+        if (!_newsBreakActive.value || adSkipPrebuffer != null) return
+        val cfg = NewsBreakSettings.getConfig(this)
+        if (!cfg.adPrebufferEnabled) return
+        val durationMs = newsBreakMp3DurationMs ?: return
+        val remainingMs = durationMs - (SystemClock.elapsedRealtime() - newsBreakMp3StartedAtMs)
+        if (remainingMs > cfg.adPrebufferLeadSeconds * 1000) return
+        val resumeStation = _currentStation.value ?: return
+        adSkipPrebuffer = AdSkipPrebuffer(this, lifecycleScope, resumeStation, voskModelCache).also { it.start() }
+        Log.i(
+            TAG,
+            "🎧 Werbeblock-Vorbuffering: höre '${resumeStation.name}' im Hintergrund mit " +
+                "(noch ${remainingMs / 1000}s Pause-MP3 übrig)."
         )
     }
 
@@ -716,13 +830,64 @@ class PlaybackService : LifecycleService() {
         }
     }
 
-    /** Beendet die Pause und schaltet zurueck zum vorher laufenden Sender - dieselbe Funktion (play()) wie jeder normale Wechsel. */
+    /**
+     * Beendet die Pause und schaltet zurueck zum vorher laufenden Sender.
+     *
+     * Werbeblock-Vorbuffering (siehe playback/AdSkipPrebuffer.kt): war ein
+     * Hintergrund-Reader fuer GENAU das tatsaechliche Resume-Ziel aktiv und
+     * dort schon `readyForPromotion` (Musik erkannt), wird sein bereits
+     * verbundener Player direkt uebernommen (dieselbe Warm-Uebernahme wie
+     * bei `preloadedPlayer` in `play()`) statt kalt neu zu verbinden. In
+     * jedem anderen Fall (kein Hintergrund-Reader, falsches Ziel weil sich
+     * der Resume-Sender waehrend der Pause geaendert hat, oder der
+     * Werbeblock lief laenger als die Restzeit) laeuft der normale
+     * `play()`-Pfad unveraendert weiter.
+     */
     private fun resumeFromNewsBreak(reason: String) {
         _newsBreakActive.value = false
         _newsBreakFileName.value = null
-        val station = _currentStation.value ?: return
-        Log.i(TAG, "📰 $reason - zurueck zu '${station.name}'")
-        play(station)
+        newsBreakAdSkipTickerJob?.cancel()
+        newsBreakAdSkipTickerJob = null
+        newsBreakMp3DurationMs = null
+
+        val bg = adSkipPrebuffer
+        adSkipPrebuffer = null
+        val station = _currentStation.value
+        if (station == null) {
+            bg?.stop() // keine aktiven Sender mehr - Hintergrund-Reader darf nicht haengen bleiben
+            return
+        }
+
+        val warmPlayer = if (bg != null && bg.station.id == station.id && bg.readyForPromotion) {
+            bg.takePlayer()
+        } else {
+            null
+        }
+        bg?.stop() // bereits uebernommener Player/Analyzer ist an dieser Stelle schon entkoppelt (siehe takePlayer()), harmlos
+
+        if (warmPlayer == null) {
+            Log.i(TAG, "📰 $reason - zurueck zu '${station.name}'")
+            play(station)
+            return
+        }
+
+        Log.i(TAG, "📰 $reason - zurueck zu '${station.name}' (Werbeblock im Hintergrund übersprungen)")
+        analyzerRetryJob?.cancel()
+        analyzerRetryJob = null
+        analyzerRetries = 0
+        player?.apply {
+            removeListener(playerListener)
+            release()
+        }
+        player = warmPlayer.apply {
+            volume = 1f
+            addListener(playerListener)
+            playWhenReady = true
+        }
+        startForegroundNotification(station.name)
+        refreshAnalyzer(station)
+        refreshPreload()
+        startNewsBreakTicker()
     }
 
     /**
@@ -738,6 +903,8 @@ class PlaybackService : LifecycleService() {
         newsBreakServedSlot = NewsBreak.activeSlot(NewsBreakSettings.getConfig(this))
         _newsBreakActive.value = false
         _newsBreakFileName.value = null
+        newsBreakMp3DurationMs = null
+        stopAdSkipPrebuffer()
     }
 
     fun stopPlayback() {
@@ -758,6 +925,8 @@ class PlaybackService : LifecycleService() {
         _newsBreakFileName.value = null
         newsBreakRecentFiles.clear()
         newsBreakServedSlot = null
+        newsBreakMp3DurationMs = null
+        stopAdSkipPrebuffer()
         player?.stop()
         analyzer.stop()
         _sttModelMissing.value = null
@@ -785,7 +954,16 @@ class PlaybackService : LifecycleService() {
                 }
                 refreshLockedStationsSnapshot()
             }
-            PlaybackStatus.SPEECH -> attemptAutoSwitch()
+            PlaybackStatus.SPEECH -> {
+                // Waehrend des engen Sprache-Gate-Fensters (siehe
+                // speechGateActive()/checkNewsBreak()) soll sustained speech
+                // NICHT zum Wegschalten fuehren, sondern rawSpeechStreakSeconds
+                // fuer das News-Break-Gate unangetastet weiterlaufen - sonst
+                // wuerde diese normale Skip-Logik den Sender fast immer schon
+                // wegschalten, bevor das Gate je greifen kann (dieselbe Race,
+                // live im Docker-Projekt gefunden, siehe ARCHITECTURE.md).
+                if (!speechGateActive(NewsBreakSettings.getConfig(this))) attemptAutoSwitch()
+            }
             // PlaybackStatus.ERROR loest hier BEWUSST nichts mehr aus (frueher:
             // handlePlaybackFailure()). Ein Fehler der zweiten, unabhaengigen
             // Dekodierung heisst "die Analyse konnte nicht laufen", nicht "der
@@ -847,7 +1025,10 @@ class PlaybackService : LifecycleService() {
                     "🔁 Bekannter Jingle/Werbespot wiedererkannt: '${outcome.label}' " +
                         "(Clip #${outcome.clipId}, ${outcome.timesSeen}x gesehen, Staerke ${outcome.matchStrength})"
                 )
-                if (_calibrationLanguage.value == null) attemptAutoSwitch() // siehe Klassen-Doc, Abschnitt STT-Kalibrierung
+                // siehe Klassen-Doc (STT-Kalibrierung) + speechGateActive()-Kommentar in handleStatusForAutoSwitch()
+                if (_calibrationLanguage.value == null && !speechGateActive(NewsBreakSettings.getConfig(this))) {
+                    attemptAutoSwitch()
+                }
             }
             is FingerprintOutcome.Learned -> Unit
         }
@@ -1107,6 +1288,7 @@ class PlaybackService : LifecycleService() {
         bufferingTimeoutJob?.cancel()
         newsBreakTickerJob?.cancel()
         analyzerRetryJob?.cancel()
+        stopAdSkipPrebuffer()
         analyzer.stop()
         player?.release()
         player = null

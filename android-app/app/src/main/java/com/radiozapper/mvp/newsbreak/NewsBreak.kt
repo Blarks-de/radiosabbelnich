@@ -4,7 +4,28 @@ import java.time.LocalDateTime
 import java.time.temporal.ChronoUnit
 import kotlin.math.abs
 
-data class NewsBreakConfig(val enabled: Boolean, val windowMinutes: Double)
+/**
+ * `requireSpeechInWindow`/`speechGateWindowMinutes`/`speechGateStreakSeconds`
+ * und `adPrebufferEnabled`/`adPrebufferLeadSeconds` sind die Android-Pendants
+ * zu `require_speech_in_window`/`speech_gate_window_minutes`/
+ * `speech_gate_streak` bzw. `ad_prebuffer_enabled`/`ad_prebuffer_lead_seconds`
+ * im Docker-Projekt (siehe dessen `ARCHITECTURE.md`, Abschnitte
+ * "Sprache-Gate für den Pause-Start" und "Werbeblock-Vorbuffering") - Details
+ * zur Verdrahtung in `PlaybackService.kt`. `speechGateStreakSeconds` heißt
+ * bewusst nicht wie im Vorbild nach einer Fenster-ANZAHL, weil Android dafür
+ * `StreamAnalyzer.rawSpeechStreakSeconds` (kontinuierliche Sekunden, siehe
+ * dort) statt eines diskreten 1s-Fenster-Zählers liefert - beide Defaults
+ * (3) meinen inhaltlich dasselbe, nur in robusterer Einheit.
+ */
+data class NewsBreakConfig(
+    val enabled: Boolean,
+    val windowMinutes: Double,
+    val requireSpeechInWindow: Boolean = false,
+    val speechGateWindowMinutes: Double = 2.0,
+    val speechGateStreakSeconds: Double = 3.0,
+    val adPrebufferEnabled: Boolean = false,
+    val adPrebufferLeadSeconds: Double = 20.0,
+)
 
 /**
  * Reine Domänenlogik ("Nachrichten-Pause": zur vollen/halben Stunde statt des

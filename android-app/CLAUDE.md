@@ -185,6 +185,25 @@ Vorwärmung (`refreshPreload()`, genau EIN vorbereiteter Kandidat, kein Pool
 wie `prebuffer_count` im Docker-Projekt). Details und Begründungen stehen in
 `README.md`; hier nur die Stelle, an der sie zusammenlaufen.
 
+Seit 2026-08-21 zwei weitere, optionale Nachrichten-Pause-Erweiterungen
+(Android-Pendants zu den gleichnamigen Docker-Features, siehe dessen
+`ARCHITECTURE.md`): **Sprache-Gate** (`NewsBreakConfig.requireSpeechInWindow`,
+`PlaybackService.speechGateActive()`) verzögert den Pause-Start, bis ein
+engeres Zeitfenster erreicht UND `StreamAnalyzer.rawSpeechStreakSeconds`
+lang genug Sprache zeigt — solange das Gate aktiv ist, unterdrücken
+`handleStatusForAutoSwitch()`/`handleFingerprintOutcome()` bewusst
+`attemptAutoSwitch()` (dieselbe Race wie im Docker-Vorbild, dort live
+gefunden). **Werbeblock-Vorbuffering** (`NewsBreakConfig.adPrebufferEnabled`,
+`playback/AdSkipPrebuffer.kt`) verbindet in den letzten Sekunden einer
+Pause-MP3 einen zweiten, stummen `ExoPlayer` + `StreamAnalyzer` auf den
+pausierten Sender — ist er beim Pause-Ende schon wieder bei Musik,
+übernimmt `resumeFromNewsBreak()` diesen bereits verbundenen Player statt
+kalt neu zu verbinden (dasselbe Warm-Muster wie `preloadedPlayer`, nur für
+den Resume- statt den Ring-Nachfolger-Sender). Anders als Docker (dort
+bewusst NUR VAD) nutzt das hier Vosk/`StreamAnalyzer`, weil Android kein
+VAD hat. Details in `README.md`, Abschnitte "Sprache-Gate für den
+Pause-Start" und "Werbeblock-Vorbuffering".
+
 ### Mehrsprachiges STT: `stt/SttSettings.kt` + `vosk/VoskModelCache.kt`
 
 Zuordnung **Kategorie → Sprache** (nicht Sender → Sprache), identisch zum

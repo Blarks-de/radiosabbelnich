@@ -116,6 +116,15 @@
     <string name="news_break_window_saved">Fensterlänge gespeichert: %1$s Min.</string>
     <string name="news_break_window_invalid">Ungültige Fensterlänge.</string>
     <string name="news_break_now_playing">📰 Nachrichten-Pause: %1$s</string>
+    <string name="news_break_speech_gate_enabled">Sprache vor Start verlangen (Sprache-Gate)</string>
+    <string name="news_break_speech_gate_window_hint">Gate-Fenster (Minuten)</string>
+    <string name="news_break_speech_gate_streak_hint">Nötige Sprache-Serie (Sekunden)</string>
+    <string name="news_break_speech_gate_saved">Sprache-Gate gespeichert: %1$s Min. / %2$s s.</string>
+    <string name="news_break_speech_gate_invalid">Ungültige Sprache-Gate-Werte.</string>
+    <string name="news_break_ad_skip_enabled">Werbeblock-Vorbuffering</string>
+    <string name="news_break_ad_skip_lead_hint">Vorlaufzeit (Sekunden)</string>
+    <string name="news_break_ad_skip_saved">Werbeblock-Vorbuffering gespeichert: %1$s s.</string>
+    <string name="news_break_ad_skip_invalid">Ungültige Vorlaufzeit.</string>
 
     <string name="fp_chip_label">🔎 Fingerprint</string>
     <string name="fp_chip_off">–</string>

@@ -116,6 +116,15 @@
     <string name="news_break_window_saved">Window length saved: %1$s min.</string>
     <string name="news_break_window_invalid">Invalid window length.</string>
     <string name="news_break_now_playing">📰 News break: %1$s</string>
+    <string name="news_break_speech_gate_enabled">Require speech before starting (speech gate)</string>
+    <string name="news_break_speech_gate_window_hint">Gate window (minutes)</string>
+    <string name="news_break_speech_gate_streak_hint">Required speech streak (seconds)</string>
+    <string name="news_break_speech_gate_saved">Speech gate saved: %1$s min. / %2$s s.</string>
+    <string name="news_break_speech_gate_invalid">Invalid speech gate values.</string>
+    <string name="news_break_ad_skip_enabled">Ad-skip prebuffering</string>
+    <string name="news_break_ad_skip_lead_hint">Lead time (seconds)</string>
+    <string name="news_break_ad_skip_saved">Ad-skip prebuffering saved: %1$s s.</string>
+    <string name="news_break_ad_skip_invalid">Invalid lead time.</string>
 
     <string name="fp_chip_label">🔎 Fingerprint</string>
     <string name="fp_chip_off">–</string>
