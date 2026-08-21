@@ -8589,3 +8589,52 @@ der Header-Einfügung weiterhin fehlerfrei; Stichproben der Kotlin- und
 Python-Header per `head` visuell geprüft (Header korrekt vor/nach
 Shebang bzw. `package`-Zeile, kein doppeltes Einfügen bei erneutem
 Lauf dank Idempotenz-Check im Skript).
+
+## 2026-08-21 (Fortsetzung 11) — GitHub-Repo-Umbenennung radiozapper → radiosabbelnich glattgezogen
+
+Nutzer teilte mit, dass das GitHub-Repo von `radiozapper` zu
+`radiosabbelnich` umbenannt wurde
+(`https://github.com/Blarks-de/radiosabbelnich`), und bat um eine
+Bestandsaufnahme aller Fundstellen des alten Namens auf Dockfish/im
+Projekt, **vor** jeder Änderung zur Durchsicht vorgelegt.
+
+**Bestandsaufnahme (vor jeder Änderung gezeigt):**
+- Lokale Remotes (einziger Checkout auf Dockfish, `android-app/` hat
+  kein eigenes `.git`): `github` zeigte noch auf
+  `git@github.com:Blarks-de/radiozapper.git`; `origin` zeigt auf
+  Dockfishs eigenes Forgejo (`dockfish.icefish-ghost.ts.net:222/
+  blarks/radiozapper.git`) — kein GitHub-Ziel, unangetastet zu lassen.
+- Kein Forgejo-Remote, der auf die alte GitHub-URL zeigt (`origin`
+  zeigt gar nicht auf GitHub). Ob Forgejo serverseitig einen Push-
+  Mirror zu GitHub konfiguriert hat, ist über `git remote -v` nicht
+  sichtbar — dafür müsste jemand manuell in die Forgejo-Weboberfläche
+  schauen, nicht in dieser Session geprüft.
+- `docker-compose.yml`/`Dockerfile`/`radiosabbelnich.sh`/
+  `env.example`/`.env`: null Treffer für "radiozapper" (Image-/
+  Container-Namen, Volume-Pfade, Labels bereits durchgängig
+  `radiosabbelnich`) — nichts zu tun, offenbar schon in einem
+  früheren Rename-Durchgang erledigt.
+- `README.md`/`ARCHITECTURE.md`/`CLAUDE.md`/`android-app/README.md`/
+  `android-app/CLAUDE.md`: keine `github.com/Blarks-de/...`-Links
+  gefunden. Bewusst NICHT angefasst: die Namenshistorie-Hinweise in
+  README.md/CHANGELOG.md ("hieß ursprünglich RadioZapper…", historisch
+  gemeint); der alte SESSION.md-Eintrag vom 2026-08-09 (Zeile ~5063),
+  der vermerkt, dass die Landingpage auf blarks.de noch auf
+  `github.com/Blarks-de/radiozapper` verlinkt — append-only, wird
+  laut Konvention nicht rückwirkend korrigiert; die tatsächliche
+  Landingpage-Datei war von diesem Host aus nicht auffindbar (`/srv/
+  www/` existiert hier nicht, `/mnt/eimer/incoming/blarks.de/` ist nur
+  ein unabhängiger privater Downloads-Ordner) — dieser externe Link
+  bleibt als offener Punkt für eine spätere, gezielte Session; `com.
+  radiozapper.mvp` (Android-Package-ID in android-app/README.md) ist
+  eine andere, deutlich größere Baustelle (App-Identität/Play-Store/
+  Update-Kompatibilität) und war nicht Teil der Anfrage.
+- Keine `.github/workflows/`-Verzeichnisse im Projekt (auch nicht
+  anderswo auf dem Host außerhalb dieses Projekts) — keine CI, die vom
+  alten Namen abhängen könnte.
+
+**Umsetzung nach Freigabe**: `git remote set-url github
+git@github.com:Blarks-de/radiosabbelnich.git`, danach per `git
+ls-remote github HEAD` verifiziert — liefert den zuletzt gepushten
+Commit-Hash (`042801b…`), Remote also funktionsfähig. Sonst nichts
+geändert (siehe Bestandsaufnahme oben).
