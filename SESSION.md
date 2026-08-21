@@ -8473,3 +8473,31 @@ Damit ist der zweite Feature-Plan dieser Session (Sprache-Gate für
 News-Break) abgeschlossen: Settings+UI (Phase 1), Verdrahtung inkl.
 Race-Fix (Phase 2), Doku+Deploy (Phase 3). Feature bleibt standardmäßig
 deaktiviert.
+
+## 2026-08-21 (Fortsetzung 8) — Sprache-Gate: erste echte Bewährungsprobe im Produktivbetrieb
+
+Nutzer aktivierte `require_speech_in_window` testweise per API auf dem
+echten Deployment (Defaults: `speech_gate_window_minutes=2.0`,
+`speech_gate_streak=3`; `window_minutes` dort real 6.0, also unkritisch
+größer als das Gate-Fenster) und bat darum, das nächste echte :00/:30
+im Log mitzuverfolgen. Hintergrund-Wartejob (Bash `run_in_background`,
+Poll-Intervall 15s bis kurz nach :30) statt aktivem Pollen im Gespräch.
+
+**Ergebnis, echtes DEBUG-Log (`data/logs/radiosabbelnich.log`), Sender
+'105'5 Spreeradio 80er':**
+- 06:28:44–45 UTC: zwei SPEECH-Fenster hintereinander, danach `music` —
+  Streak korrekt zurückgesetzt (kurzer Wortfetzen, kein Nachrichten-
+  Moment, Fenster verstreicht an dieser Stelle absichtlich ohne Trigger).
+- 06:29:36–39 UTC: drei SPEECH-Fenster hintereinander
+  (`speech_ratio` 0.48/0.45/0.84) → `speech_gate_streak=3` erreicht.
+- 06:29:39,162: `📰 Nachrichten-Pause: spiele '214 - Bryan Adams -
+  I'm Ready.mp3' (zurück zu '105'5 Spreeradio 80er' danach)` — ~160ms
+  nach dem dritten Sprache-Fenster (nächster Tick).
+- **Kein einziges** `🎙 Moderation erkannt` im gesamten Fenster
+  06:26–06:34 UTC — die in Phase 2 gefundene und behobene Race Condition
+  (alte Skip-Logik reset den Streak vor dem Gate) bleibt auch im echten
+  Betrieb, nicht nur im synthetischen Test, wirkungslos unterdrückt.
+
+Erste echte Bestätigung außerhalb der eingefrorenen Testumgebung: das
+Gate wartete auf einen tatsächlichen, mehrsekündigen Sprachmoment statt
+blind zur Uhrzeit zu starten, exakt wie in `ARCHITECTURE.md` beschrieben.

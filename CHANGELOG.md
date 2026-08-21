@@ -17,6 +17,9 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 
 ## 2026-08-21
 
+- Doku: erste echte Bestätigung des Sprache-Gates im Produktivbetrieb
+  (echtes :00/:30-Fenster, kein synthetischer Test) — Details in
+  SESSION.md.
 - Fix: `SpeechDetector` setzt Resample-Rest UND internen VAD-Modellzustand
   jetzt bei jedem echten Streamwechsel zurück (`reset()`, neu) — vorher
   konnte Audio des vorigen Senders/Kandidaten die Klassifikation des
