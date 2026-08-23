@@ -187,6 +187,7 @@ class SwitcherState:
         self._music_stop_requested = False
         self._music_skip_requested = None  # +1/-1 oder None
         self._stt_filter_cfg = dict(settings_store.DEFAULTS["stt_filter"])
+        self._song_recognition_cfg = dict(settings_store.DEFAULTS["song_recognition"])
         self._stt_status = {"engine": None, "available": False, "error": None}
         self._stt_language_status = {}  # lang -> Fehlertext|None, siehe set_stt_language_status()
         self._calibration = None  # {"language", "stage", "speech_samples", "music_samples"} oder None
@@ -225,6 +226,7 @@ class SwitcherState:
             self._language = settings["language"]
             self._news_break_cfg = settings["news_break"]
             self._stt_filter_cfg = settings["stt_filter"]
+            self._song_recognition_cfg = settings["song_recognition"]
             # Nur der Startwert -- danach ist der Hauptloop über set_mode()
             # (NACH dem echten Übergang) die alleinige Quelle für _mode zur
             # Laufzeit. reload() läuft ohnehin nur im radio-Zweig
@@ -277,6 +279,11 @@ class SwitcherState:
     def stt_filter_cfg(self) -> dict:
         with self._lock:
             return dict(self._stt_filter_cfg)
+
+    @property
+    def song_recognition_cfg(self) -> dict:
+        with self._lock:
+            return dict(self._song_recognition_cfg)
 
     @property
     def active_stations(self) -> list:

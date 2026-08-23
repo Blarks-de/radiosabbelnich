@@ -179,6 +179,12 @@ services:
       # dem nur gelesen wird).
       - ./data/music_library.db:/app/music_library.db
       - ./data/music_library_covers:/app/music_library_covers
+      # Song-Erkennung Phase 1 (song_fingerprint.py): eigene SQLite-DB,
+      # komplett getrennt von fingerprints.db (Sprache-Clips/Jingles) UND
+      # music_library.db (ID3-Scan) -- andere Domäne, gleiches "muss vorher
+      # als Datei existieren"-Muster wie oben, einmalig `touch
+      # data/song_fingerprints.db`, siehe README-Setup.
+      - ./data/song_fingerprints.db:/app/song_fingerprints.db
       # Rotierende Logdatei (immer DEBUG, siehe logging_setup.py) — hier
       # gemountet, damit man sie ohne `docker exec` direkt vom Host lesen
       # kann, auch nachdem der Container neugestartet ist.

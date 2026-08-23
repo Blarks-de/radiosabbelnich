@@ -9,7 +9,11 @@ FROM python:3.12-slim
 # curl NUR fürs Herunterladen des aubio-Source-Tarballs unten (bewusst
 # NICHT "pip download" dafür -- das hängt sich in diesem Image an einer
 # isolierten Build-Umgebung auf, siehe SESSION.md).
+# libchromaprint-tools liefert `fpcalc` (Song-Erkennung Phase 1, siehe
+# python/song_fingerprint.py) -- nur die Rohdaten-Extraktion kommt von dort,
+# das eigentliche Matching ist eigener Python-Code (siehe ARCHITECTURE.md).
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libgomp1 build-essential curl \
+    libchromaprint-tools \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir numpy silero-vad-lite vosk faster-whisper psutil mutagen
@@ -56,6 +60,7 @@ WORKDIR /app
 COPY python/radiosabbelnich.py .
 COPY python/stream_source.py .
 COPY python/fingerprint.py .
+COPY python/song_fingerprint.py .
 COPY python/speech_detector.py .
 COPY python/ad_skip_prebuffer.py .
 COPY python/webui.py .

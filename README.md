@@ -16,6 +16,7 @@
   - [Mehrsprachigkeit: Sprache pro Sender-Kategorie](#mehrsprachigkeit-sprache-pro-sender-kategorie)
   - [Kalibrierungs-Wizard](#kalibrierungs-wizard)
   - [Konfiguration im Detail](#konfiguration-im-detail)
+- [Song-Erkennung](#song-erkennung)
 - [Sprache des Web-Interfaces](#sprache-des-web-interfaces)
 - [Web-Interface](#web-interface)
   - [Als App installieren (PWA)](#als-app-installieren-pwa)
@@ -41,6 +42,7 @@
   - [Multi-language: language per station category](#multi-language-language-per-station-category)
   - [Calibration wizard](#calibration-wizard)
   - [Configuration in detail](#configuration-in-detail)
+- [Song recognition](#song-recognition)
 - [Web interface language](#web-interface-language)
 - [Web interface](#web-interface-1)
   - [Installing as an app (PWA)](#installing-as-an-app-pwa)
@@ -522,6 +524,47 @@ Sprache sichtbar), RadioSabbelNich läuft mit den übrigen Sprachen/Sendern
 normal weiter. Ein Absturz der Engine bei einem einzelnen Sample
 überspringt nur diesen einen Sample, nicht den Hauptprozess.
 
+## Song-Erkennung
+
+Phase 1 (aktueller Stand): erkennt laufende Musik per lokalem
+Chromaprint-Fingerprint-Cache — noch OHNE Internet-Abgleich, Titel/Interpret
+bleiben deshalb bis zu einer späteren Cloud-Anbindung leer. Nützt aktuell
+nur, um Songwiederholungen intern zu zählen; kein sichtbares
+Web-Interface-Element in dieser Phase. Default AUS wie jedes neue Feature,
+nur über `settings.json`/die `/api/config`-API aktivierbar (kein Schalter
+auf der Config-Seite).
+
+Läuft nur im Radio-Modus, während gerade Musik erkannt wird: alle
+`interval_seconds` wird ein `snippet_seconds` langes Sample per `fpcalc`
+(Chromaprint, siehe Dockerfile) gefingerprintet und gegen den lokalen Cache
+geprüft — Songwechsel-Erkennung vergleicht zuerst gegen den zuletzt
+gesehenen Song desselben Senders, ein DB-Abgleich läuft nur bei
+tatsächlichem Wechsel.
+
+```json
+"song_recognition": {
+  "enabled": false,
+  "interval_seconds": 45.0,
+  "snippet_seconds": 11.0,
+  "similarity_threshold": 0.65
+}
+```
+
+- **`enabled`** — Feature an/aus.
+- **`interval_seconds`** — wie oft (in Sekunden Musikwiedergabe) ein neues
+  Sample genommen wird.
+- **`snippet_seconds`** — Länge des Samples. Nur beim Prozessstart wirksam
+  (ändert die Größe eines internen Ringpuffers) — eine Änderung über
+  `/config` braucht einen Container-Neustart, anders als die übrigen drei
+  Werte hier.
+- **`similarity_threshold`** — ab welcher Chromaprint-Ähnlichkeit (0.0-1.0)
+  zwei Samples als derselbe Song gelten. Der Default (0.65) ist ein
+  **Platzhalter**, noch nicht gegen echtes Stream-Audio kalibriert (siehe
+  `SESSION.md`) — vor produktivem Verlass darauf empfiehlt sich dieselbe
+  Methode wie beim STT-Schwellwert oben: einige Samples desselben Songs
+  UND verschiedener Songs sammeln, den beobachteten Abstand in den Logs
+  prüfen.
+
 ## Sprache des Web-Interfaces
 
 Player- und Config-Seite gibt es auf Englisch (im Code eingebaute
@@ -756,6 +799,7 @@ Grafische Gesamtübersicht mit Diagrammen pro Subsystem: `ARCHITECTURE.md`.
 | `data/stations.json` | Senderliste (Name, URL, Kategorie, aktiv/inaktiv) |
 | `data/settings.json` | Laufzeit-Einstellungen, siehe `settings_store.py` |
 | `data/fingerprints.db`, `data/fingerprint_clips/` | Fingerprint-Datenbank + gelernte Clip-Mitschnitte |
+| `data/song_fingerprints.db` | Song-Erkennung Phase 1: lokaler Chromaprint-Fingerprint-Cache (siehe `python/song_fingerprint.py`) |
 | `data/logs/` | Rotierende Logdatei (siehe "Logging" unten) |
 | `data/news_mp3/`, `data/vosk-model-de/`, `data/whisper_cache/` | Standard-Mountziele für `NEWS_MP3_FOLDER`/`VOSK_MODEL_FOLDER`/faster-whisper-Cache (überschreibbar in `.env`) |
 | `data/music_library/` | Standard-Mountziel für `MUSIC_LIBRARY_FOLDER` (überschreibbar in `.env`) |
@@ -774,6 +818,7 @@ cd RadioSabbelNich
 cp env.example .env      # Passwörter/Hostname eintragen
 touch data/fingerprints.db    # muss als Datei existieren, siehe unten
 touch data/music_library.db   # dito, für den Musik-Library-Scan (siehe unten)
+touch data/song_fingerprints.db   # dito, für die Song-Erkennung (siehe unten)
 ./radiosabbelnich.sh check   # optional: prüft Docker/.env/MP3-Ordner/Ports vorab
 ./radiosabbelnich.sh start
 ```
@@ -800,11 +845,12 @@ unterschiedlich (siehe `NEWS_MP3_FOLDER` in `env.example`) — ein per Shell
 gleich als Mount-Quelle verwendet. `docker compose config` liefert
 garantiert den Wert, den Docker tatsächlich benutzt.
 
-Das `touch` ist Pflicht, nicht Kosmetik: `fingerprints.db` hängt in
-`docker-compose.yml` als einzelne Datei im Container. Fehlt sie auf dem
-Host, legt Docker an der Stelle ein *Verzeichnis* an — SQLite kann sie
-dann nicht öffnen und der Container landet in einer Neustartschleife.
-(Die DB selbst ist gitignored, ein frischer Clone hat sie also nie.)
+Das `touch` ist Pflicht, nicht Kosmetik: `fingerprints.db` (und ebenso
+`song_fingerprints.db`) hängt in `docker-compose.yml` als einzelne Datei im
+Container. Fehlt sie auf dem Host, legt Docker an der Stelle ein
+*Verzeichnis* an — SQLite kann sie dann nicht öffnen und der Container
+landet in einer Neustartschleife. (Die DBs selbst sind gitignored, ein
+frischer Clone hat sie also nie.)
 
 Danach `stations.json` nach Belieben anpassen — entweder direkt in der
 Datei oder bequemer über `http://<host>:5000/config`.
@@ -1472,6 +1518,43 @@ RadioSabbelNich keeps running normally with the remaining languages/
 stations. A crash of the engine on a single sample only skips that one
 sample, not the main process.
 
+## Song recognition
+
+Phase 1 (current state): recognizes playing music via a local Chromaprint
+fingerprint cache — still WITHOUT an internet lookup, so title/artist stay
+empty until a later cloud integration. Currently only useful for counting
+song repeats internally; no visible web interface element in this phase.
+Off by default like every new feature, only enable it via
+`settings.json`/the `/api/config` API (no toggle on the config page).
+
+Only runs in radio mode while music is currently detected: every
+`interval_seconds`, a `snippet_seconds`-long sample is fingerprinted via
+`fpcalc` (Chromaprint, see the Dockerfile) and checked against the local
+cache — song-change detection first compares against the last song seen on
+the same station, a full cache lookup only runs on an actual change.
+
+```json
+"song_recognition": {
+  "enabled": false,
+  "interval_seconds": 45.0,
+  "snippet_seconds": 11.0,
+  "similarity_threshold": 0.65
+}
+```
+
+- **`enabled`** — feature on/off.
+- **`interval_seconds`** — how often (in seconds of music playback) a new
+  sample is taken.
+- **`snippet_seconds`** — sample length. Only effective at process start
+  (sizes an internal ring buffer) — changing it via `/config` needs a
+  container restart, unlike the other three values here.
+- **`similarity_threshold`** — the Chromaprint similarity (0.0-1.0) above
+  which two samples count as the same song. The default (0.65) is a
+  **placeholder**, not yet calibrated against real stream audio (see
+  `SESSION.md`) — before relying on it in production, the same method as
+  for the STT threshold above is recommended: collect a few samples of the
+  same song AND of different songs, check the observed gap in the logs.
+
 ## Web interface language
 
 The player and config pages are available in English (the base
@@ -1700,6 +1783,7 @@ beyond the debug signing (see above).
 | `data/stations.json` | Station list (name, URL, category, active/inactive) |
 | `data/settings.json` | Runtime settings, see `settings_store.py` |
 | `data/fingerprints.db`, `data/fingerprint_clips/` | Fingerprint database + learned clip recordings |
+| `data/song_fingerprints.db` | Song recognition phase 1: local Chromaprint fingerprint cache (see `python/song_fingerprint.py`) |
 | `data/logs/` | Rotating log file (see "Logging" below) |
 | `data/news_mp3/`, `data/vosk-model-de/`, `data/whisper_cache/` | Default mount targets for `NEWS_MP3_FOLDER`/`VOSK_MODEL_FOLDER`/the faster-whisper cache (overridable in `.env`) |
 | `data/music_library/` | Default mount target for `MUSIC_LIBRARY_FOLDER` (overridable in `.env`) |
@@ -1723,6 +1807,7 @@ cd RadioSabbelNich
 cp env.example .env      # enter passwords/hostname
 touch data/fingerprints.db    # must exist as a file, see below
 touch data/music_library.db   # same, for the music library scan (see below)
+touch data/song_fingerprints.db   # same, for song recognition (see below)
 ./radiosabbelnich.sh check   # optional: pre-checks Docker/.env/MP3 folder/ports
 ./radiosabbelnich.sh start
 ```
@@ -1740,11 +1825,12 @@ diagnostics (exit code 1 on problems), starts nothing itself.
 (RAM/disk/internet, `NEWS_MP3_FOLDER`), then `docker compose up -d
 --build`.
 
-The `touch` is mandatory, not cosmetic: `fingerprints.db` is mounted in
-`docker-compose.yml` as a single file inside the container. If it's
-missing on the host, Docker creates a *directory* there instead —
-SQLite then can't open it and the container ends up in a restart loop.
-(The DB itself is gitignored, so a fresh clone never has it.)
+The `touch` is mandatory, not cosmetic: `fingerprints.db` (and likewise
+`song_fingerprints.db`) is mounted in `docker-compose.yml` as a single file
+inside the container. If it's missing on the host, Docker creates a
+*directory* there instead — SQLite then can't open it and the container
+ends up in a restart loop. (The DBs themselves are gitignored, so a fresh
+clone never has them.)
 
 Afterwards, adjust `stations.json` as you like — either directly in
 the file or more conveniently via `http://<host>:5000/config`.

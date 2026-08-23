@@ -8746,3 +8746,178 @@ gelassen — dort beschreibt das Wort laufendes Verhalten, keine
 danach 0 Treffer; `git diff -- README.md | grep -E "^[+-]#{1,3} "`
 zeigt weiterhin nur die neue TOC-Überschrift als Diff, keine
 bestehende Überschrift verändert.
+
+## 2026-08-23 — Song-Erkennung Phase 1: Snippet-Extraktion + lokaler Chromaprint-Cache
+
+Nutzer bat um die erste von zwei geplanten Phasen der automatischen
+Song-Erkennung (Sender-Metadaten sind unzuverlässig): lokaler
+Chromaprint-Fingerprint-Cache, noch OHNE Cloud-Anbindung (Phase 2, AudD,
+folgt später) — spart Cloud-API-Kosten, weil in Phase 2 nur noch bei
+echtem Cache-Miss ein bezahlter Request nötig wird. Plan vorab vorgelegt
+(Dateien, Config-Defaults, DB-Schema, Dependency-Entscheidung) und vom
+Nutzer freigegeben, bevor irgendetwas implementiert wurde.
+
+**Umsetzung**:
+- Neues Modul `python/song_fingerprint.py`: `compute_fingerprint()` ruft
+  `fpcalc -raw -json` (Chromaprint, neu im Dockerfile via
+  `libchromaprint-tools`) über eine kurzlebige Temp-WAV-Datei auf.
+  `similarity()` vergleicht zwei rohe Chromaprint-Arrays per
+  Sliding-Offset-Suche + Hamming-Distanz (bewusst eigener Code, KEINE
+  zusätzliche pip-Abhängigkeit wie `pyacoustid` — Begründung siehe
+  ARCHITECTURE.md/Moduldocstring). `SongFingerprintDB` (SQLite-Tabelle
+  `song_fingerprints`: fingerprint_hash/title/artist/first_seen/
+  last_seen/play_count/station_id) matcht per Brute-Force gegen alle
+  gecachten Songs. `SongRecognizer` sammelt PCM-Fenster in einem
+  Ringpuffer, solange `label == "music"` ist, und stößt alle
+  `interval_seconds` eine asynchrone Analyse an (Async-Muster 1:1 von
+  `SttFilter.sample_async()` übernommen: Lock + `_busy`-Guard, kein
+  Thread-Stapeln). Cache-Miss ruft nur den Stub `on_unknown_fingerprint()`
+  (loggt, kein Netzwerk-Call).
+- `settings_store.py`: neuer `song_recognition`-Block (enabled=False,
+  interval_seconds=45.0, snippet_seconds=11.0,
+  similarity_threshold=0.65 — Platzhalter, siehe unten), inkl.
+  `update()`-Parametern/Validierung nach demselben Muster wie
+  `stt_filter`. `webui.py`: `SwitcherState.song_recognition_cfg`
+  analog `stt_filter_cfg`.
+- `radiosabbelnich.py`: `--no-song-recognition`/`--song-recognition-db`
+  CLI-Flags, Konstruktion in `main()` analog `fp_db`, Hook im
+  Hauptloop-`else`-Zweig (`label != "speech"`, läuft automatisch nur im
+  Radio-Modus, da der Library-Modus `classify()` komplett überspringt).
+  `song_recognizer.reset()` an ALLEN sechs Stellen ergänzt, an denen auch
+  `detector.reset()` läuft (echter Senderwechsel, Rekonnekt, Musik→Radio)
+  — verhindert denselben Bug-Mechanismus wie beim ursprünglichen
+  "SpeechDetector leftover"-Fund, hier für Ringpuffer + "zuletzt
+  gesehener Song".
+- Dockerfile: `libchromaprint-tools` ergänzt (liefert `fpcalc`),
+  `COPY python/song_fingerprint.py .` ergänzt (Dockerfile kopiert jede
+  Python-Datei einzeln, siehe CLAUDE.md — leicht zu vergessen, siehe
+  "bewusst NICHT"/Fallstricke unten). `docker-compose.yml`: neuer
+  Bind-Mount `song_fingerprints.db` (eigene Datei, eigene Domäne, gleiches
+  "muss vorher existieren"-Muster wie `fingerprints.db`/
+  `music_library.db`). `.gitignore` entsprechend ergänzt.
+- README.md (DE+EN): neue Abschnitte "Song-Erkennung"/"Song recognition"
+  samt TOC-Einträgen, `touch data/song_fingerprints.db` im Setup, neue
+  Datei-Tabellenzeile. ARCHITECTURE.md: neuer Abschnitt "Song-Erkennung
+  (song_fingerprint.py)" samt Mermaid-Diagramm + TOC-Eintrag, "Offene
+  Punkte" ergänzt (kein Pruning, Brute-Force-Matching-Skalierungsgrenze,
+  Platzhalter-Schwelle, Phase-2-Cloud-Anbindung fehlt).
+
+**Ein während der Umsetzung gefundener und behobener Bug**: erste Version
+von `SongFingerprintDB` hielt (wie `FingerprintDB`) eine dauerhafte, im
+Hauptloop-Thread erzeugte sqlite3-Connection. Da `match_or_learn()` hier
+aber -- anders als bei `FingerprintDB` -- IMMER aus dem asynchronen
+Hintergrund-Thread von `SongRecognizer` aufgerufen wird (bewusst
+asynchron, damit ein `fpcalc`-Subprocess-Call den Hauptloop nie
+blockiert), warf das beim ersten echten Testlauf sofort `SQLite objects
+created in a thread can only be used in that same thread`. Behoben, indem
+`SongFingerprintDB` KEINE dauerhafte Connection mehr hält, sondern jede
+Methode (wie schon `delete_fingerprint()`/`clear_all()`) ihre eigene
+kurzlebige Connection öffnet. `radiosabbelnich.py`s `finally`-Block
+ruft entsprechend kein `song_db.close()` mehr auf (nichts mehr offen zu
+halten).
+
+**Verifiziert** (im gebauten Container, Netzwerk `radiosabbelnich_default`,
+gegen einen separaten Icecast-Testmount `test-song-reco.mp3` -- echte
+Senderliste/Settings/Mount unangetastet, siehe CLAUDE.md-Testmuster):
+- `fpcalc -version` im Image: `fpcalc version 1.5.1`.
+- Synthetischer Plausibilitätstest von `similarity()`: identisches Array
+  mit sich selbst 1.0, um 5 Werte verschobenes Duplikat dank
+  Sliding-Offset-Suche ebenfalls 1.0, zwei unabhängige Zufalls-Arrays
+  ~0.53 (nahe am theoretischen Zufalls-Erwartungswert 0.5 für 32-Bit-
+  XOR-Popcount) — Diskriminierungslogik arbeitet korrekt.
+- `SongFingerprintDB.match_or_learn()` isoliert: erster Aufruf mit einem
+  Fingerprint → Miss (neuer Eintrag), zweiter Aufruf mit demselben
+  Fingerprint → Hit, `play_count` 1→2.
+- Live-Lauf gegen echtes Internet-Radio (SomaFM Groove Salad, überwiegend
+  Instrumentalmusik) über ~80s: zwei neue Songs gelernt (Ähnlichkeit zum
+  jeweils besten Kandidaten 0.00 bzw. 0.56, beide unter Schwelle 0.65 —
+  korrekt als neu behandelt), danach ein echter Cache-Treffer auf den
+  ersten gelernten Song mit Ähnlichkeit 0.70 (`play_count` 1→2). Kein
+  Crash, keine Thread-Fehler mehr, Hauptloop lief währenddessen
+  ununterbrochen weiter (VAD-Log zeigt durchgehenden Takt).
+- Danach Test-Container entfernt, echte `data/stations.json`/
+  `data/settings.json`/echter Icecast-Mount blieben unangetastet.
+- Produktions-Container per `docker compose up -d --build
+  radiosabbelnich` neu gebaut/gestartet (Nutzer-Freigabe eingeholt, da
+  das den laufenden Live-Stream kurz unterbricht) — Log zeigt sauberen
+  Start inkl. `🎵 Song-Fingerprint-DB: /app/song_fingerprints.db`,
+  bestehender Betrieb (Sender/STT/VAD) danach unverändert.
+
+**Bewusst NICHT gemacht** (siehe Plan): keine AudD-/Cloud-Anbindung (nur
+der Stub `on_unknown_fingerprint()`), keine Web-Interface-Änderungen
+(kein `/config`-Schalter, keine Anzeige — Titel/Interpret bleiben bis
+Phase 2 ohnehin leer), kein Pruning der neuen DB,
+`similarity_threshold=0.65` ist ein **Platzhalter**, NICHT nach der
+STT-Schwellwert-Methode (SESSION.md 2026-08-06, `confidence_threshold
+0.75`) kalibriert — der Live-Test oben zeigt nur, dass 0.56 vs. 0.70
+plausibel unterhalb/oberhalb einer Schwelle um 0.65 liegen, ersetzt aber
+keine systematische Kalibrierung mit gezielt gesammelten
+Gleicher-Song-/Verschiedene-Song-Paaren aus echtem Stream-Audio — als
+offener Punkt in ARCHITECTURE.md vermerkt.
+
+## 2026-08-23 (Fortsetzung) — Kalibrierungs-Logging für similarity_threshold (Zwischenschritt vor der eigentlichen Kalibrierung)
+
+**Was und warum**: `similarity_threshold=0.65` (siehe Eintrag oben) ist
+weiterhin nur ein Platzhalter. Um ihn wie den STT-`confidence_threshold`
+(0.75, siehe Eintrag 2026-08-06) empirisch statt geraten zu bestimmen,
+fehlten die Rohdaten — bisher landete der tatsächliche Similarity-Wert
+nur gerundet (`%.2f`) in einer DEBUG-Logzeile, nicht strukturiert
+auswertbar. Dieser Schritt ändert AN MATCHING-VERHALTEN/THRESHOLD NICHTS
+— reines Logging, damit nach ein paar Tagen Sammelzeit genug echte Werte
+für eine fundierte Threshold-Wahl vorliegen (das ist ein eigener,
+späterer Prompt — hier nur vorbereitet).
+
+**Umsetzung**: `SongFingerprintDB._init_schema()` legt eine zweite
+Tabelle `song_match_log` in derselben `song_fingerprints.db` an (keine
+neue Datei, kein neuer Bind-Mount nötig). `match_or_learn()` schreibt bei
+JEDEM tatsächlichen Cache-Vergleich (nicht bei der separaten
+Songwechsel-Kurzschluss-Prüfung in `SongRecognizer._run()`, die läuft nie
+gegen den Cache) eine Zeile: vollen Similarity-Float, den zu diesem
+Zeitpunkt geltenden `similarity_threshold` (kann sich während der
+Sammelphase über `/config` ändern — deshalb pro Zeile mitgeloggt, sonst
+später nicht mehr eindeutig interpretierbar), Hit/Miss, bei Miss
+zusätzlich den besten aber abgelehnten Kandidaten als Kontext, bei Hit
+den neuen `play_count`. Nutzt dieselbe kurzlebige sqlite3-Connection, die
+`match_or_learn()` ohnehin pro Aufruf öffnet (siehe deren Docstring/
+ARCHITECTURE.md) — kein zusätzlicher Hot-Path-Overhead, keine neue
+Connection/kein neuer Thread.
+
+**Wo die Daten landen / wie auslesen**: `data/song_fingerprints.db`,
+Tabelle `song_match_log`, direkt vom Host lesbar (bestehender Bind-Mount,
+kein Container-Zugriff nötig):
+
+```bash
+sqlite3 data/song_fingerprints.db "SELECT * FROM song_match_log;"
+# oder als CSV für pandas/Tabellenkalkulation:
+sqlite3 -header -csv data/song_fingerprints.db \
+    "SELECT * FROM song_match_log;" > song_match_log.csv
+```
+
+**Nächster Schritt (noch NICHT umgesetzt, eigener späterer Prompt)**:
+nach ein paar Tagen Sammelzeit die Similarity-Verteilung für Hit- vs.
+Miss-Zeilen auswerten (Histogramm/Perzentile) und daraus einen
+fundierten `similarity_threshold` ableiten — bis dahin bleibt der
+Platzhalter-Wert **0.65 unverändert**.
+
+**Verifiziert** (gleiches Testmuster wie im Eintrag oben: isolierter
+Container-Testlauf gegen SomaFM Groove Salad über einen separaten
+Icecast-Testmount, echte Senderliste/Settings/Mount unangetastet): über
+~75s liefen 4 `match_or_learn()`-Aufrufe, alle korrekt in
+`song_match_log` protokolliert — 3 Misses (Ähnlichkeit 0.0/
+0.534722222222222/0.590625, jeweils voller Float, nicht gerundet) und 1
+Hit (0.734375, `is_hit=1`, `matched_song_id=2`, `play_count=2` —
+identisch zur parallelen DEBUG-Logzeile "Treffer: Song #2 ...  bereits 2x
+gehört"). `threshold=0.65` korrekt in jeder Zeile. Bei den Misses zeigt
+`matched_song_id` wie vorgesehen den besten aber abgelehnten Kandidaten
+(Kontext). `song_fingerprints` danach: 3 gelernte Songs, Song #2 mit
+`play_count=2`. Tabelle per `sqlite3 data/song_fingerprints.db "SELECT *
+FROM song_match_log;"` direkt vom Host lesbar, kein Container-Zugriff
+nötig. Hauptloop-VAD-Log (`MainThread`) lief währenddessen unverändert im
+Sekundentakt weiter — kein zusätzliches Blocking durch das neue Logging.
+
+**Bewusst NICHT gemacht**: keine Änderung an `similarity_threshold`
+selbst, kein Pruning von `song_match_log` (wächst wie
+`song_fingerprints`/`fingerprints.db` unbegrenzt — hier unkritisch, weil
+nur für eine begrenzte Sammelphase gedacht), keine Logging-Erfassung der
+Songwechsel-Kurzschluss-Vergleiche (siehe oben), keine README-Änderung
+(kein neuer Config-Wert/Setup-Schritt, rein internes Debug-Logging).

@@ -62,6 +62,7 @@ import music_library
 import music_scan
 import news_break
 import settings_store
+import song_fingerprint
 import stt_filter
 import webui
 from ad_skip_prebuffer import AdSkipPrebuffer
@@ -152,6 +153,11 @@ BASS_RATIO_MUSIC_VETO = 0.22
 # kleiner als CONSECUTIVE_SPEECH_TO_SWITCH sein, sonst hat's keinen Vorteil.
 FINGERPRINT_TRIGGER_SECONDS = 2
 FINGERPRINT_DB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fingerprints.db")
+
+# Song-Erkennung Phase 1 (siehe ARCHITECTURE.md, Abschnitt "Song-Erkennung",
+# und song_fingerprint.py) -- eigene DB-Datei, komplett getrennt von
+# FINGERPRINT_DB_FILE oben (andere Domäne: Songs statt Sprache-Clips/Jingles).
+SONG_FINGERPRINT_DB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "song_fingerprints.db")
 
 # Jeder Fingerprint-Check (Treffer oder neu gelernter Clip) wird zusätzlich
 # als WAV mitgeschnitten -> falls ein Treffer einen unerwünschten Switch
@@ -554,6 +560,12 @@ def main():
                          help="Jingle/Ad-Wiedererkennung per Audio-Fingerprinting deaktivieren")
     parser.add_argument("--fingerprint-db", default=FINGERPRINT_DB_FILE,
                          help=f"Pfad zur Fingerprint-SQLite-DB (default: {FINGERPRINT_DB_FILE})")
+    parser.add_argument("--no-song-recognition", action="store_true",
+                         help="Song-Erkennung (Chromaprint-Fingerprint-Cache) deaktivieren, "
+                              "unabhängig vom song_recognition.enabled-Schalter in settings.json")
+    parser.add_argument("--song-recognition-db", default=SONG_FINGERPRINT_DB_FILE,
+                         help=f"Pfad zur Song-Fingerprint-SQLite-DB "
+                              f"(default: {SONG_FINGERPRINT_DB_FILE})")
     parser.add_argument("--webui-port", type=int, default=0,
                          help="Port für das Web-Interface (0 = deaktiviert)")
     parser.add_argument("--icecast-admin-url", default=None,
@@ -673,6 +685,16 @@ def main():
     # sampelt daraus alle sample_interval_seconds -- siehe Hauptloop unten.
     stt_ring = collections.deque(maxlen=max(1, round(stt_filter.CLIP_SECONDS / WINDOW_SECONDS)))
     last_stt_sample_at = 0.0
+
+    song_db = None
+    song_recognizer = None
+    if not args.no_song_recognition:
+        song_db = song_fingerprint.SongFingerprintDB(args.song_recognition_db)
+        song_recognizer = song_fingerprint.SongRecognizer(
+            song_db, SAMPLE_RATE, WINDOW_SECONDS,
+            state.song_recognition_cfg["snippet_seconds"],
+        )
+        log.info("🎵 Song-Fingerprint-DB: %s", args.song_recognition_db)
 
     httpd = None
     if args.webui_port:
@@ -828,6 +850,8 @@ def main():
         # dass VAD-Zustand/Resample-Rest des vorigen Senders die erste
         # Klassifikation des neuen verfälscht (siehe deren Docstring).
         detector.reset()
+        if song_recognizer:
+            song_recognizer.reset()  # gleicher Grund, siehe song_fingerprint.SongRecognizer.reset()
         pb = prebuffer.pop(station["id"], None)
         if pb is not None:
             windows, adopted_source = pb.promote()
@@ -968,6 +992,8 @@ def main():
                 source.stop()
                 source = promoted_source
                 detector.reset()  # neue Quelle im Hauptloop -- siehe SpeechDetector.reset()
+                if song_recognizer:
+                    song_recognizer.reset()
                 reset_playout()
                 stream_failures = 0
                 silence_streak = 0
@@ -1197,6 +1223,8 @@ def main():
                     # Senders (oder eines zuvor abgelehnten Kandidaten) in
                     # dieses Urteil hineinlaufen (siehe SpeechDetector.reset()).
                     detector.reset()
+                    if song_recognizer:
+                        song_recognizer.reset()
                     if classify(tail, candidate_stt_lang) == "music":
                         current = candidate
                         source.stop()
@@ -1220,6 +1248,8 @@ def main():
             # gleicher Grund (verhindert Kontamination durch den vorigen
             # Kandidaten/Sender VOR dem gleich folgenden classify()).
             detector.reset()
+            if song_recognizer:
+                song_recognizer.reset()
             state.set_current(current["id"])
             stream_failures = 0
             silence_streak = 0
@@ -1302,6 +1332,8 @@ def main():
                         reset_playout()
                         source.start(current["url"])
                         detector.reset()  # neue Quelle, siehe switch_to_station()
+                        if song_recognizer:
+                            song_recognizer.reset()
                         quick_forward()
                         state.set_current(current["id"])
                         last_switch_time = time.time()
@@ -1643,6 +1675,8 @@ def main():
                     # Lücke -- derselbe Grund wie bei einem echten Senderwechsel,
                     # siehe SpeechDetector.reset().
                     detector.reset()
+                    if song_recognizer:
+                        song_recognizer.reset()
                     time.sleep(1)
                     continue
 
@@ -1806,6 +1840,19 @@ def main():
                 speech_buffer = []
                 fp_checked_this_run = False
 
+                # Song-Erkennung Phase 1 (siehe ARCHITECTURE.md): läuft nur
+                # bei label == "music" (dieser else-Zweig) UND nur im
+                # Radio-Modus (dieser Codepfad wird im Library-Modus wegen
+                # des classify()-Skips oben nie erreicht, siehe song_
+                # fingerprint.py-Moduldocstring).
+                song_cfg = state.song_recognition_cfg
+                if song_recognizer and song_cfg["enabled"]:
+                    song_recognizer.feed(pcm)
+                    song_recognizer.maybe_recognize_async(
+                        now, current["id"],
+                        song_cfg["interval_seconds"], song_cfg["similarity_threshold"],
+                    )
+
             # "and not speech_gate_active": gleicher Grund wie beim
             # Fingerprint-Check oben -- während des engen Sprache-Gate-
             # Fensters darf die bestehende Skip-Logik speech_streak nicht
@@ -1833,6 +1880,8 @@ def main():
         output.close()
         if fp_db:
             fp_db.close()
+        # song_db hat KEINE dauerhafte Connection (siehe SongFingerprintDB-
+        # Docstring) -- nichts zu schließen.
         stt.close()
         if httpd:
             httpd.shutdown()

@@ -118,6 +118,19 @@ DEFAULTS = {
         # verhält sich dadurch exakt wie vor diesem Feature (alles Deutsch).
         "category_languages": {},
     },
+    # Song-Erkennung Phase 1 (siehe ARCHITECTURE.md, Abschnitt
+    # "Song-Erkennung", und python/song_fingerprint.py): lokaler
+    # Chromaprint-Fingerprint-Cache, noch OHNE Cloud-Lookup (Phase 2).
+    # Default AUS wie jedes neue Feature.
+    "song_recognition": {
+        "enabled": False,
+        "interval_seconds": 45.0,
+        "snippet_seconds": 11.0,  # < AudDs 12s-Limit, bewusster Vorgriff auf Phase 2
+        # Platzhalter, NICHT empirisch kalibriert (siehe SESSION.md-Muster
+        # bei stt_filter.confidence_threshold 0.75) -- vor produktivem
+        # Einsatz gegen echtes Stream-Audio nachjustieren.
+        "similarity_threshold": 0.65,
+    },
 }
 
 # Fallback-Sprache für Kategorien ohne explizite Zuordnung in
@@ -135,6 +148,9 @@ LIMITS = {
     "news_break_speech_gate_streak": (1, 20),
     "stt_sample_interval_seconds": (2.0, 60.0),
     "stt_confidence_threshold": (0.0, 1.0),
+    "song_recognition_interval_seconds": (5.0, 300.0),
+    "song_recognition_snippet_seconds": (3.0, 30.0),
+    "song_recognition_similarity_threshold": (0.0, 1.0),
 }
 
 STT_ENGINES = {"vosk", "whisper"}
@@ -159,7 +175,8 @@ def _defaults_copy() -> dict:
     Handkopie-Levels."""
     return {**DEFAULTS, "news_break": dict(DEFAULTS["news_break"]),
             "music_library": dict(DEFAULTS["music_library"]),
-            "stt_filter": copy.deepcopy(DEFAULTS["stt_filter"])}
+            "stt_filter": copy.deepcopy(DEFAULTS["stt_filter"]),
+            "song_recognition": dict(DEFAULTS["song_recognition"])}
 
 
 def _migrate_stt_filter(v: dict) -> dict:
@@ -227,6 +244,13 @@ def _read_raw() -> dict:
             merged["stt_filter"].update(
                 {kk: vv for kk, vv in _migrate_stt_filter(v).items() if kk in DEFAULTS["stt_filter"]}
             )
+        elif k == "song_recognition" and isinstance(v, dict):
+            # Gleiches Muster wie "news_break"/"music_library" oben: ein
+            # settings.json von vor diesem Feature funktioniert dadurch
+            # unverändert weiter.
+            merged["song_recognition"].update(
+                {kk: vv for kk, vv in v.items() if kk in DEFAULTS["song_recognition"]}
+            )
         else:
             merged[k] = v
     return merged
@@ -255,7 +279,11 @@ def update(prebuffer_seconds=None, prebuffer_count=None, import_url=None,
            stt_filter_enabled=None, stt_filter_engine=None,
            stt_filter_whisper_model_size=None,
            stt_filter_sample_interval_seconds=None,
-           stt_filter_combine_mode=None) -> dict:
+           stt_filter_combine_mode=None,
+           song_recognition_enabled=None,
+           song_recognition_interval_seconds=None,
+           song_recognition_snippet_seconds=None,
+           song_recognition_similarity_threshold=None) -> dict:
     """Aktualisiert nur die übergebenen Felder (None = unverändert lassen),
     validiert. Wirft ValueError bei ungültigen Werten.
 
@@ -425,6 +453,37 @@ def update(prebuffer_seconds=None, prebuffer_count=None, import_url=None,
             if stt_filter_combine_mode not in STT_COMBINE_MODES:
                 raise ValueError(f"stt_filter_combine_mode muss eine von {sorted(STT_COMBINE_MODES)} sein.")
             stt["combine_mode"] = stt_filter_combine_mode
+
+        sr = data["song_recognition"]
+        if song_recognition_enabled is not None:
+            sr["enabled"] = bool(song_recognition_enabled)
+        if song_recognition_interval_seconds is not None:
+            lo, hi = LIMITS["song_recognition_interval_seconds"]
+            try:
+                song_recognition_interval_seconds = float(song_recognition_interval_seconds)
+            except (TypeError, ValueError):
+                raise ValueError("song_recognition_interval_seconds muss eine Zahl sein.")
+            if not (lo <= song_recognition_interval_seconds <= hi):
+                raise ValueError(f"song_recognition_interval_seconds muss zwischen {lo} und {hi} liegen.")
+            sr["interval_seconds"] = song_recognition_interval_seconds
+        if song_recognition_snippet_seconds is not None:
+            lo, hi = LIMITS["song_recognition_snippet_seconds"]
+            try:
+                song_recognition_snippet_seconds = float(song_recognition_snippet_seconds)
+            except (TypeError, ValueError):
+                raise ValueError("song_recognition_snippet_seconds muss eine Zahl sein.")
+            if not (lo <= song_recognition_snippet_seconds <= hi):
+                raise ValueError(f"song_recognition_snippet_seconds muss zwischen {lo} und {hi} liegen.")
+            sr["snippet_seconds"] = song_recognition_snippet_seconds
+        if song_recognition_similarity_threshold is not None:
+            lo, hi = LIMITS["song_recognition_similarity_threshold"]
+            try:
+                song_recognition_similarity_threshold = float(song_recognition_similarity_threshold)
+            except (TypeError, ValueError):
+                raise ValueError("song_recognition_similarity_threshold muss eine Zahl sein.")
+            if not (lo <= song_recognition_similarity_threshold <= hi):
+                raise ValueError(f"song_recognition_similarity_threshold muss zwischen {lo} und {hi} liegen.")
+            sr["similarity_threshold"] = song_recognition_similarity_threshold
 
         _write(data)
         log.info("⚙ Einstellungen gespeichert: %s", data)

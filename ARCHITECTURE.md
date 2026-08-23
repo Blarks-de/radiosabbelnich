@@ -8,6 +8,7 @@
 - [Watchdog gegen tote Sender](#watchdog-gegen-tote-sender)
 - [Sprache-Erkennung (VAD, speech_detector.py)](#sprache-erkennung-vad-speech_detectorpy)
 - [Fingerprinting](#fingerprinting)
+- [Song-Erkennung (song_fingerprint.py)](#song-erkennung-song_fingerprintpy)
 - [Logging](#logging)
 - [Sender-Import](#sender-import)
 - [Nachrichten-Pause (news_break.py)](#nachrichten-pause-news_breakpy)
@@ -290,6 +291,106 @@ Hauptloop; `delete_clip()`/`clear_all()` öffnen aus dem Webserver-Thread
 bewusst eigene kurzlebige Connections, weil sqlite3-Connections nicht
 thread-übergreifend sicher sind — dasselbe Muster wie bei
 `music_query.py`/`music_scan.py` (siehe Musik-Library-Baukasten unten).
+
+## Song-Erkennung (song_fingerprint.py)
+
+Phase 1 (Stand dieses Abschnitts): erkennt WIEDERHOLTE Musikstücke per
+lokalem Chromaprint-Fingerprint-Cache, noch OHNE Cloud-Anbindung (Phase 2,
+AudD, noch nicht implementiert — `on_unknown_fingerprint()` ist bislang nur
+ein loggender Stub). Komplett getrennt von `fingerprint.py`/
+`fingerprints.db` oben: andere Domäne (Musikstücke statt wiederkehrende
+Sprache-Clips/Jingles), eigene DB-Datei (`song_fingerprints.db`), eigenes
+Matching-Verfahren.
+
+```mermaid
+flowchart LR
+    PCM["PCM-Fenster<br/>(label == music)"] -->|feed| Ring["Ringpuffer<br/>(snippet_seconds tief)"]
+    Ring -->|"alle interval_seconds, voll + nicht busy"| FP["fpcalc -raw<br/>(Chromaprint)"]
+    FP --> Cmp{"Ähnlich zum letzten<br/>Song DIESES Senders?"}
+    Cmp -->|ja| Skip["nichts weiter tun"]
+    Cmp -->|nein| DB["SongFingerprintDB.match_or_learn()<br/>Sliding-Offset-Vergleich gegen alle Songs"]
+    DB -->|Treffer| Hit["play_count++, last_seen/station_id aktualisieren"]
+    DB -->|kein Treffer| Miss["neuer Eintrag + on_unknown_fingerprint() (Stub)"]
+```
+
+Warum Chromaprint statt desselben Constellation-Map-Eigenbaus wie
+`fingerprint.py`: Sprache-Clips/Jingles werden dort immer vom Anfang an neu
+mitgeschnitten (Trigger ist ein frischer Sprache-Lauf), zwei Aufnahmen
+desselben Songs im Radio starten dagegen fast nie an derselben Stelle im
+Song. Chromaprint ist genau für robuste Ausschnitts-Fingerprints gebaut,
+ein eigenes Constellation-Map-Verfahren dafür neu zu entwickeln wäre eine
+deutlich größere Baustelle als das vorhandene Kompilat (`fpcalc`, Debian-
+Paket `libchromaprint-tools`) zu nutzen.
+
+`fpcalc -raw -json` liefert nur das rohe Chromaprint-Integer-Array, KEINEN
+fertigen Ähnlichkeits-Score. Das eigentliche Matching (`similarity()` in
+`song_fingerprint.py`) ist bewusst eigener, simpler Python-Code (nur
+`subprocess` + stdlib Bit-Operationen) statt einer zusätzlichen
+pip-Abhängigkeit wie `pyacoustid` — aus demselben Grund wie bei
+`fingerprint.py`: in Python+SQLite komplett selbst verständlich und
+wartbar. Weil zwei Aufnahmen desselben Songs an unterschiedlichen Stellen
+im Song anfangen können, vergleicht `similarity()` nicht Index-für-Index,
+sondern probiert mehrere Zeitverschiebungen zwischen den beiden Arrays
+durch (Sliding-Offset-Suche, begrenzt auf `MAX_OFFSET`) und nimmt die beste
+Hamming-Ähnlichkeit — das dokumentierte Funktionsprinzip hinter
+Chromaprint-basiertem Matching.
+
+Anders als `FingerprintDB` (deren Connection dem Hauptloop-Thread gehört,
+weil `match_or_learn()` dort SYNCHRON läuft) öffnet `SongFingerprintDB`
+für JEDEN Aufruf eine eigene kurzlebige Connection statt eine dauerhafte zu
+halten: `match_or_learn()` läuft hier IMMER im Hintergrund-Thread von
+`SongRecognizer` (siehe unten), eine vom Hauptloop-Thread erzeugte
+Connection dürfte sqlite3 zufolge nicht aus einem anderen Thread benutzt
+werden ("SQLite objects created in a thread can only be used in that same
+thread" — live beim Testen aufgetreten, kein theoretisches Risiko).
+
+`SongRecognizer` sammelt PCM-Fenster nur, solange `label == "music"` ist
+(Aufrufer im Hauptloop entscheidet das), und stößt die eigentliche
+Chromaprint-Berechnung asynchron an — Async-Muster 1:1 von
+`SttFilter.sample_async()` übernommen (Lock + `_busy`-Guard, kein
+Thread-Stapeln, falls `fpcalc` mal länger braucht als `interval_seconds`).
+`interval_seconds`/`similarity_threshold` werden bei jedem Aufruf frisch
+aus `settings.json` gelesen (wirken ohne Neustart, wie
+`stt_filter.confidence_threshold`); `snippet_seconds` legt dagegen nur beim
+Prozessstart die Tiefe des Ringpuffers fest — eine Änderung braucht wie bei
+`tls_enabled` einen Container-Neustart.
+
+**Reset an jedem echten Streamwechsel ist Pflicht, nicht optional**: an
+JEDER Stelle im Hauptloop, an der auch `detector.reset()` läuft (echter
+Senderwechsel, Rekonnekt nach Stream-Ausfall, Musik→Radio-Übergang — sechs
+Stellen, siehe `SpeechDetector.reset()`-Docstring), läuft auch
+`song_recognizer.reset()`. Ohne das würde der Ringpuffer Audio zweier
+verschiedener Sender vermischen (ein Datenmüll-Fingerprint aus zwei
+Songs), UND die Songwechsel-Erkennung würde den neuen Sender fälschlich
+gegen den zuletzt gehörten Song des ALTEN Senders vergleichen — derselbe
+Bug-Mechanismus wie beim ursprünglich gefixten "SpeechDetector
+leftover"-Problem, hier auf ein zweites, unabhängiges Stück Zustand
+angewendet. `stt_ring` (STT-Sampling) macht das bewusst NICHT: ein
+einzelnes STT-Sample ist nicht positionssensitiv, ein kurzer Sendermix an
+der Nahtstelle verzerrt dort kein Songwechsel-Urteil. Läuft automatisch nur
+im Radio-Modus: `current_mode == "music"` überspringt `classify()` im
+Hauptloop komplett (siehe "Radio-/Musik-Modus" unten), der Hook-Punkt
+(`else`-Zweig bei `label != "speech"`) wird im Library-Modus dadurch nie
+erreicht, kein Extra-Gate nötig.
+
+**Kalibrierungs-Logging (`song_match_log`, seit 2026-08-23):**
+`similarity_threshold` (Default 0.65) ist wie oben erwähnt ein
+ungeprüfter Platzhalter. `match_or_learn()` protokolliert deshalb JEDEN
+tatsächlichen Cache-Vergleich zusätzlich in einer zweiten Tabelle
+`song_match_log` in derselben `song_fingerprints.db` (voller
+Similarity-Float, der zu dem Zeitpunkt geltende Threshold, Hit/Miss,
+bei Miss zusätzlich der beste — aber abgelehnte — Kandidat als Kontext)
+— rein additiv, ändert nichts an Matching-Verhalten oder Rückgabewert.
+Keine eigene Datei/kein eigener Bind-Mount nötig: dieselbe kurzlebige
+Connection, die `match_or_learn()` ohnehin schon pro Aufruf öffnet
+(siehe `SongFingerprintDB`-Docstring), erledigt den zusätzlichen Insert
+mit. Bewusst NICHT geloggt: die Songwechsel-Kurzschluss-Vergleiche in
+`SongRecognizer._run()` (gegen den zuletzt gesehenen Fingerprint
+DERSELBEN Station) — die laufen nie gegen den Cache, sind also kein
+"Matching-Versuch" im Sinne dieser Tabelle. Wächst wie
+`song_fingerprints`/`fingerprints.db` ohne Pruning (siehe "Offene
+Punkte") — hier unkritisch, weil nur für eine begrenzte
+Sammelphase gedacht.
 
 ## Logging
 
@@ -919,7 +1020,14 @@ hat vollen Zugriff.
 - `sync_prebuffer()`/`pb.stop()` können den Hauptloop blockieren (bis
   ~9 s pro Quelle, siehe Prebuffering oben).
 - Das Web-Interface zeigt keinen Stream-Health-Status.
-- Die Fingerprint-DB wächst ohne Pruning.
+- Die Fingerprint-DB wächst ohne Pruning. Gleiches gilt für die neue
+  `song_fingerprints.db` (Song-Erkennung Phase 1) — zusätzlich läuft deren
+  Matching per Brute-Force gegen ALLE gecachten Songs, was nur bis zu
+  einigen hundert/tausend Einträgen praktikabel bleibt (kein Index/keine
+  Kandidaten-Vorauswahl). `similarity_threshold` (Default 0.65) ist ein
+  Platzhalter, noch nicht gegen echtes Stream-Audio kalibriert (siehe
+  README/SESSION.md). Cloud-Anbindung bei Cache-Miss (Phase 2, AudD) fehlt
+  noch komplett — `on_unknown_fingerprint()` ist nur ein loggender Stub.
 - Die Config-Seite skaliert nicht auf mehrere hundert Sender (keine
   Suche, kein Bulk-Delete).
 - STT-Sprachfilter: `confidence_threshold=0.75` ist an einem kleinen

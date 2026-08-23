@@ -15,6 +15,18 @@ umbenannt. Ältere Commit-Nachrichten/Dateinamen (z.B. `radio_switch`,
 wider — hier einheitlich mit dem aktuellen Namen beschrieben, sofern
 nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 
+## 2026-08-23
+
+- Song-Erkennung: Kalibrierungs-Logging für `similarity_threshold`
+  (neue Tabelle `song_match_log` in `song_fingerprints.db`, protokolliert
+  jeden Cache-Vergleich mit vollem Similarity-Wert) — Vorbereitung für
+  eine spätere empirische Threshold-Bestimmung, ändert kein Verhalten.
+- Song-Erkennung Phase 1: lokaler Chromaprint-Fingerprint-Cache
+  (`python/song_fingerprint.py`, `fpcalc` im Docker-Image) erkennt
+  Songwiederholungen im laufenden Musik-Betrieb, noch ohne Cloud-Lookup
+  (Stub `on_unknown_fingerprint()`). Default deaktiviert
+  (`song_recognition.enabled`).
+
 ## 2026-08-21
 
 - Doku: Feature-Beschreibungen in README.md von historischen
