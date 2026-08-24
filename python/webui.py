@@ -43,6 +43,7 @@ import settings_store
 import station_import
 import stations_store
 import stt_filter
+import update_check
 
 log = logging.getLogger("webui")
 
@@ -1394,6 +1395,10 @@ _PAGE_HTML = """<!doctype html>
    aria-label="Sender verwalten" data-i18n-aria-label="idx_config_link">⚙</a>
 <img class="banner" src="/radiosabbelnich.webp" alt="RadioSabbelNich">
 <div class="version-tag">%%VERSION%%</div>
+<div id="update-banner" style="display:none; background:#2a5a8a; color:#fff; padding:.5rem 1rem; margin:.5rem auto; max-width:32rem; border-radius:6px; font-size:.85rem; text-align:center;">
+  <span id="update-banner-text"></span>
+  <a id="update-banner-link" href="#" target="_blank" rel="noopener" style="color:#cfe0f5; text-decoration:underline; margin-left:.4rem;" data-i18n="update_banner_changelog_link">Was ist neu?</a>
+</div>
 <div class="mode-toggle">
   <button id="mode-radio-btn" data-i18n="mode_radio_btn">📻 Radio</button>
   <button id="mode-music-btn" data-i18n="mode_music_btn">🎵 Player</button>
@@ -2037,6 +2042,16 @@ document.getElementById('mode-music-btn').addEventListener('click', () => setMod
 
 refresh();
 longPollLoop();
+// Einmaliger Abruf reicht -- update_check ändert sich höchstens 1x/Tag
+// (siehe update_check.py), kein Polling nötig wie beim übrigen Status.
+(async () => {
+  const d = await fetch('/api/update_check').then(r => r.json()).catch(() => null);
+  if (!d || !d.update_available) return;
+  document.getElementById('update-banner-text').textContent =
+    t('update_banner_text', {version: d.last_known_remote_version || ''});
+  document.getElementById('update-banner-link').href = d.changelog_url;
+  document.getElementById('update-banner').style.display = 'block';
+})();
 // Sicherheitsnetz zusätzlich zum Long-Poll oben: Bullshitometer/Hörerzahlen
 // ändern sich auch ohne Versionssprung (kein request/pop-Ereignis), und
 // falls der Long-Poll je hängen bleibt (Proxy/Browser-Eigenheiten), holt
@@ -2168,6 +2183,10 @@ _MUSIC_PAGE_HTML = """<!doctype html>
 </head>
 <body>
 <div class="version-tag">%%VERSION%%</div>
+<div id="update-banner" style="display:none; background:#2a5a8a; color:#fff; padding:.5rem 1rem; margin:.5rem auto; max-width:32rem; border-radius:6px; font-size:.85rem; text-align:center;">
+  <span id="update-banner-text"></span>
+  <a id="update-banner-link" href="#" target="_blank" rel="noopener" style="color:#cfe0f5; text-decoration:underline; margin-left:.4rem;" data-i18n="update_banner_changelog_link">Was ist neu?</a>
+</div>
 <div class="mode-toggle">
   <button id="mode-radio-btn" data-i18n="mode_radio_btn">📻 Radio</button>
   <button id="mode-music-btn" data-i18n="mode_music_btn">🎵 Player</button>
@@ -2520,6 +2539,14 @@ document.querySelectorAll('.music-query-btn').forEach((btn) => {
 
 refresh();
 longPollLoop();
+(async () => {
+  const d = await fetch('/api/update_check').then(r => r.json()).catch(() => null);
+  if (!d || !d.update_available) return;
+  document.getElementById('update-banner-text').textContent =
+    t('update_banner_text', {version: d.last_known_remote_version || ''});
+  document.getElementById('update-banner-link').href = d.changelog_url;
+  document.getElementById('update-banner').style.display = 'block';
+})();
 setInterval(refresh, 1000);
 setInterval(vuTick, 100);
 </script>
@@ -2736,6 +2763,10 @@ _CONFIG_PAGE_HTML = """<!doctype html>
 <body>
 <img class="banner" src="/radiosabbelnich.webp" alt="RadioSabbelNich">
 <div class="version-tag">%%VERSION%%</div>
+<div id="update-banner" style="display:none; background:#2a5a8a; color:#fff; padding:.5rem 1rem; margin:.5rem auto; max-width:32rem; border-radius:6px; font-size:.85rem; text-align:center;">
+  <span id="update-banner-text"></span>
+  <a id="update-banner-link" href="#" target="_blank" rel="noopener" style="color:#cfe0f5; text-decoration:underline; margin-left:.4rem;" data-i18n="update_banner_changelog_link">Was ist neu?</a>
+</div>
 <a class="back" href="/" data-i18n="cfg_back_link">← zurück zum Player</a>
 <h1 data-i18n="cfg_heading">⚙ Sender verwalten</h1>
 
@@ -2869,6 +2900,22 @@ _CONFIG_PAGE_HTML = """<!doctype html>
     keinen eigenen Schalter.</p>
   <label class="checkbox">
     <input type="checkbox" id="tls-enabled"> <span data-i18n="cfg_tls_checkbox_label">HTTPS fürs Web-Interface aktiv</span>
+  </label>
+  <button type="submit" data-i18n="common_save">Speichern</button>
+</form>
+
+<h2 data-i18n="cfg_update_check_heading">🔄 Automatische Update-Prüfung</h2>
+<form id="update-check-form">
+  <p class="hint" data-i18n-html="cfg_update_check_hint">Prüft alle 24h per reinem Lesezugriff
+    gegen GitHub, ob der <code>main</code>-Branch weiter ist als diese
+    Installation. Es gibt für die Docker-Installation aktuell KEIN
+    Image-Registry-Deployment — die einzige Update-Möglichkeit ist
+    <code>git pull</code> im Repo-Verzeichnis, danach
+    <code>docker compose up -d --build radiosabbelnich</code>. Kein
+    Auto-Update, keine automatische Installation — bei Verfügbarkeit
+    erscheint nur ein Hinweis oben auf dieser Seite und der Player-Seite.</p>
+  <label class="checkbox">
+    <input type="checkbox" id="update-check-enabled"> <span data-i18n="cfg_update_check_checkbox">Automatisch nach Updates suchen</span>
   </label>
   <button type="submit" data-i18n="common_save">Speichern</button>
 </form>
@@ -3406,6 +3453,8 @@ async function loadSettings() {
     document.getElementById('import-url').value = settings.import_url;
     document.getElementById('stream-url-input').value = settings.stream_url || '';
     document.getElementById('tls-enabled').checked = !!settings.tls_enabled;
+    document.getElementById('update-check-enabled').checked =
+      !!(settings.update_check && settings.update_check.enabled);
     document.getElementById('language-select').value = settings.language || LANG;
 
     const hostPaths = settings._host_paths || {};
@@ -3513,6 +3562,21 @@ document.getElementById('tls-form').addEventListener('submit', async (ev) => {
       body: JSON.stringify({tls_enabled}),
     });
     showMsg(t('cfg_tls_saved'), false);
+  } catch (e) {
+    showMsg(t('common_error', {msg: e.message}), true);
+  }
+});
+
+document.getElementById('update-check-form').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const update_check_enabled = document.getElementById('update-check-enabled').checked;
+  try {
+    await api('/api/config/settings', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({update_check_enabled}),
+    });
+    showMsg(t('cfg_update_check_saved'), false);
   } catch (e) {
     showMsg(t('common_error', {msg: e.message}), true);
   }
@@ -3917,6 +3981,17 @@ setInterval(pollCalibration, 2000);
     pollImportStatus();
   }
 })();
+
+// Einmaliger Abruf reicht -- update_check ändert sich höchstens 1x/Tag
+// (siehe update_check.py), kein Polling nötig.
+(async () => {
+  const d = await api('/api/update_check').catch(() => null);
+  if (!d || !d.update_available) return;
+  document.getElementById('update-banner-text').textContent =
+    t('update_banner_text', {version: d.last_known_remote_version || ''});
+  document.getElementById('update-banner-link').href = d.changelog_url;
+  document.getElementById('update-banner').style.display = 'block';
+})();
 </script>
 </body>
 </html>
@@ -4136,6 +4211,18 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                 self._send_json(_build_calibration_status(state))
             elif self.path == "/api/resources":
                 self._send_json(res_mon.snapshot())
+            elif self.path == "/api/update_check":
+                # Bewusst ein eigener, schlanker Endpoint statt Teil von
+                # /api/config/settings: läuft auch auf der Player-Seite
+                # (die sonst nie das komplette Settings-Objekt lädt) für
+                # die kleine Update-Banner-Anzeige. Liest nur den
+                # gecachten State aus settings.json -- KEIN Live-
+                # Netzwerk-Request hier, der eigentliche GitHub-Check
+                # läuft ausschließlich im Hintergrund-Thread (siehe
+                # update_check.UpdateChecker), ein Seitenaufruf wartet
+                # also nie auf GitHub.
+                data = settings_store.load()["update_check"]
+                self._send_json({**data, "changelog_url": update_check.CHANGELOG_URL})
             elif self.path.startswith("/api/browse-folder"):
                 self._handle_browse_folder()
             else:
@@ -4250,6 +4337,7 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                     stt_filter_whisper_model_size=payload.get("stt_filter_whisper_model_size"),
                     stt_filter_sample_interval_seconds=payload.get("stt_filter_sample_interval_seconds"),
                     stt_filter_combine_mode=payload.get("stt_filter_combine_mode"),
+                    update_check_enabled=payload.get("update_check_enabled"),
                 )
                 state.request_reload()
                 self._send_json({"ok": True, "settings": settings})
@@ -4678,6 +4766,17 @@ def start_server(port: int, state: SwitcherState, icecast_cfg: dict,
                                  make_handler(state, icecast_cfg, fingerprint_db_path,
                                               host_paths, log_file_path,
                                               music_library_db_path, music_library_covers_dir))
+    # Nur hier gestartet, nicht in make_handler() -- start_server() läuft
+    # laut radiosabbelnich.py main() ohnehin nur bei webui_port != 0 (siehe
+    # "if args.webui_port:"), ein isolierter Testlauf mit --webui-port 0
+    # (siehe CLAUDE.md-Testmuster) bekommt dadurch automatisch auch KEINEN
+    # Update-Check-Hintergrund-Thread -- kein ungewollter echter
+    # Internet-Request bei einem lokalen Testlauf.
+    update_check.UpdateChecker(
+        get_settings=lambda: settings_store.load()["update_check"],
+        get_local_version=lambda: _VERSION_STRING,
+        on_result=settings_store.record_update_check_result,
+    ).start()
     scheme = "http"
     if tls_cert_file and tls_key_file:
         try:

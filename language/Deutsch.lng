@@ -140,6 +140,12 @@ cfg_stream_url_label=Stream-URL
 cfg_tls_heading=🔒 HTTPS
 cfg_tls_hint=Verschlüsselt den Zugriff aufs Web-Interface (Player-Seite und diese Config-Seite) per TLS. Braucht ein Zertifikat unter <code>TLS_CERT_FILE</code>/<code>TLS_KEY_FILE</code> in <code>.env</code> (Host-Pfade zu PEM-Dateien, z.B. per <code>tailscale cert</code> erzeugt) — ohne die bleibt der Haken hier wirkungslos, das Web-Interface läuft dann weiter über HTTP. <strong>Wirkt erst nach einem Neustart des Containers</strong> (<code>docker compose up -d --build radiosabbelnich</code>), nicht sofort wie die meisten anderen Einstellungen hier. Der Icecast-Stream selbst bekommt unabhängig davon automatisch einen zusätzlichen HTTPS-Port, sobald dieselben Zertifikate in <code>.env</code> eingetragen sind — dafür gibt es keinen eigenen Schalter.
 cfg_tls_checkbox_label=HTTPS fürs Web-Interface aktiv
+# --- 🔄 Automatische Update-Prüfung ---
+cfg_update_check_heading=🔄 Automatische Update-Prüfung
+cfg_update_check_hint=Prüft alle 24h per reinem Lesezugriff gegen GitHub, ob der <code>main</code>-Branch weiter ist als diese Installation. Es gibt für die Docker-Installation aktuell KEIN Image-Registry-Deployment — die einzige Update-Möglichkeit ist <code>git pull</code> im Repo-Verzeichnis, danach <code>docker compose up -d --build radiosabbelnich</code>. Kein Auto-Update, keine automatische Installation — bei Verfügbarkeit erscheint nur ein Hinweis oben auf dieser Seite und der Player-Seite.
+cfg_update_check_checkbox=Automatisch nach Updates suchen
+update_banner_text=🔄 Update verfügbar ({version}) — im Repo-Verzeichnis git pull ausführen, danach neu bauen.
+update_banner_changelog_link=Was ist neu?
 # --- ⏱ Puffer-Einstellungen ---
 cfg_buffer_heading=⏱ Puffer-Einstellungen
 cfg_buffer_hint=Die nächsten Sender in Rotationsreihenfolge laufen im Hintergrund mit und halten Audio vor, damit Wechsel flüssig ablaufen. Mehr Sekunden/Sender = flüssiger, aber mehr Bandbreite/CPU.
@@ -240,6 +246,7 @@ cfg_stt_status_model_not_loadable=Modell nicht ladbar
 cfg_buffer_saved=Puffer-Einstellungen gespeichert.
 cfg_stream_saved=Streaming-Adresse gespeichert.
 cfg_tls_saved=HTTPS-Einstellung gespeichert — wirkt erst nach Neustart des Containers.
+cfg_update_check_saved=Update-Prüfung-Einstellung gespeichert.
 cfg_news_break_saved=Nachrichten-Pause gespeichert.
 cfg_stt_saved=STT-Sprachfilter gespeichert.
 cfg_import_progress_error=Fehler beim Abfragen des Fortschritts: {msg}

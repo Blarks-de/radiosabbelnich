@@ -18,6 +18,7 @@
 - [Musik-Library-Baukasten](#musik-library-baukasten)
 - [STT-Sprachfilter (stt_filter.py)](#stt-sprachfilter-stt_filterpy)
 - [Mehrsprachiges Web-Interface (i18n.py)](#mehrsprachiges-web-interface-i18npy)
+- [Automatische Update-Prüfung (update_check.py)](#automatische-update-prüfung-update_checkpy)
 - [Docker: Host- vs. Container-Layout](#docker-host--vs-container-layout)
 - [TLS/HTTPS (optional, `TLS_CERT_FILE`/`TLS_KEY_FILE` in `.env`)](#tlshttps-optional-tls_cert_filetls_key_file-in-env)
 - [Sicherheitsmodell](#sicherheitsmodell)
@@ -924,6 +925,81 @@ Sprachwechsel ohne Reload nur die bereits injizierten `I18N`-Strings der
 aktuell offenen Seite treffen würde. `DEFAULT_LANGUAGE` (aus
 `UI_LANGUAGE` in `.env`) wirkt nur bei einer Neuinstallation ohne
 bestehende `settings.json`.
+
+## Automatische Update-Prüfung (update_check.py)
+
+Die Docker-Installation läuft ausschließlich per `git clone`/`git pull` —
+es gibt kein Image-Registry-Deployment. `update_check.UpdateChecker` ist
+ein reiner Lese-Hintergrund-Thread, der alle 24h prüft, ob die `VERSION`-
+Datei im `main`-Branch (per `raw.githubusercontent.com`, unversioniert)
+weiter ist als die im Container gebackene lokale Version — kein Aufruf
+löst je ein `git pull`/`docker pull` selbst aus, das bleibt vollständig
+manuell (siehe README, "Automatische Update-Prüfung").
+
+**Wiederverwendung der bestehenden `VERSION`-Datei statt einer neuen
+`version.json`**: `VERSION` (Repo-Root) wird laut `CLAUDE.md`
+("Versionspflege") ohnehin bei JEDEM Commit gepflegt (SemVer-Präfix
+`vMAJOR.MINOR.PATCH`) — sie ist damit schon die Quelle der Wahrheit für
+"ist `main` weiter als mein Checkout". Eine zweite, separat gepflegte
+Versionsdatei hätte nur das Risiko geschaffen, dass beide auseinander-
+laufen. Der "was ist neu"-Link im Update-Banner zeigt deshalb fest auf
+den GitHub-`CHANGELOG.md`-Blob (`update_check.CHANGELOG_URL`) statt aus
+einer Remote-JSON gelesen zu werden.
+
+**State-Persistenz über einen neuen `update_check`-Block in
+`settings.json`** statt einer eigenen Datei: `settings_store.py` folgt
+für `last_checked_at`/`last_known_remote_version`/`update_available`
+demselben `DEFAULTS`-Unterblock-Muster wie `news_break`/`stt_filter`/
+`song_recognition` (siehe "Song-Erkennung" oben — die dortige Regel zu
+neuen Default-Keys, die nie automatisch in eine bestehende
+`settings.json` nachgetragen werden, gilt hier identisch). Vorteil
+gegenüber einer eigenen Datei: kein neues Bind-Mount in
+`docker-compose.yml`, kein neuer `touch`-Schritt beim Setup — `settings.
+json` ist ohnehin schon gemountet. `record_update_check_result()` ist
+dabei bewusst eine EIGENE Funktion neben `update()`: sie kommt aus dem
+Hintergrund-Thread, nicht aus einem validierten Nutzer-Request, und
+schreibt nur die drei State-Felder, nie `enabled` (das bleibt
+ausschließlich über die Config-Seite steuerbar).
+
+```mermaid
+flowchart LR
+    Thread["UpdateChecker._run()<br/>Daemon-Thread, Poll alle 5 Min."] -->|"enabled + fällig?"| Check["check_now()"]
+    Check -->|GET| GitHub["raw.githubusercontent.com/…/main/VERSION"]
+    GitHub -->|Erfolg| Cmp{"Remote-SemVer ><br/>lokale SemVer?"}
+    GitHub -->|Fehler: kein Internet/<br/>404/Timeout/Parse| Silent["log.debug, kein State-Update,<br/>nächster Versuch regulär in 24h"]
+    Cmp -->|ja| Persist["settings_store.<br/>record_update_check_result()"]
+    Cmp -->|nein| Persist
+    Persist --> API["GET /api/update_check<br/>(liest NUR den Cache)"]
+    API --> Banner["Update-Banner<br/>Player- + Config-Seite"]
+```
+
+**Kein Live-Check im Request-Handler**: `GET /api/update_check` liest
+ausschließlich den zuletzt persistierten `update_check`-Block aus
+`settings.json`, macht selbst NIE einen Netzwerk-Request — ein
+Seitenaufruf des Web-Interfaces darf nie auf GitHub warten (Latenz,
+Ausfälle), das ist strikt Aufgabe des Hintergrund-Threads. Aus demselben
+Grund läuft der Thread nur innerhalb von `start_server()` (also nur bei
+`webui_port != 0`, siehe `radiosabbelnich.py main()`,
+`if args.webui_port:`) — ein isolierter Testlauf mit `--webui-port 0`
+(siehe CLAUDE.md-Testmuster) bekommt dadurch automatisch KEINEN
+Hintergrund-Thread und macht keinen ungewollten echten Internet-Request.
+
+**Poll-Intervall des Threads (5 Min.) ≠ Check-Intervall (24h)**: der
+Thread wacht alle 5 Minuten auf und prüft nur, ob `enabled` UND
+`last_checked_at` fällig sind, statt einmal pro Start in einen einzelnen
+24h-`sleep()` zu gehen — ein Deaktivieren über die Config-Seite wirkt
+dadurch binnen Minuten statt erst nach bis zu 24h nach. `last_checked_at`
+wird beim Thread-Start aus der persistierten `settings.json` gelesen
+(nicht bei jedem Container-Neustart auf `None` zurückgesetzt), damit
+häufige `docker compose up -d --build`-Zyklen während der Entwicklung
+nicht bei jedem Neustart einen frischen GitHub-Request auslösen.
+
+**Default AN, bewusste Ausnahme von der sonstigen "Default AUS"-
+Konvention** (siehe README für den Nutzer-seitigen Hinweis): anders als
+STT/Fingerprinting/Song-Erkennung kostet dieses Feature keine laufende
+CPU/RAM, nur alle 24h einen einzelnen HTTP-GET — reiner Lesezugriff ohne
+jeden Eingriff in den Radiobetrieb, das Risiko/Nutzen-Verhältnis ist
+grundsätzlich anders als bei aktiv Erkennung betreibenden Features.
 
 ## Docker: Host- vs. Container-Layout
 

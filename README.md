@@ -27,9 +27,12 @@
   - [HTTPS/TLS (optional)](#httpstls-optional)
 - [Deploy-Befehle](#deploy-befehle)
   - [Logging](#logging)
+- [Automatische Update-Prüfung](#automatische-update-prüfung)
 - [Bekannte Einschränkungen](#bekannte-einschränkungen)
 - [Zukünftige Features](#zukünftige-features)
   - [Eigene Musik-Library & Kategorisierung (geplant)](#eigene-musik-library--kategorisierung-geplant)
+  - [Automatische Song-Erkennung: Cloud-Erweiterung (geplant)](#automatische-song-erkennung-cloud-erweiterung-geplant)
+  - [Deutschsprachige Musik ausblenden (geplant)](#deutschsprachige-musik-ausblenden-geplant)
   - [iOS-App (Idee, noch nicht terminiert)](#ios-app-idee-noch-nicht-terminiert)
 - [Lizenz](#lizenz)
 - [⚠️ Private use only, behind a VPN — no public deployment](#️-private-use-only-behind-a-vpn--no-public-deployment)
@@ -53,9 +56,12 @@
   - [HTTPS/TLS (optional)](#httpstls-optional-1)
 - [Deploy commands](#deploy-commands)
   - [Logging](#logging-1)
+- [Automatic update check](#automatic-update-check)
 - [Known limitations](#known-limitations)
 - [Future features](#future-features)
   - [Own music library & categorization (planned)](#own-music-library--categorization-planned)
+  - [Automatic song recognition: cloud extension (planned)](#automatic-song-recognition-cloud-extension-planned)
+  - [Hiding German-language music (planned)](#hiding-german-language-music-planned)
   - [iOS app (idea, not yet scheduled)](#ios-app-idea-not-yet-scheduled)
 - [License](#license)
 
@@ -801,6 +807,7 @@ Grafische Gesamtübersicht mit Diagrammen pro Subsystem: `ARCHITECTURE.md`.
 | `python/i18n.py` | Basissprache Englisch fürs Web-Interface + Lader für `language/*.lng`-Sprachpakete (siehe "Sprache des Web-Interfaces") |
 | `language/*.lng` | Externe Sprachpakete (z.B. `Deutsch.lng`), Key=Value-Format |
 | `python/resource_monitor.py` | Ressourcen-Verbrauch (RAM/CPU/DB-Größe) fürs "💾 Ressourcen-Verbrauch" auf der Config-Seite |
+| `python/update_check.py` | Automatische Update-Prüfung: Hintergrund-Thread, prüft alle 24h `VERSION` gegen GitHub main (siehe "Automatische Update-Prüfung") |
 | `web/qrcode.js` | Vendorte QR-Code-Bibliothek (MIT, kazuhikoarase/qrcode-generator) fürs "📱 QR-Code"-Popup |
 | `web/manifest.json` | PWA-Manifest (Name, Icons, `display: standalone`) fürs "Zum Startbildschirm hinzufügen" |
 | `web/sw.js` | Service Worker: cached die statische Oberflächen-Hülle fürs Offline-Öffnen, kein Audio/API-Caching |
@@ -954,6 +961,55 @@ hinterher lesen können, ohne den Container vorher zufällig im richtigen
 Modus gestartet zu haben. `--verbose` schiebt die DEBUG-Zeilen zusätzlich
 auf die Konsole, `--log-file ""` schaltet die Datei ab.
 
+## Automatische Update-Prüfung
+
+Die Docker-Installation läuft ausschließlich per `git clone`/`git pull` vom
+GitHub-Repo — es gibt (Stand jetzt) **kein Image-Registry-Deployment**,
+also kein `docker pull`/`docker compose pull`. Damit ein veralteter
+Checkout nicht unbemerkt bleibt, prüft RadioSabbelNich alle 24h per reinem
+Lesezugriff gegen `raw.githubusercontent.com`, ob die `VERSION`-Datei im
+`main`-Branch weiter ist als die im Container gebackene lokale Version
+(dieselbe `VERSION`-Datei, die auch unter dem Banner-Bild angezeigt wird,
+siehe "Web-Interface" unten — keine zweite Versionsdatei). Bei
+Verfügbarkeit erscheint ein kleiner Hinweis-Banner auf der Player- UND der
+Config-Seite mit einem Link auf den GitHub-CHANGELOG.
+
+**Kein Auto-Update, keine automatische Installation** — der Banner
+verweist nur auf den manuellen Schritt: `git pull` im Repo-Verzeichnis,
+danach `docker compose up -d --build radiosabbelnich`.
+
+Konfiguriert wird das über den `update_check`-Block in `settings.json`,
+einstellbar über die Formular-Sektion "🔄 Automatische Update-Prüfung" auf
+der Config-Seite (`/config`, direkt unterhalb von "🔒 HTTPS"):
+
+```json
+"update_check": {
+  "enabled": true,
+  "last_checked_at": null,
+  "last_known_remote_version": null,
+  "update_available": false
+}
+```
+
+- **`enabled`** — Feature an/aus. **Abweichend von der sonstigen
+  Konvention** ("Default AUS wie jedes neue Feature", siehe z.B.
+  Song-Erkennung oben) startet dieses Feature **standardmäßig AN**: es
+  kostet, anders als STT/Fingerprinting/Song-Erkennung, keine laufende
+  CPU/RAM, nur alle 24h einen einzelnen HTTP-GET gegen GitHub — reiner
+  Lesezugriff ohne jeden Eingriff in den Radiobetrieb. Über die
+  Config-Seite jederzeit abschaltbar.
+- **`last_checked_at`**/**`last_known_remote_version`**/
+  **`update_available`** — vom Hintergrund-Check geschriebener Zustand,
+  nicht von Hand editieren; übersteht einen Container-Neustart.
+
+Fehlertoleranz: kein Internet, GitHub down, Rate-Limit oder ein
+unerwartetes `VERSION`-Format führen zu einem einzelnen leisen
+Log-Eintrag (`log.debug`), nicht zu einem Fehler — der nächste Versuch
+kommt regulär beim nächsten fälligen 24h-Check, kein Retry-Spam. Der
+eigentliche GitHub-Check läuft ausschließlich in einem Hintergrund-Thread;
+ein Seitenaufruf des Web-Interfaces wartet nie auf GitHub, er liest nur
+den zuletzt gecachten Zustand.
+
 ## Bekannte Einschränkungen
 
 - Kein Auth auf dem Web-Interface/Config-Seite — siehe Warnung oben,
@@ -1065,6 +1121,38 @@ scannen, taggen und nach Kategorien abspielbar machen.
 Tech-Stack: Python, mutagen, SQLite, ggf. FastAPI für Query-API.
 Referenz: Beets (Library-Manager) als Inspiration für
 Datenmodell/Query-Sprache, kein 1:1-Einsatz.
+
+### Automatische Song-Erkennung: Cloud-Erweiterung (geplant)
+
+Phase 1 (lokaler Chromaprint-Fingerprint-Cache, erkennt Songwiederholungen
+ohne Online-Dienst) ist bereits umgesetzt, siehe eigener Abschnitt
+[Song-Erkennung](#song-erkennung) weiter oben. Geplant als Phase 2:
+
+- **Vorbefüllung aus der eigenen Musiksammlung**: die `song_fingerprints`-
+  Referenz-DB wird aus den beim Musik-Scan (`music_scan.py`) bereits
+  ausgelesenen ID3-Tags (Titel/Interpret) vorbefüllt — kein zweiter
+  Scan-Mechanismus, keine Online-Anbindung nötig, um Songs der eigenen
+  Sammlung im Radio wiederzuerkennen.
+- **AudD als optionaler Online-Fallback**: nur für Songs, die weder im
+  lokalen Cache noch in der eigenen Musiksammlung-Referenz auftauchen.
+  Bewusst optional, kein Zwang zu einem externen API-Key.
+
+### Deutschsprachige Musik ausblenden (geplant)
+
+Eigenständig vom bestehenden [STT-Sprachfilter](#stt-sprachfilter): der
+filtert Moderation/Werbung (gesprochene Sprache), nicht gesungene Sprache
+innerhalb eines Songs — dieses Feature ist ausschließlich für Letzteres
+gedacht.
+
+- Jeder Eintrag in `song_fingerprints` (siehe oben) bekommt ein
+  `is_german_language`-Flag, initial über eine kuratierte
+  Interpreten-Namensliste befüllt.
+- **Manuelles Anlernen per UI**: ein "Deutsch!"-Button unter dem
+  bestehenden "⚡ ZAPPEN!"-Button auf der Player-Seite (siehe
+  [Web-Interface](#web-interface)) markiert den gerade laufenden Song
+  nachträglich.
+- Optionaler Filter-/Skip-Modus, der so markierte Songs im Radio-Betrieb
+  überspringt.
 
 ### iOS-App (Idee, noch nicht terminiert)
 
@@ -1796,6 +1884,7 @@ beyond the debug signing (see above).
 | `python/i18n.py` | English base language for the web interface + loader for `language/*.lng` language packs (see "Web interface language") |
 | `language/*.lng` | External language packs (e.g. `Deutsch.lng`), Key=Value format |
 | `python/resource_monitor.py` | Resource usage (RAM/CPU/DB size) for the "💾 Resource usage" section on the config page |
+| `python/update_check.py` | Automatic update check: background thread, checks `VERSION` against GitHub main every 24h (see "Automatic update check") |
 | `web/qrcode.js` | Vendored QR code library (MIT, kazuhikoarase/qrcode-generator) for the "📱 QR code" popup |
 | `web/manifest.json` | PWA manifest (name, icons, `display: standalone`) for "Add to home screen" |
 | `web/sw.js` | Service worker: caches the static UI shell for offline opening, no audio/API caching |
@@ -1948,6 +2037,53 @@ accidentally start the container in the right mode beforehand.
 `--verbose` additionally pushes the DEBUG lines to the console,
 `--log-file ""` turns the file off.
 
+## Automatic update check
+
+The Docker installation runs exclusively via `git clone`/`git pull` from
+the GitHub repo — there is (as of now) **no image registry deployment**,
+so no `docker pull`/`docker compose pull`. To keep an outdated checkout
+from going unnoticed, RadioSabbelNich checks every 24h via pure read
+access against `raw.githubusercontent.com` whether the `VERSION` file on
+the `main` branch is ahead of the local version baked into the container
+(the same `VERSION` file shown under the banner image, see "Web
+interface" below — no second version file). If available, a small hint
+banner appears on both the player page AND the config page, with a link
+to the GitHub changelog.
+
+**No auto-update, no automatic installation** — the banner only points to
+the manual step: `git pull` in the repository directory, then
+`docker compose up -d --build radiosabbelnich`.
+
+Configured via the `update_check` block in `settings.json`, adjustable
+via the "🔄 Automatic update check" form section on the config page
+(`/config`, right below "🔒 HTTPS"):
+
+```json
+"update_check": {
+  "enabled": true,
+  "last_checked_at": null,
+  "last_known_remote_version": null,
+  "update_available": false
+}
+```
+
+- **`enabled`** — feature on/off. **Deviating from the usual convention**
+  ("off by default like every new feature", see e.g. song recognition
+  above), this feature starts **on by default**: unlike STT/fingerprinting/
+  song recognition, it costs no ongoing CPU/RAM, only a single HTTP GET
+  against GitHub every 24h — pure read access with zero impact on radio
+  playback. Can be switched off any time via the config page.
+- **`last_checked_at`**/**`last_known_remote_version`**/
+  **`update_available`** — state written by the background check, do not
+  edit by hand; survives a container restart.
+
+Fault tolerance: no internet, GitHub down, rate limits, or an unexpected
+`VERSION` format lead to a single quiet log entry (`log.debug`), not an
+error — the next attempt happens at the regular next-due 24h check, no
+retry spam. The actual GitHub check runs exclusively in a background
+thread; loading the web interface never waits on GitHub, it only reads
+the last cached state.
+
 ## Known limitations
 
 - No auth on the web interface/config page — see the warning above,
@@ -2056,6 +2192,38 @@ tag it, and make it playable by category.
 Tech stack: Python, mutagen, SQLite, possibly FastAPI for the query API.
 Reference: Beets (library manager) as inspiration for the data
 model/query language, not a 1:1 adoption.
+
+### Automatic song recognition: cloud extension (planned)
+
+Phase 1 (local Chromaprint fingerprint cache, detects song repeats without
+an online service) is already implemented, see the
+[Song recognition](#song-recognition) section further above. Planned as
+phase 2:
+
+- **Pre-population from the user's own music library**: the
+  `song_fingerprints` reference DB gets pre-populated from the ID3 tags
+  (title/artist) already read during the music scan (`music_scan.py`) —
+  no second scan mechanism, no online connection needed to recognize songs
+  from the user's own collection on the radio.
+- **AudD as an optional online fallback**: only for songs that show up
+  neither in the local cache nor in the user's own music library
+  reference. Deliberately optional, no requirement for an external API
+  key.
+
+### Hiding German-language music (planned)
+
+Independent from the existing [STT speech filter](#stt-speech-filter):
+that one filters moderation/ads (spoken speech), not sung lyrics within a
+song — this feature is exclusively for the latter.
+
+- Every entry in `song_fingerprints` (see above) gets an
+  `is_german_language` flag, initially populated via a curated list of
+  artist names.
+- **Manual tagging via the UI**: a "German!" button below the existing
+  "⚡ ZAP!" button on the player page (see [Web interface](#web-interface-1))
+  retroactively marks the currently playing song.
+- Optional filter/skip mode that skips songs marked this way during radio
+  playback.
 
 ### iOS app (idea, not yet scheduled)
 

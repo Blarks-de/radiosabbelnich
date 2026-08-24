@@ -15,8 +15,39 @@ umbenannt. Ältere Commit-Nachrichten/Dateinamen (z.B. `radio_switch`,
 wider — hier einheitlich mit dem aktuellen Namen beschrieben, sofern
 nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 
+## Aktueller Stand
+
+**Zuletzt umgesetzt** (siehe Datumsabschnitte unten für Details):
+- Automatische Update-Prüfung für die Docker-Installation
+  (`update_check.py`, git-pull-Hinweis im Web-Interface, Default AN)
+- Song-Erkennung Phase 1 (lokaler Chromaprint-Cache) + Kalibrierungs-
+  Logging/-Skript (`check_song_calibration.py`)
+- Werbeblock-Vorbuffering + Sprache-Gate für die Nachrichten-Pause
+- GPLv3-Lizenzierung, Inhaltsverzeichnisse für README.md/ARCHITECTURE.md
+
+**Aktuell offen/geplant** (Details: README.md, "Zukünftige Features"):
+- Song-Erkennung Phase 2: Cloud-Abgleich (AudD) für unbekannte Songs,
+  Vorbefüllung aus der eigenen Musik-Library
+- Deutschsprachige Musik ausblenden (Skip-Filter + manuelles Anlernen
+  per "Deutsch!"-Button)
+- Musik-Library: Enrichment (Cover/Lyrics), Energy-Erkennung/Browse-UI
+- iOS-App (Idee, kein Zeitplan)
+
 ## 2026-08-24
 
+- Neu (Default AN, Ausnahme von "Default AUS"): automatische
+  Update-Prüfung für die Docker-Installation (`update_check.py`) — prüft
+  alle 24h per Lesezugriff gegen die `VERSION`-Datei im GitHub-
+  `main`-Branch, zeigt bei Rückstand einen Hinweis-Banner auf Player-
+  UND Config-Seite mit Anleitung zum manuellen `git pull` (kein
+  Image-Registry-Deployment, kein Auto-Update). Neuer `update_check`-
+  Block in `settings.json`, neue Config-Sektion "🔄 Automatische
+  Update-Prüfung".
+- README.md: neue Roadmap-Unterabschnitte "Automatische Song-Erkennung:
+  Cloud-Erweiterung (geplant)" und "Deutschsprachige Musik ausblenden
+  (geplant)" unter "Zukünftige Features".
+- CHANGELOG.md: neuer Abschnitt "Aktueller Stand" ganz oben (kompakte
+  Zusammenfassung zuletzt umgesetzter + offener Punkte).
 - ARCHITECTURE.md: dokumentiert, dass ein neuer `settings_store`-
   Default-Key (wie `song_recognition`) nie automatisch in eine
   bestehende `settings.json` nachgetragen wird — betrifft künftig jeden

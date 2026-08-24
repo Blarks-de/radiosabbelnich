@@ -9039,3 +9039,143 @@ zur Bedienung eines Features benutzen" (das ist README-Aufgabe, schon
 im vorigen Eintrag erledigt), gleiches Muster wie bei anderen
 Analyse-/Wrapper-Skripten (`radiosabbelnich.sh` steht auch nur in der
 README-Datei-Tabelle, nicht in ARCHITECTURE.md).
+
+## 2026-08-24 (Fortsetzung) — Phase 1+2 von "Roadmap-Doku + Update-Prüfung": README-Roadmap, CHANGELOG-Statusübersicht
+
+**Was und warum**: Nutzer wollte vorab einen vollständigen Plan für drei
+Punkte (README-Roadmap um zwei geplante Features erweitern, CHANGELOG.md
+um eine Statusübersicht ganz oben ergänzen, automatische Update-Prüfung
+für die Docker-Installation) — Plan erstellt, per Rückfragen zwei
+Design-Entscheidungen für Phase 3 geklärt (Versionsquelle: bestehende
+`VERSION`-Datei statt neuer `version.json`; State-Speicherort: neuer
+Block in `settings.json` statt neuer Datei/neuem Bind-Mount), Plan
+freigegeben. Dieser Eintrag deckt die ersten beiden — reinen Doku- —
+Phasen ab, Phase 3 (Code) folgt in einem eigenen Eintrag.
+
+**Phase 1 (README.md)**: zwei neue Unterabschnitte unter "Zukünftige
+Features" (DE+EN synchron, jeweils vor "iOS-App"): "Automatische
+Song-Erkennung: Cloud-Erweiterung (geplant)" (Vorbefüllung der
+`song_fingerprints`-Referenz-DB aus den ID3-Tags der eigenen
+Musiksammlung, AudD als optionaler Online-Fallback) und
+"Deutschsprachige Musik ausblenden (geplant)" (`is_german_language`-Flag,
+kuratierte Interpreten-Liste, manuelles Anlernen per neuem "Deutsch!"-
+Button unter "⚡ ZAPPEN!"/"ZAP!" auf der Player-Seite — explizit
+abgegrenzt vom bestehenden STT-Sprachfilter, der Moderation/Werbung
+filtert, nicht gesungene Sprache). Beide Inhaltsverzeichnisse (DE ab
+Zeile 31, EN ab Zeile 57) um die neuen Anker ergänzt.
+
+**Phase 2 (CHANGELOG.md)**: neuer Abschnitt "Aktueller Stand" direkt nach
+der Namenshistorie, vor dem ersten Datumsabschnitt (`## 2026-08-24`) —
+"Zuletzt umgesetzt" (Song-Erkennung Phase 1, Werbeblock-Vorbuffering +
+Sprache-Gate, GPLv3 + Inhaltsverzeichnisse) und "Aktuell offen/geplant"
+(Song-Erkennung Phase 2, Deutschsprachige-Musik-Filter, automatische
+Update-Prüfung, Musik-Library-Enrichment, iOS-App) — Formulierungen
+gegen die tatsächlichen SESSION.md-Datumsüberschriften der letzten Tage
+abgeglichen (`grep -n "^## 2026-08"`), nicht aus dem Gedächtnis
+geraten. Rest der Datei unverändert.
+
+**Bewusst NICHT gemacht**: kein Code, keine `settings_store.py`-
+Änderung — beide Phasen sind reine Roadmap-/Status-Doku für noch nicht
+begonnene Features, kein neuer Config-Wert. Kein `VERSION`-Bump/Commit
+in diesem Schritt (Nutzer hat noch keinen Commit angefordert, siehe
+CLAUDE.md-Konvention "PATCH-Bump bei jedem Commit" — die bezieht sich
+auf tatsächlich committete Änderungen).
+
+**Verifiziert**: Diff-Review beider Dateien — README DE/EN-Abschnitte
+inhaltlich parallel (gleiche Reihenfolge, gleiche Kernaussagen,
+`⚡ ZAPPEN!`/`⚡ ZAP!` korrekt je Sprachversion referenziert), CHANGELOG
+restliche Datumsabschnitte byte-identisch zum Stand davor (nur Einfügen,
+kein Move/Rewrite).
+
+## 2026-08-24 (Fortsetzung) — Phase 3 von "Roadmap-Doku + Update-Prüfung": automatische Update-Prüfung für die Docker-Installation
+
+**Was und warum**: dritter und letzter Teil des freigegebenen Plans (siehe
+vorigen Eintrag) — reiner Lese-Hinweis im Web-Interface, der auf einen
+veralteten `git`-Checkout hinweist. Es gibt kein Image-Registry-
+Deployment, die Docker-Installation läuft ausschließlich per
+`git clone`/`git pull`, entsprechend zeigt der Hinweis explizit
+`git pull` + Rebuild, kein `docker pull`.
+
+**Umsetzung** (alle Details/Begründungen jetzt in ARCHITECTURE.md,
+Abschnitt "Automatische Update-Prüfung (update_check.py)"):
+- Neue Datei `python/update_check.py`: `parse_version()`/`check_now()`
+  (SemVer-Vergleich der bestehenden `VERSION`-Datei gegen
+  `raw.githubusercontent.com/…/main/VERSION` — KEINE neue `version.json`,
+  siehe Rückfrage im Plan) + `UpdateChecker`-Klasse (Daemon-Thread, Poll
+  alle 5 Min., tatsächlicher Check nur alle 24h, respektiert
+  `last_checked_at` über einen Neustart hinweg).
+- `settings_store.py`: neuer `update_check`-Block in `DEFAULTS`
+  (`enabled: True` — bewusste Ausnahme von "Default AUS wie jedes neue
+  Feature", da reiner Lesezugriff ohne CPU/RAM-Kosten), gleiches
+  Merge-Muster in `_read_raw()`/`_defaults_copy()` wie bei
+  `news_break`/`stt_filter`/`song_recognition`, `update()` um
+  `update_check_enabled` erweitert, neue eigene Funktion
+  `record_update_check_result()` fürs Schreiben des Hintergrund-Thread-
+  Ergebnisses (ohne die normale Validierungskette).
+- `webui.py`: `UpdateChecker` wird in `start_server()` gestartet (läuft
+  dadurch automatisch NICHT bei `--webui-port 0`, also nicht im
+  isolierten Testmuster aus CLAUDE.md), neuer Read-only-Endpoint
+  `GET /api/update_check` (liest NUR den gecachten `settings.json`-
+  Zustand, macht selbst nie einen Netzwerk-Request), `update_check_enabled`
+  im bestehenden Settings-POST-Handler ergänzt, neue Config-Sektion
+  "🔄 Automatische Update-Prüfung" (Checkbox, gleiches Muster wie die
+  bestehende TLS-Sektion), Update-Banner-`<div>` unter dem Versions-Tag
+  auf allen drei Templates (Player/Musik/Config), JS holt `/api/update_check`
+  einmalig beim Laden (kein Polling, ändert sich höchstens 1x/Tag).
+- Neue i18n-Keys (`cfg_update_check_*`, `update_banner_*`) in
+  `i18n.py` (EN-Basis) und `language/Deutsch.lng` ergänzt.
+- README.md: neuer Abschnitt "Automatische Update-Prüfung" (DE+EN,
+  inkl. Inhaltsverzeichnis-Einträge) vor "Bekannte Einschränkungen",
+  Datei-Tabelle um `python/update_check.py` ergänzt.
+- ARCHITECTURE.md: neuer Abschnitt zwischen "Mehrsprachiges
+  Web-Interface" und "Docker: Host- vs. Container-Layout", inkl.
+  Mermaid-Diagramm und Inhaltsverzeichnis-Eintrag.
+- CHANGELOG.md: neuer Eintrag im Datumsabschnitt 2026-08-24, "Aktueller
+  Stand" aktualisiert (Update-Prüfung von "offen" nach "zuletzt
+  umgesetzt" verschoben).
+
+**Verifiziert** (isolierter Testlauf: `python/*.py` + `language/` in ein
+Temp-Verzeichnis kopiert, echte Produktivinstanz nicht angefasst,
+Muster aus CLAUDE.md):
+- `check_now()` direkt gegen die echte GitHub-URL: `local_version='v0.0.1'`
+  → `update_available=True`, `remote_version='v1.2.29 build 2026-08-24
+  06:21 Uhr'` (der tatsächliche `main`-Stand). Mit `local_version` gleich
+  bzw. neuer als Remote (`'v1.2.29'`/`'v9.9.9'`) → `update_available=False`
+  in beiden Fällen. `parse_version('garbage')` → `None`,
+  `parse_version('v1.2.29 build 2026-08-24')` → `(1, 2, 29)`.
+- `settings_store.py` isoliert: Default nach frischem `load()`
+  `{'enabled': True, 'last_checked_at': None, 'last_known_remote_version':
+  None, 'update_available': False}`; `update(update_check_enabled=False)`
+  setzt korrekt nur `enabled`; `record_update_check_result('v9.9.9', True,
+  1234567890.0)` setzt korrekt nur die drei State-Felder, `enabled` bleibt
+  unverändert. Eine `settings.json` OHNE `update_check`-Block (simuliert
+  altes Setup) bekommt beim nächsten `load()` korrekt den vollen Default
+  (inkl. `enabled=True`) gemerged.
+- Voller Server-Testlauf (`webui.start_server()` auf Testport, echte
+  `SwitcherState`): direkt nach dem Start bereits ein echtes
+  Check-Ergebnis von GitHub in `GET /api/update_check` sichtbar (erster
+  Start hat `last_checked_at=None` → sofort fällig, kein Warten auf
+  24h). `POST /api/config/settings {"update_check_enabled": false}` →
+  Antwort UND `settings.json` auf der Platte zeigen `enabled: false`.
+  Mit künstlich alter lokaler `VERSION` (`v0.0.1`) liefert
+  `/api/update_check` `update_available: true`; Player-Seiten-HTML
+  enthält `id="update-banner"` und den i18n-Key `update_banner_text`
+  im eingebetteten `I18N`-JSON.
+- Fehlertoleranz: `REMOTE_VERSION_URL` auf einen nicht existierenden
+  Pfad umgebogen → `check_now()` wirft `HTTPError: 404`,
+  `UpdateChecker._check_once()` fängt das ab, `on_result` wird NICHT
+  aufgerufen (kein State-Update, kein Crash) — nur ein `log.debug`.
+- `i18n`-Coverage-Check (`_check_i18n_coverage()`, läuft beim
+  `webui`-Modul-Import) erfolgreich durchlaufen — alle neuen `data-i18n`/
+  `t('...')`-Keys sind in `i18n.STRINGS` vorhanden, kein fehlender/
+  vertippter Key.
+
+**Bewusst NICHT gemacht**: kein Dismiss-Button für den Update-Banner
+(Nutzer hat das nicht verlangt, hätte zusätzlichen State gebraucht —
+kann bei Bedarf nachgerüstet werden). Kein reiner String-Vergleich wie
+beim Android-Pendant (`UpdateManager.kt` vergleicht `buildTime` 1:1) —
+hier echter SemVer-Tupel-Vergleich, weil `VERSION` schon strukturiert
+vorliegt und ein reiner String-Vergleich bei gleich langen, aber
+unterschiedlich sortierten Versionsstrings falsch läge. Kein
+`VERSION`-Bump/Commit in diesem Schritt (siehe vorigen Eintrag —
+Nutzer hat noch keinen Commit angefordert).

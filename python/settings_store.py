@@ -131,6 +131,21 @@ DEFAULTS = {
         # Einsatz gegen echtes Stream-Audio nachjustieren.
         "similarity_threshold": 0.65,
     },
+    # Automatische Update-Prüfung für die Docker-Installation (siehe
+    # ARCHITECTURE.md, Abschnitt "Automatische Update-Prüfung", und
+    # python/update_check.py): reiner Lesezugriff gegen
+    # raw.githubusercontent.com, kein Auto-Update -- es gibt kein
+    # Image-Registry-Deployment, nur `git pull`. Default AN, ANDERS als
+    # jedes sonstige neue Feature hier (vgl. song_recognition oben):
+    # kostet im Gegensatz zu STT/Fingerprinting/Song-Erkennung keine
+    # laufende CPU/RAM, nur alle 24h ein einzelner HTTP-GET -- bewusste
+    # Ausnahme, siehe README.md/ARCHITECTURE.md.
+    "update_check": {
+        "enabled": True,
+        "last_checked_at": None,          # Unix-Timestamp, None = noch nie geprüft
+        "last_known_remote_version": None,
+        "update_available": False,
+    },
 }
 
 # Fallback-Sprache für Kategorien ohne explizite Zuordnung in
@@ -176,7 +191,8 @@ def _defaults_copy() -> dict:
     return {**DEFAULTS, "news_break": dict(DEFAULTS["news_break"]),
             "music_library": dict(DEFAULTS["music_library"]),
             "stt_filter": copy.deepcopy(DEFAULTS["stt_filter"]),
-            "song_recognition": dict(DEFAULTS["song_recognition"])}
+            "song_recognition": dict(DEFAULTS["song_recognition"]),
+            "update_check": dict(DEFAULTS["update_check"])}
 
 
 def _migrate_stt_filter(v: dict) -> dict:
@@ -251,6 +267,13 @@ def _read_raw() -> dict:
             merged["song_recognition"].update(
                 {kk: vv for kk, vv in v.items() if kk in DEFAULTS["song_recognition"]}
             )
+        elif k == "update_check" and isinstance(v, dict):
+            # Gleiches Muster wie "song_recognition" direkt oben: ein
+            # settings.json von vor diesem Feature funktioniert dadurch
+            # unverändert weiter (Default "enabled": True greift dann).
+            merged["update_check"].update(
+                {kk: vv for kk, vv in v.items() if kk in DEFAULTS["update_check"]}
+            )
         else:
             merged[k] = v
     return merged
@@ -283,7 +306,8 @@ def update(prebuffer_seconds=None, prebuffer_count=None, import_url=None,
            song_recognition_enabled=None,
            song_recognition_interval_seconds=None,
            song_recognition_snippet_seconds=None,
-           song_recognition_similarity_threshold=None) -> dict:
+           song_recognition_similarity_threshold=None,
+           update_check_enabled=None) -> dict:
     """Aktualisiert nur die übergebenen Felder (None = unverändert lassen),
     validiert. Wirft ValueError bei ungültigen Werten.
 
@@ -485,6 +509,9 @@ def update(prebuffer_seconds=None, prebuffer_count=None, import_url=None,
                 raise ValueError(f"song_recognition_similarity_threshold muss zwischen {lo} und {hi} liegen.")
             sr["similarity_threshold"] = song_recognition_similarity_threshold
 
+        if update_check_enabled is not None:
+            data["update_check"]["enabled"] = bool(update_check_enabled)
+
         _write(data)
         log.info("⚙ Einstellungen gespeichert: %s", data)
         return data
@@ -576,3 +603,23 @@ def resolve_stt_language(category: str, cfg: dict) -> str:
     Hauptloop (siehe radiosabbelnich.py), damit nicht bei jedem Aufruf frisch
     von der Platte gelesen wird."""
     return cfg.get("category_languages", {}).get(category, DEFAULT_STT_LANGUAGE)
+
+
+def record_update_check_result(remote_version: str, update_available: bool,
+                                checked_at: float) -> None:
+    """Schreibt NUR die drei State-Felder von 'update_check' (siehe
+    update_check.py, UpdateChecker) -- bewusst ohne die
+    Validierungskette von update(), weil dieser Aufruf aus dem
+    Hintergrund-Thread kommt, nicht aus einem validierten Nutzer-
+    Request. 'enabled' selbst wird hier nie angefasst -- das bleibt
+    ausschließlich über update(update_check_enabled=...) (Config-Seite)
+    steuerbar."""
+    with _lock:
+        data = _read_raw()
+        uc = data["update_check"]
+        uc["last_checked_at"] = checked_at
+        uc["last_known_remote_version"] = remote_version
+        uc["update_available"] = bool(update_available)
+        _write(data)
+        log.info("🔄 Update-Check-Ergebnis gespeichert: Remote-Version %s, verfügbar: %s",
+                 remote_version, update_available)
