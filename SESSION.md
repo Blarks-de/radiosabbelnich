@@ -9239,3 +9239,40 @@ Modul sollte künftig routinemäßig einen Blick ins Dockerfile einschließen
 Host- vs. Container-Layout", dokumentiert — hier trotzdem übersehen,
 weil der Plan sich auf Python-/Doku-Dateien konzentrierte und das
 Dockerfile nicht explizit in der Datei-Liste stand).
+
+## 2026-08-24 (Fortsetzung) — Banner live erzwungen, danach VERSION wieder synchronisiert
+
+**Was und warum**: Nutzer wollte den Update-Banner tatsächlich einmal
+`update_available: true` sehen, statt nur die Code-Pfade isoliert
+getestet zu haben. Da der reguläre 24h-Rhythmus dafür zu langsam ist und
+es (bewusst, siehe vorigen Eintrag) keinen "Jetzt prüfen"-Knopf gibt,
+denselben Codepfad wie der Hintergrund-Thread manuell im laufenden
+Container angestoßen: `docker exec radiosabbelnich python3 -c
+"...update_check.check_now(...); settings_store.
+record_update_check_result(...)"`.
+
+**Beobachtung unterwegs**: der erste manuelle Check lieferte noch
+`v1.2.30` als Remote-Version zurück, obwohl `main` zu dem Zeitpunkt schon
+bei `v1.2.31` war (Commit `b2d1da0`, siehe vorigen Eintrag) —
+`raw.githubusercontent.com` cached serverseitig (`cache-control:
+max-age=300`, per Fastly-CDN, live per `curl -D -` bestätigt: `x-cache:
+HIT`, `source-age: 288`). Kein Bug, reines CDN-Timing — nach Ablauf des
+5-Minuten-Fensters lieferte derselbe Aufruf korrekt `v1.2.31`.
+
+**Ergebnis**: `update_available: true` korrekt gesetzt und über
+`GET /api/update_check` sowie das ausgelieferte Player-Seiten-HTML
+(`id="update-banner"` + `update_banner_text`-i18n-String) bestätigt.
+Danach auf Nutzerwunsch den Container neu gebaut (`docker compose up -d
+--build`, kein Codeunterschied zum vorigen Rebuild, nur die inzwischen
+schon committete `VERSION v1.2.31` kommt jetzt mit ins Image) und den
+Check ein zweites Mal manuell ausgelöst, um den — durch den ersten
+erzwungenen Test künstlich veralteten — persistierten Zustand wieder
+korrekt auf `update_available: false` zu bringen (lokale und Remote-
+Version sind jetzt wieder identisch).
+
+**Bewusst NICHT gemacht**: kein Browser-Screenshot (Chrome-Erweiterung in
+dieser Session nicht verbunden) — Bestätigung lief ausschließlich über
+API/HTML-Inspektion, das deckt den kompletten Server-seitigen Teil ab,
+das reine Client-JS-Reveal (`style.display = 'block'`) ist trivial genug,
+um es ohne visuelle Prüfung als korrekt zu werten. Kein neuer "Jetzt
+prüfen"-Knopf ergänzt (nicht angefragt, hätte den Scope erweitert).

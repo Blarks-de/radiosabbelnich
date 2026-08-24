@@ -48,8 +48,8 @@
   },
   "update_check": {
     "enabled": true,
-    "last_checked_at": 1787585655.3390815,
-    "last_known_remote_version": "v1.2.30 build 2026-08-24 17:32 Uhr",
+    "last_checked_at": 1787586231.4287868,
+    "last_known_remote_version": "v1.2.31 build 2026-08-24 17:35 Uhr",
     "update_available": false
   }
 }
