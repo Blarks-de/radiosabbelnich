@@ -9015,3 +9015,27 @@ Min/Max/Mittelwert/Median + Perzentile für Misses, Min/Max/Mittelwert/
 Median für Hits (ohne Perzentile, siehe Fix), Histogramm, und den
 Hinweis auf eine saubere Lücke zwischen Miss-Maximum (0.6324) und
 Hit-Minimum (0.7753).
+
+## 2026-08-24 (Fortsetzung) — ARCHITECTURE.md-Lücke: Default-Key-Persistenz war nirgends als generelle Regel festgehalten
+
+**Was und warum**: Nutzer bat, `ARCHITECTURE.md` auf fehlende Inhalte zum
+heutigen Debugging-Fall zu prüfen. Der eigentliche Root-Cause-Mechanismus
+(`settings_store._read_raw()` schreibt neue `DEFAULTS`-Keys nie in eine
+schon bestehende `settings.json` zurück, Default lebt nur im
+In-Memory-Merge) stand bisher nirgends als GENERELLE Architektur-Regel,
+nur implizit in den einzelnen `elif k == "..." and isinstance(v, dict):`-
+Kommentaren in `settings_store.py` selbst. Da das nicht song_recognition-
+spezifisch ist, sondern für jeden künftigen neuen Config-Unterblock
+(`news_break`/`stt_filter`/`music_library`/...) genauso gilt, im
+Song-Erkennung-Abschnitt von `ARCHITECTURE.md` ergänzt (dort, wo es heute
+tatsächlich zur Verwirrung führte) — mit explizitem Hinweis, dass es
+KEIN Einzelfall ist. Gleichzeitig dort auch die heute ergänzte
+Startup-Log-Zeile ("Song-Erkennung: aktiv/inaktiv") erwähnt.
+
+**Bewusst NICHT gemacht**: `check_song_calibration.py` NICHT zusätzlich
+in `ARCHITECTURE.md` erwähnt (nur in README/SESSION) — die Datei
+dokumentiert "warum architektonisch so gebaut", nicht "welches Skript
+zur Bedienung eines Features benutzen" (das ist README-Aufgabe, schon
+im vorigen Eintrag erledigt), gleiches Muster wie bei anderen
+Analyse-/Wrapper-Skripten (`radiosabbelnich.sh` steht auch nur in der
+README-Datei-Tabelle, nicht in ARCHITECTURE.md).

@@ -302,6 +302,23 @@ ein loggender Stub). Komplett getrennt von `fingerprint.py`/
 Sprache-Clips/Jingles), eigene DB-Datei (`song_fingerprints.db`), eigenes
 Matching-Verfahren.
 
+**`song_recognition.enabled` defaultet auf `false` UND fehlt trotzdem oft
+als Key in einer bestehenden `data/settings.json`** — das ist kein Bug,
+sondern dasselbe Verhalten wie bei jedem anderen `DEFAULTS`-Unterblock in
+`settings_store.py` (`news_break`/`stt_filter`/`music_library`):
+`_read_raw()` schreibt die Datei nur beim allerersten Fehlen komplett neu
+(`if not os.path.exists(...): _write(DEFAULTS)`) — eine schon vorher
+existierende `settings.json` bekommt einen neu hinzugekommenen Top-Level-
+Key nie automatisch nachgetragen, der Default lebt nur im In-Memory-Merge
+(`_defaults_copy()` + Merge-Loop). Live erlebt (siehe SESSION.md
+2026-08-24): das sah beim Debugging erst nach einem stillen Fehler aus
+("Key fehlt komplett in settings.json"), war aber genau dieses erwartete
+Verhalten — betrifft künftig JEDEN neuen `settings_store`-Unterblock,
+nicht nur diesen. Seit demselben Datum loggt `main()` deshalb beim Start
+zusätzlich explizit "Song-Erkennung: aktiv/inaktiv" (statt nur den
+DB-Pfad wie zuvor), damit der aktive/inaktive Zustand nicht erst über
+`settings.json` oder Log-Rotations-Archäologie rekonstruiert werden muss.
+
 ```mermaid
 flowchart LR
     PCM["PCM-Fenster<br/>(label == music)"] -->|feed| Ring["Ringpuffer<br/>(snippet_seconds tief)"]

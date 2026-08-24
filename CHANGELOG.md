@@ -17,6 +17,10 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 
 ## 2026-08-24
 
+- ARCHITECTURE.md: dokumentiert, dass ein neuer `settings_store`-
+  Default-Key (wie `song_recognition`) nie automatisch in eine
+  bestehende `settings.json` nachgetragen wird — betrifft künftig jeden
+  neuen Config-Unterblock, nicht nur diesen Fall.
 - README.md: Song-Erkennung prominent in der Einleitung erwähnt (bisher
   nur im eigenen Abschnitt), Datei-Tabelle und Song-Erkennung-Abschnitt
   um `check_song_calibration.py` ergänzt.
