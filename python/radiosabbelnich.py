@@ -695,6 +695,15 @@ def main():
             state.song_recognition_cfg["snippet_seconds"],
         )
         log.info("🎵 Song-Fingerprint-DB: %s", args.song_recognition_db)
+        # Getrennt von der DB-Pfad-Zeile oben, weil "DB initialisiert"
+        # NICHTS über song_recognition.enabled aussagt (Gate sitzt im
+        # Hauptloop, siehe dortiger Kommentar) -- ohne diese Zeile ist von
+        # außen nicht unterscheidbar, ob das Feature nur mangels echter
+        # Songs still ist oder weil enabled=false in settings.json steht
+        # (siehe SESSION.md-Eintrag zu diesem Debugging-Fall).
+        log.info("🎵 Song-Erkennung: %s",
+                 "aktiv" if state.song_recognition_cfg["enabled"]
+                 else "inaktiv (settings.json: song_recognition.enabled=false)")
 
     httpd = None
     if args.webui_port:

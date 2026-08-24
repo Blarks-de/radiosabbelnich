@@ -7,13 +7,18 @@
   "language": "de",
   "current_mode": "radio",
   "music_library": {
-    "path": "/app/music_library/+_Kultliederbuch"
+    "path": "/app/music_library/+_Blarks_Favoriten"
   },
   "news_break": {
     "enabled": true,
-    "mp3_folder": "/app/news_mp3/+_Blarks_Favoriten/Fav_Favoriten_Auto-1/Lady Gaga - Joanne",
+    "mp3_folder": "/app/news_mp3/Rock",
     "window_minutes": 6.0,
-    "enabled_hours": null
+    "enabled_hours": null,
+    "ad_prebuffer_enabled": true,
+    "ad_prebuffer_lead_seconds": 20.0,
+    "require_speech_in_window": true,
+    "speech_gate_window_minutes": 2.0,
+    "speech_gate_streak": 3
   },
   "stt_filter": {
     "enabled": true,
@@ -34,5 +39,11 @@
     "category_languages": {
       "International": "en"
     }
+  },
+  "song_recognition": {
+    "enabled": true,
+    "interval_seconds": 45.0,
+    "snippet_seconds": 11.0,
+    "similarity_threshold": 0.65
   }
 }

@@ -15,6 +15,14 @@ umbenannt. Ältere Commit-Nachrichten/Dateinamen (z.B. `radio_switch`,
 wider — hier einheitlich mit dem aktuellen Namen beschrieben, sofern
 nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 
+## 2026-08-24
+
+- Song-Erkennung: fehlende Startup-Log-Zeile ergänzt ("aktiv"/"inaktiv"),
+  Root Cause für leere `song_match_log` war kein Bug — `enabled=false`
+  per Default, kein `/config`-Schalter zum Umschalten. In `data/
+  settings.json` jetzt scharfgestellt, damit die Kalibrierungs-
+  Sammelphase Daten sammelt.
+
 ## 2026-08-23
 
 - Song-Erkennung: Kalibrierungs-Logging für `similarity_threshold`

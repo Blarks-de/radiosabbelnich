@@ -8921,3 +8921,62 @@ selbst, kein Pruning von `song_match_log` (wächst wie
 nur für eine begrenzte Sammelphase gedacht), keine Logging-Erfassung der
 Songwechsel-Kurzschluss-Vergleiche (siehe oben), keine README-Änderung
 (kein neuer Config-Wert/Setup-Schritt, rein internes Debug-Logging).
+
+## 2026-08-24 — Debugging: Kalibrierungs-Logging lief nie (kein Bug, Feature war schlicht aus)
+
+**Symptom**: `song_match_log` blieb nach dem Deploy vom 2026-08-23 leer,
+kein `song`-Treffer in den Container-Logs, kein `song_recognition`-Key in
+`data/settings.json`.
+
+**Root Cause**: `song_recognition.enabled` steht per Default auf `false`
+(`settings_store.py`, "Default AUS wie jedes neue Feature", siehe
+Eintrag oben) — dieser Deploy hat bewusst KEINEN `/config`-Schalter dafür
+gebaut (siehe "Bewusst NICHT gemacht" oben), also gab es nie einen Weg,
+es scharfzustellen. Der fehlende Key in `settings.json` auf der Platte
+ist dabei kein Symptom eines Fehlers, sondern dasselbe etablierte
+Verhalten wie bei `news_break`/`stt_filter`/`music_library`:
+`settings_store._read_raw()` schreibt die Datei nur beim allerersten
+Fehlen komplett neu (`if not os.path.exists(...): _write(DEFAULTS)`) —
+eine schon vorher existierende `settings.json` bekommt neue Top-Level-
+Keys nie automatisch nachgetragen, der Default lebt nur im In-Memory-
+Merge (`_defaults_copy()` + Merge-Loop in `_read_raw()`). Entsprechend
+war auch kein stiller Fehler im Spiel: der Merge fällt sauber auf
+`enabled: False` zurück, `SongRecognizer` wird zwar instanziiert, sein
+Aufruf im Hauptloop ist aber explizit gegated
+(`if song_recognizer and song_cfg["enabled"]:`,
+`radiosabbelnich.py`) — bei `enabled=False` laufen `feed()`/
+`maybe_recognize_async()` nie, ergo auch nie ein `match_or_learn()`-
+Aufruf, ergo leere `song_match_log`. `fpcalc` war im Produktions-Image
+vorhanden (`which fpcalc` im laufenden Container → `/usr/bin/fpcalc`),
+volle Logs (alle Rotationsdateien) enthielten keine einzige Exception/
+Traceback zu `song_fingerprint`/`SongRecognizer` — der Code-Pfad, der
+sowas werfen könnte, wurde schlicht nie erreicht. Die erwartete Startup-
+Zeile `🎵 Song-Fingerprint-DB: ...` hatte tatsächlich gefeuert (bestätigt
+in `data/logs/radiosabbelnich.log.1`, 2026-08-23 11:05:15), war zum
+Zeitpunkt des Debuggings aber schon aus der aktiven 10-MB-
+Rotationsdatei rausrotiert — daher der falsche erste Eindruck "Log fehlt
+komplett". Diese Zeile sagt ohnehin nur "DB initialisiert", nicht
+"Feature aktiv" — die eigentliche Lücke war das Fehlen einer expliziten
+aktiv/inaktiv-Zeile.
+
+**Fix**: zweite Log-Zeile direkt nach der bestehenden
+`"🎵 Song-Fingerprint-DB: %s"` in `radiosabbelnich.py` ergänzt:
+`"🎵 Song-Erkennung: aktiv"` bzw. `"... inaktiv (settings.json:
+song_recognition.enabled=false)"` — macht genau diesen Debugging-Fall
+beim nächsten Mal ohne Log-Rotations-Archäologie sofort ersichtlich.
+Zusätzlich `song_recognition.enabled` in der echten `data/settings.json`
+auf `true` gesetzt (restliche Werte unverändert: `interval_seconds=45.0`,
+`snippet_seconds=11.0`, `similarity_threshold=0.65` — die Platzhalter aus
+dem Eintrag oben), damit die Kalibrierungs-Sammelphase, für die das
+Logging vom 2026-08-23 gebaut wurde, überhaupt Daten sammelt.
+
+**Verifiziert**: Produktiv-Container per `docker compose up -d --build
+radiosabbelnich` neu gebaut/gestartet (Code-Änderung erfordert Rebuild).
+Log zeigt direkt nach dem Start `🎵 Song-Erkennung: aktiv`. Danach ~90s
+Live-Log beobachtet (kein Crash, kein Traceback), Container blieb
+gesund.
+
+**Bewusst NICHT gemacht**: kein `/config`-Schalter für
+`song_recognition.enabled` (weiterhin wie im Eintrag 2026-08-23
+begründet — eigener späterer Prompt), keine Änderung an
+`similarity_threshold` selbst.
