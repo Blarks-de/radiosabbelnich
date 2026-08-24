@@ -45,5 +45,11 @@
     "interval_seconds": 45.0,
     "snippet_seconds": 11.0,
     "similarity_threshold": 0.65
+  },
+  "update_check": {
+    "enabled": true,
+    "last_checked_at": 1787585655.3390815,
+    "last_known_remote_version": "v1.2.30 build 2026-08-24 17:32 Uhr",
+    "update_available": false
   }
 }

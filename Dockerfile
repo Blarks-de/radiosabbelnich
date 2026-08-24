@@ -78,6 +78,7 @@ COPY python/folder_browse.py .
 COPY python/stt_filter.py .
 COPY python/i18n.py .
 COPY python/resource_monitor.py .
+COPY python/update_check.py .
 COPY VERSION .
 COPY data/stations.json .
 COPY pics/radiosabbelnich.webp .

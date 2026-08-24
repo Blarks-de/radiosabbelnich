@@ -9179,3 +9179,63 @@ vorliegt und ein reiner String-Vergleich bei gleich langen, aber
 unterschiedlich sortierten Versionsstrings falsch läge. Kein
 `VERSION`-Bump/Commit in diesem Schritt (siehe vorigen Eintrag —
 Nutzer hat noch keinen Commit angefordert).
+
+## 2026-08-24 (Fortsetzung) — Deploy-Fehler beim ersten Rebuild: update_check.py fehlte im Dockerfile (bekanntes Muster, siehe 2026-08-21)
+
+**Symptom**: Nutzer bat um Commit+Push (erledigt, `4d8cd53`) und danach um
+einen Container-Rebuild zum Live-Test. Erster `docker compose up -d
+--build radiosabbelnich` danach: Container landete sofort in einer
+Neustartschleife, `ModuleNotFoundError: No module named 'update_check'`
+in `webui.py` beim `import update_check`.
+
+**Root Cause**: exakt dasselbe Muster wie am 2026-08-21 (Fortsetzung 3,
+siehe dortiger Eintrag) — das Dockerfile kopiert jede Python-Datei
+einzeln (`COPY python/<datei>.py .`, siehe `CLAUDE.md`/`ARCHITECTURE.md`,
+"Docker: Host- vs. Container-Layout"), eine neue Datei taucht dadurch
+NICHT automatisch im Image auf. Bei der Planung/Umsetzung von
+`update_check.py` wurde diese Regel übersehen — der Plan/die Umsetzung
+deckte `settings_store.py`/`webui.py`/`i18n.py`/`language/Deutsch.lng`
+ab, aber nicht das Dockerfile selbst.
+
+**Fix**: `COPY python/update_check.py .` im Dockerfile ergänzt (direkt
+nach `COPY python/resource_monitor.py .`, an der Stelle, an der auch die
+übrigen neueren Module stehen). Danach `docker compose up -d --build
+radiosabbelnich` erneut.
+
+**Verifiziert** (echte Produktivinstanz, kein isolierter Testlauf — vom
+Nutzer explizit für den Live-Test angefordert):
+- Container läuft stabil (`docker compose ps` → `Up`, kein Neustart-Loop
+  mehr), normaler Startup-Log bis hin zu Sender-Wiedergabe/STT-
+  Modell-Laden.
+- Direkt beim Start feuert die Update-Prüfung bereits real:
+  `🔄 Update-Prüfung: Remote-Version v1.2.30 build 2026-08-24 17:32 Uhr,
+  Update verfügbar: False` + `🔄 Update-Check-Ergebnis gespeichert: ...` —
+  erwartungsgemäß `False`, weil das gebaute Image exakt den soeben
+  gepushten Commit-Stand enthält (lokale und Remote-`VERSION` sind
+  identisch).
+- `GET https://localhost:5000/api/update_check` (echter Port, TLS aktiv)
+  liefert live `{"enabled": true, "last_checked_at": 1787585655.34,
+  "last_known_remote_version": "v1.2.30 build 2026-08-24 17:32 Uhr",
+  "update_available": false, "changelog_url": "https://github.com/
+  Blarks-de/radiosabbelnich/blob/main/CHANGELOG.md"}`.
+- `data/settings.json` auf dem Host enthält den `update_check`-Block mit
+  denselben Werten — übersteht damit auch einen künftigen
+  Container-Neustart.
+- Config-Seite (`/config`) enthält die neue Sektion (Formular-ID
+  `update-check-form`, Checkbox-ID `update-check-enabled`, Heading-Key
+  `cfg_update_check_heading` — 7 Treffer beim Grep), Player-Seite (`/`)
+  enthält das `id="update-banner"`-Div.
+
+**Bewusst NICHT gemacht**: kein künstliches "Update verfügbar"-Szenario
+auf der Produktivinstanz erzwungen (z.B. lokale `VERSION` im laufenden
+Container manuell auf einen älteren Stand zurückdrehen) — dieser Pfad
+wurde bereits im vorigen Eintrag isoliert (Temp-Verzeichnis, separater
+Testport) verifiziert, ein Eingriff dafür an der echten Installation
+wäre unnötiges Risiko für den laufenden Radiobetrieb.
+
+**Lesson learned**: Der Plan/die Vorab-Recherche für ein neues Python-
+Modul sollte künftig routinemäßig einen Blick ins Dockerfile einschließen
+(bereits als generelle Regel in `ARCHITECTURE.md`, Abschnitt "Docker:
+Host- vs. Container-Layout", dokumentiert — hier trotzdem übersehen,
+weil der Plan sich auf Python-/Doku-Dateien konzentrierte und das
+Dockerfile nicht explizit in der Datei-Liste stand).

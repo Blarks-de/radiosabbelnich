@@ -35,6 +35,10 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 
 ## 2026-08-24
 
+- Fix: `update_check.py` fehlte im Dockerfile (`COPY`-pro-Datei-Muster
+  übersehen) — Container landete beim ersten Rebuild in einer
+  Neustartschleife, live beim vom Nutzer angeforderten Rebuild gefunden
+  und sofort behoben.
 - Neu (Default AN, Ausnahme von "Default AUS"): automatische
   Update-Prüfung für die Docker-Installation (`update_check.py`) — prüft
   alle 24h per Lesezugriff gegen die `VERSION`-Datei im GitHub-
