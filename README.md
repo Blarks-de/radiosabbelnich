@@ -75,6 +75,11 @@ Musik. Der ausgewählte Sender wird per Icecast neu ausgestrahlt, sodass
 man ihn im ganzen (Tail-)Netz mit VLC, im Browser oder sonst einem
 Streaming-Client hören kann.
 
+Zusätzlich erkennt RadioSabbelNich automatisch wiederkehrende Songs per
+Audio-Fingerprinting (Chromaprint) und merkt sich, wie oft ein Song schon
+lief — Grundlage für eine spätere Titel-/Interpret-Anzeige per
+Cloud-Abgleich (siehe [Song-Erkennung](#song-erkennung)).
+
 ## ⚠️ Nur privat, nur hinter VPN — kein öffentlicher Betrieb
 
 **RadioSabbelNich ist ausdrücklich nicht für den öffentlichen Betrieb
@@ -565,6 +570,12 @@ tatsächlichem Wechsel.
   UND verschiedener Songs sammeln, den beobachteten Abstand in den Logs
   prüfen.
 
+Jeder Vergleich landet zusätzlich in `song_match_log`
+(`data/song_fingerprints.db`) — `python3 check_song_calibration.py`
+wertet das nach ein paar Tagen Sammelzeit aus (Similarity-Verteilung
+für Treffer/Nicht-Treffer, Vorschlag für einen fundierten
+`similarity_threshold`).
+
 ## Sprache des Web-Interfaces
 
 Player- und Config-Seite gibt es auf Englisch (im Code eingebaute
@@ -800,6 +811,7 @@ Grafische Gesamtübersicht mit Diagrammen pro Subsystem: `ARCHITECTURE.md`.
 | `data/settings.json` | Laufzeit-Einstellungen, siehe `settings_store.py` |
 | `data/fingerprints.db`, `data/fingerprint_clips/` | Fingerprint-Datenbank + gelernte Clip-Mitschnitte |
 | `data/song_fingerprints.db` | Song-Erkennung Phase 1: lokaler Chromaprint-Fingerprint-Cache (siehe `python/song_fingerprint.py`) |
+| `check_song_calibration.py` | Wertet `song_match_log` aus `data/song_fingerprints.db` aus, für die `similarity_threshold`-Kalibrierung (siehe "Song-Erkennung") |
 | `data/logs/` | Rotierende Logdatei (siehe "Logging" unten) |
 | `data/news_mp3/`, `data/vosk-model-de/`, `data/whisper_cache/` | Standard-Mountziele für `NEWS_MP3_FOLDER`/`VOSK_MODEL_FOLDER`/faster-whisper-Cache (überschreibbar in `.env`) |
 | `data/music_library/` | Standard-Mountziel für `MUSIC_LIBRARY_FOLDER` (überschreibbar in `.env`) |
@@ -1084,6 +1096,11 @@ presenting, news, ads, jingles. What's left (ideally) is just music.
 The currently selected station is re-streamed via Icecast, so you can
 listen to it anywhere on your (Tail)net with VLC, in the browser, or
 any other streaming client.
+
+It also automatically recognizes recurring songs via audio fingerprinting
+(Chromaprint) and keeps track of how often a song has played — the
+groundwork for a later title/artist display via a cloud lookup (see
+[Song recognition](#song-recognition)).
 
 ## ⚠️ Private use only, behind a VPN — no public deployment
 
@@ -1555,6 +1572,11 @@ the same station, a full cache lookup only runs on an actual change.
   for the STT threshold above is recommended: collect a few samples of the
   same song AND of different songs, check the observed gap in the logs.
 
+Every comparison is also logged to `song_match_log`
+(`data/song_fingerprints.db`) — `python3 check_song_calibration.py`
+analyzes it after a few days of collection (similarity distribution for
+hits/misses, a suggested `similarity_threshold`).
+
 ## Web interface language
 
 The player and config pages are available in English (the base
@@ -1784,6 +1806,7 @@ beyond the debug signing (see above).
 | `data/settings.json` | Runtime settings, see `settings_store.py` |
 | `data/fingerprints.db`, `data/fingerprint_clips/` | Fingerprint database + learned clip recordings |
 | `data/song_fingerprints.db` | Song recognition phase 1: local Chromaprint fingerprint cache (see `python/song_fingerprint.py`) |
+| `check_song_calibration.py` | Analyzes `song_match_log` from `data/song_fingerprints.db`, for `similarity_threshold` calibration (see "Song recognition") |
 | `data/logs/` | Rotating log file (see "Logging" below) |
 | `data/news_mp3/`, `data/vosk-model-de/`, `data/whisper_cache/` | Default mount targets for `NEWS_MP3_FOLDER`/`VOSK_MODEL_FOLDER`/the faster-whisper cache (overridable in `.env`) |
 | `data/music_library/` | Default mount target for `MUSIC_LIBRARY_FOLDER` (overridable in `.env`) |

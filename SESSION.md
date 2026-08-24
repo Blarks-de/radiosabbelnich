@@ -8980,3 +8980,38 @@ gesund.
 `song_recognition.enabled` (weiterhin wie im Eintrag 2026-08-23
 begründet — eigener späterer Prompt), keine Änderung an
 `similarity_threshold` selbst.
+
+## 2026-08-24 (Fortsetzung) — Kalibrierungs-Skript + README-Sichtbarkeit
+
+**Was und warum**: `check_song_calibration.py` (Root-Level, stdlib-only:
+`sqlite3`/`statistics`) liest `song_match_log` aus
+`data/song_fingerprints.db` und trennt Similarity-Werte nach Hit/Miss
+(min/max/mean/median/Perzentile + ASCII-Histogramm), am Ende ein
+automatischer Hinweis auf eine saubere Lücke zwischen Miss-Maximum und
+Hit-Minimum samt Threshold-Vorschlag, oder eine Warnung bei Überlappung/
+zu wenig Daten. Genau der "Nächster Schritt" aus dem Eintrag 2026-08-23.
+Danach README.md geprüft: Song-Erkennung stand nur in ihrem eigenen
+Abschnitt, nicht in der einleitenden Feature-Beschreibung — auf
+Nutzerwunsch dort (DE+EN) ergänzt, plus das neue Skript im
+Song-Erkennung-Abschnitt und in der Datei-Tabelle verlinkt.
+
+**Bewusst NICHT gemacht**: `CLAUDE.md` NICHT angefasst — die Datei ist
+für repo-weite Konventionen/Workflows zuständig, nicht für Bedienung
+einzelner Features (das ist README.md/ARCHITECTURE.md), ein
+Kalibrierungs-Skript für genau ein Feature gehört da nicht rein. Der
+Code-Default `song_recognition.enabled: false` in `settings_store.py`
+bleibt unverändert (nur die lokale `data/settings.json` dieser Instanz
+steht seit dem vorigen Eintrag auf `true`) — das JSON-Beispiel im
+README zeigt bewusst weiter den Code-Default, nicht den Live-Zustand
+dieser einen Installation.
+
+**Verifiziert**: `python3 check_song_calibration.py` gegen die echte
+`data/song_fingerprints.db` laufen lassen (Stand zu dem Zeitpunkt: 8
+Zeilen, 1 Hit/7 Misses) — lief ohne Fehler, fand dabei einen Bug
+(`statistics.quantiles()` wirft bei <2 Werten, traf hier die
+Hits-Gruppe mit n=1) und direkt behoben (Perzentile werden bei <2
+Werten übersprungen statt zu crashen). Ausgabe zeigte danach korrekt
+Min/Max/Mittelwert/Median + Perzentile für Misses, Min/Max/Mittelwert/
+Median für Hits (ohne Perzentile, siehe Fix), Histogramm, und den
+Hinweis auf eine saubere Lücke zwischen Miss-Maximum (0.6324) und
+Hit-Minimum (0.7753).

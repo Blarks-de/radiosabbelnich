@@ -17,6 +17,9 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 
 ## 2026-08-24
 
+- README.md: Song-Erkennung prominent in der Einleitung erwähnt (bisher
+  nur im eigenen Abschnitt), Datei-Tabelle und Song-Erkennung-Abschnitt
+  um `check_song_calibration.py` ergänzt.
 - Song-Erkennung: fehlende Startup-Log-Zeile ergänzt ("aktiv"/"inaktiv"),
   Root Cause für leere `song_match_log` war kein Bug — `enabled=false`
   per Default, kein `/config`-Schalter zum Umschalten. In `data/
