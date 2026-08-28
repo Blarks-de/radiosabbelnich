@@ -537,37 +537,43 @@ normal weiter. Ein Absturz der Engine bei einem einzelnen Sample
 
 ## Song-Erkennung
 
-Phase 1 (aktueller Stand): erkennt laufende Musik per lokalem
-Chromaprint-Fingerprint-Cache — noch OHNE Internet-Abgleich, Titel/Interpret
-bleiben deshalb bis zu einer späteren Cloud-Anbindung leer. Nützt aktuell
-nur, um Songwiederholungen intern zu zählen; kein sichtbares
-Web-Interface-Element in dieser Phase. Default AUS wie jedes neue Feature,
-nur über `settings.json`/die `/api/config`-API aktivierbar (kein Schalter
-auf der Config-Seite).
+Erkennt laufende Musik per lokalem Chromaprint-Fingerprint-Cache (Phase 1)
+und identifiziert unbekannte Songs optional per AudD-Cloud-Lookup (Phase 2,
+[audd.io](https://audd.io), kostenloses Kontingent verfügbar). Default AUS
+wie jedes neue Feature, nur über `settings.json`/die `/api/config`-API
+aktivierbar (kein Schalter auf der Config-Seite).
 
 Läuft nur im Radio-Modus, während gerade Musik erkannt wird: alle
 `interval_seconds` wird ein `snippet_seconds` langes Sample per `fpcalc`
 (Chromaprint, siehe Dockerfile) gefingerprintet und gegen den lokalen Cache
 geprüft — Songwechsel-Erkennung vergleicht zuerst gegen den zuletzt
 gesehenen Song desselben Senders, ein DB-Abgleich läuft nur bei
-tatsächlichem Wechsel.
+tatsächlichem Wechsel. Kennt der lokale Cache den Song noch nicht UND ist
+`cloud_lookup_enabled` (siehe unten) aktiv, identifiziert AudD ihn per
+Snippet-Upload; bei Erfolg landen Titel/Interpret UND — falls von AudD
+mitgeliefert — Album/Erscheinungsjahr sowohl im lokalen Cache als auch —
+solange der Song weiterläuft — in der "Jetzt läuft"-Anzeige auf der
+Player-Seite (zweite Zeile, "Album (Jahr)", gleiches Anzeigeformat wie bei
+News-Pause/Musiksammlung). Album/Jahr sind optional — nicht jeder
+AudD-Treffer liefert beides, die Anzeige zeigt dann nur, was vorhanden ist.
 
 ```json
 "song_recognition": {
   "enabled": false,
   "interval_seconds": 45.0,
   "snippet_seconds": 11.0,
-  "similarity_threshold": 0.65
+  "similarity_threshold": 0.65,
+  "cloud_lookup_enabled": false
 }
 ```
 
-- **`enabled`** — Feature an/aus.
+- **`enabled`** — Feature an/aus (lokales Fingerprinting, Phase 1).
 - **`interval_seconds`** — wie oft (in Sekunden Musikwiedergabe) ein neues
   Sample genommen wird.
 - **`snippet_seconds`** — Länge des Samples. Nur beim Prozessstart wirksam
   (ändert die Größe eines internen Ringpuffers) — eine Änderung über
-  `/config` braucht einen Container-Neustart, anders als die übrigen drei
-  Werte hier.
+  `/config` braucht einen Container-Neustart, anders als die übrigen Werte
+  hier.
 - **`similarity_threshold`** — ab welcher Chromaprint-Ähnlichkeit (0.0-1.0)
   zwei Samples als derselbe Song gelten. Der Default (0.65) ist ein
   **Platzhalter**, noch nicht gegen echtes Stream-Audio kalibriert (siehe
@@ -575,12 +581,46 @@ tatsächlichem Wechsel.
   Methode wie beim STT-Schwellwert oben: einige Samples desselben Songs
   UND verschiedener Songs sammeln, den beobachteten Abstand in den Logs
   prüfen.
+- **`cloud_lookup_enabled`** — AudD-Cloud-Lookup bei Cache-Miss an/aus
+  (Phase 2). Eigener Schalter, UNABHÄNGIG von `enabled` oben — Cloud-Lookups
+  kosten AudD-Kontingent, lokales Fingerprinting nicht. Greift nur,
+  zusätzlich zu `enabled=true`, wenn auch `AUDD_API_TOKEN` in `.env` gesetzt
+  ist (kostenloser Token unter [audd.io](https://audd.io)) — fehlt der
+  Token, bleibt es bei Phase 1 (kein Absturz). Ein fester interner
+  Mindestabstand zwischen Cloud-Anfragen (60s) schützt zusätzlich vor
+  Kontingent-Verbrauch, falls `similarity_threshold` in der Praxis zu
+  locker/streng greift.
 
 Jeder Vergleich landet zusätzlich in `song_match_log`
 (`data/song_fingerprints.db`) — `python3 check_song_calibration.py`
-wertet das nach ein paar Tagen Sammelzeit aus (Similarity-Verteilung
-für Treffer/Nicht-Treffer, Vorschlag für einen fundierten
-`similarity_threshold`).
+wertet das aus (Similarity-Verteilung für Treffer/Nicht-Treffer). **Achtung**:
+diese Auswertung ist rein tautologisch (Hit/Miss wird direkt aus dem
+Vergleich mit dem aktuellen `similarity_threshold` abgeleitet, keine
+unabhängige Ground Truth) — für eine echte Kalibrierung eignen sich die
+AudD-Identifikationen aus Phase 2 besser, da AudD eine externe, vom
+Threshold unabhängige Referenz liefert.
+
+**Hörer-Gate**: Song-Erkennung (lokales Fingerprinting UND Cloud-Lookup)
+stoppt automatisch, solange niemand den Restream hört — kostet sonst CPU
+bzw. AudD-Kontingent für ein Publikum, das nicht existiert. Prüft alle 60s
+über Icecasts Admin-API (`ICECAST_ADMIN_URL`/`_USER`/`_PASSWORD`/`_MOUNT`,
+dieselben Werte wie für die Hörerzahl-Anzeige) die aktuelle Hörerzahl auf
+dem Restream-Mount; ohne konfigurierte Admin-API oder bei einem Abfrage-
+Fehler bleibt die Erkennung fail-open aktiv (kein stiller Ausfall). Bewusst
+ein **Stop statt Pause**: sobald die letzten Hörer weg sind, wird der
+interne Ringpuffer geleert statt eingefroren — sonst würde er bei der
+Rückkehr des ersten Hörers noch überwiegend veraltetes Audio von vor der
+Pause enthalten, was zu einem sinnlosen/falschen ersten Erkennungsversuch
+führen könnte. Nach der Rückkehr braucht der Puffer deshalb erst wieder
+`snippet_seconds`, bevor die nächste Analyse starten kann — genau wie nach
+einem echten Senderwechsel.
+
+**Live-Statusanzeige zum Debuggen**: solange Song-Erkennung aktiv ist, zeigt
+die "Jetzt läuft"-Zeile auf der Player-Seite auch ohne erkannten Song einen
+Platzhalter statt leer zu bleiben — "🔍 noch nicht erkannt" (aktiv, wartet
+auf den nächsten Treffer) oder "⏸ Song-Erkennung pausiert (keine Hörer)"
+(Hörer-Gate greift gerade). Ohne aktiviertes Feature bleibt die Zeile wie
+bisher komplett leer.
 
 ## Sprache des Web-Interfaces
 
@@ -902,6 +942,7 @@ Trefferzahl (schlankere Variante desselben Checks aus `check`).
 | `ICECAST_SSL_PORT` | Host-Port für den Icecast-Stream per HTTPS (Default 8443) |
 | `VOSK_MODEL_FOLDER` | Host-Ordner mit einem entpackten deutschen Vosk-Modell für den STT-Sprachfilter (optional, siehe eigener Abschnitt) |
 | `UI_LANGUAGE` | Startsprache des Web-Interfaces: `en` (Basissprache) oder der Code eines Sprachpakets unter `language/` wie `de` (optional, Default `en` — siehe "Sprache des Web-Interfaces") |
+| `AUDD_API_TOKEN` | API-Token für AudD, aktiviert Song-Erkennung Phase 2 (optional, kostenloses Kontingent unter [audd.io](https://audd.io) — siehe "Song-Erkennung") |
 
 ### HTTPS/TLS (optional)
 
@@ -1625,45 +1666,86 @@ sample, not the main process.
 
 ## Song recognition
 
-Phase 1 (current state): recognizes playing music via a local Chromaprint
-fingerprint cache — still WITHOUT an internet lookup, so title/artist stay
-empty until a later cloud integration. Currently only useful for counting
-song repeats internally; no visible web interface element in this phase.
-Off by default like every new feature, only enable it via
-`settings.json`/the `/api/config` API (no toggle on the config page).
+Recognizes playing music via a local Chromaprint fingerprint cache (phase 1)
+and optionally identifies unknown songs via an AudD cloud lookup (phase 2,
+[audd.io](https://audd.io), free tier available). Off by default like every
+new feature, only enable it via `settings.json`/the `/api/config` API (no
+toggle on the config page).
 
 Only runs in radio mode while music is currently detected: every
 `interval_seconds`, a `snippet_seconds`-long sample is fingerprinted via
 `fpcalc` (Chromaprint, see the Dockerfile) and checked against the local
 cache — song-change detection first compares against the last song seen on
-the same station, a full cache lookup only runs on an actual change.
+the same station, a full cache lookup only runs on an actual change. If the
+local cache doesn't know the song yet AND `cloud_lookup_enabled` (see below)
+is on, AudD identifies it from the uploaded snippet; on success, title/artist
+AND — if AudD supplies them — album/release year are written back into the
+local cache and — while that song keeps playing — shown in the "now
+playing" display on the player page (second line, "Album (Year)", same
+display format as news break/music library). Album/year are optional — not
+every AudD match returns both, the display then just shows whatever is
+available.
 
 ```json
 "song_recognition": {
   "enabled": false,
   "interval_seconds": 45.0,
   "snippet_seconds": 11.0,
-  "similarity_threshold": 0.65
+  "similarity_threshold": 0.65,
+  "cloud_lookup_enabled": false
 }
 ```
 
-- **`enabled`** — feature on/off.
+- **`enabled`** — feature on/off (local fingerprinting, phase 1).
 - **`interval_seconds`** — how often (in seconds of music playback) a new
   sample is taken.
 - **`snippet_seconds`** — sample length. Only effective at process start
   (sizes an internal ring buffer) — changing it via `/config` needs a
-  container restart, unlike the other three values here.
+  container restart, unlike the other values here.
 - **`similarity_threshold`** — the Chromaprint similarity (0.0-1.0) above
   which two samples count as the same song. The default (0.65) is a
   **placeholder**, not yet calibrated against real stream audio (see
   `SESSION.md`) — before relying on it in production, the same method as
   for the STT threshold above is recommended: collect a few samples of the
   same song AND of different songs, check the observed gap in the logs.
+- **`cloud_lookup_enabled`** — AudD cloud lookup on cache miss, on/off
+  (phase 2). Own switch, INDEPENDENT of `enabled` above — cloud lookups
+  cost AudD quota, local fingerprinting doesn't. Only takes effect, in
+  addition to `enabled=true`, when `AUDD_API_TOKEN` is also set in `.env`
+  (free token at [audd.io](https://audd.io)) — without a token, it stays at
+  phase 1 (no crash). A fixed internal minimum interval between cloud calls
+  (60s) additionally guards against quota exhaustion in case
+  `similarity_threshold` is too loose/strict in practice.
 
 Every comparison is also logged to `song_match_log`
 (`data/song_fingerprints.db`) — `python3 check_song_calibration.py`
-analyzes it after a few days of collection (similarity distribution for
-hits/misses, a suggested `similarity_threshold`).
+analyzes it (similarity distribution for hits/misses). **Note**: this
+analysis is purely tautological (hit/miss is derived directly from the
+comparison against the current `similarity_threshold`, not an independent
+ground truth) — for real calibration, the AudD identifications from phase 2
+are more useful, since AudD provides an external reference independent of
+the threshold.
+
+**Listener gate**: song recognition (local fingerprinting AND cloud lookup)
+automatically stops whenever nobody is listening to the restream — it would
+otherwise cost CPU/AudD quota for an audience that doesn't exist. Checks the
+current listener count on the restream mount every 60s via Icecast's admin
+API (`ICECAST_ADMIN_URL`/`_USER`/`_PASSWORD`/`_MOUNT`, the same values used
+for the listener count display); without a configured admin API or on a
+lookup error, recognition stays fail-open/active (no silent outage).
+Deliberately a **stop, not a pause**: as soon as the last listener leaves,
+the internal ring buffer is cleared instead of frozen — otherwise, once the
+first listener returns, it would still contain mostly stale pre-pause audio,
+which could trigger a pointless/wrong first recognition attempt. After a
+listener returns, the buffer needs `snippet_seconds` to refill before the
+next analysis can start — the same as after a real station switch.
+
+**Live status display for debugging**: whenever song recognition is active,
+the "now playing" line on the player page shows a placeholder even without a
+recognized song instead of staying empty — "🔍 not recognized yet" (active,
+waiting for the next match) or "⏸ song recognition paused (no listeners)"
+(listener gate is currently in effect). With the feature off, the line stays
+completely empty as before.
 
 ## Web interface language
 
@@ -1975,6 +2057,7 @@ leaner version of the same check from `check`).
 | `ICECAST_SSL_PORT` | Host port for the Icecast stream over HTTPS (default 8443) |
 | `VOSK_MODEL_FOLDER` | Host folder with an unpacked German Vosk model for the STT speech filter (optional, see its own section) |
 | `UI_LANGUAGE` | Starting language of the web interface: `en` (base language) or the code of a language pack under `language/` such as `de` (optional, default `en` — see "Web interface language") |
+| `AUDD_API_TOKEN` | API token for AudD, enables song recognition phase 2 (optional, free tier at [audd.io](https://audd.io) — see "Song recognition") |
 
 ### HTTPS/TLS (optional)
 

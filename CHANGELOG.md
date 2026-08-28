@@ -18,6 +18,9 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 ## Aktueller Stand
 
 **Zuletzt umgesetzt** (siehe Datumsabschnitte unten für Details):
+- Song-Erkennung Phase 2: AudD-Cloud-Lookup für unbekannte Songs
+  (`song_recognition.cloud_lookup_enabled` + `AUDD_API_TOKEN`), Live-Anzeige
+  von Titel/Interpret im Radio-Modus
 - Automatische Update-Prüfung für die Docker-Installation
   (`update_check.py`, git-pull-Hinweis im Web-Interface, Default AN)
 - Song-Erkennung Phase 1 (lokaler Chromaprint-Cache) + Kalibrierungs-
@@ -26,12 +29,55 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 - GPLv3-Lizenzierung, Inhaltsverzeichnisse für README.md/ARCHITECTURE.md
 
 **Aktuell offen/geplant** (Details: README.md, "Zukünftige Features"):
-- Song-Erkennung Phase 2: Cloud-Abgleich (AudD) für unbekannte Songs,
-  Vorbefüllung aus der eigenen Musik-Library
+- Song-Erkennung: Vorbefüllung der Referenz-DB aus der eigenen
+  Musik-Library, automatisierte Threshold-Kalibrierung anhand der
+  AudD-Identifikationen statt des bisherigen (tautologischen)
+  `song_match_log`
 - Deutschsprachige Musik ausblenden (Skip-Filter + manuelles Anlernen
   per "Deutsch!"-Button)
 - Musik-Library: Enrichment (Cover/Lyrics), Energy-Erkennung/Browse-UI
 - iOS-App (Idee, kein Zeitplan)
+
+## 2026-08-28
+
+- Neu: Song-Erkennung liefert jetzt auch Album/Erscheinungsjahr (nicht nur
+  Titel/Interpret), wenn AudD sie mitliefert — erscheinen in der zweiten
+  Zeile der "Jetzt läuft"-Anzeige. Neue Spalten `album`/`year` in
+  `song_fingerprints.db` (Migration für bestehende DBs, gleiches Muster wie
+  die `bpm`-Spalte in `music_scan.py`); ein einmal per Cloud identifizierter
+  Song zeigt Album/Jahr danach auch bei jeder lokalen Wiedererkennung, ohne
+  erneuten AudD-Call.
+- Neu: Hörer-Gate für Song-Erkennung (`song_fingerprint.ListenerGate`) —
+  stoppt lokales Fingerprinting UND AudD-Cloud-Lookup automatisch, sobald
+  niemand mehr den Restream hört (60s-Polling gegen Icecasts Admin-API,
+  fail-open bei Fehlern/fehlender Konfiguration, 15s Start-Verzögerung
+  gegen einen Timing-Fehler beim allerersten Check). Bewusst ein Stop, kein
+  Pause: der `SongRecognizer`-Ringpuffer wird beim Verschwinden der letzten
+  Hörer per `reset()` geleert statt eingefroren, sonst würde er nach der
+  Rückkehr eines Hörers eine Weile veraltetes Vor-Pause-Audio enthalten.
+- Neu: Live-Debug-Anzeige für Song-Erkennung — "🔍 noch nicht erkannt"/
+  "⏸ Song-Erkennung pausiert (keine Hörer)" statt stillschweigend leerer
+  "Jetzt läuft"-Zeile, solange das Feature aktiv ist, aber (noch) kein
+  Song identifiziert wurde. Zwei neue i18n-Keys
+  (`idx_song_pending`/`idx_song_paused_no_listeners`).
+- Neu: Song-Erkennung Phase 2 — AudD-Cloud-Lookup (`song_fingerprint.py`,
+  `audd_lookup()`) identifiziert einen bei Phase 1 unbekannten Song, wenn
+  `song_recognition.cloud_lookup_enabled` UND `AUDD_API_TOKEN` (`.env`)
+  gesetzt sind. Kein neuer pip-Dependency (nur `urllib`/`wave`, Multipart-
+  Upload von Hand gebaut). Fester 60s-Mindestabstand zwischen Cloud-Calls
+  (`AUDD_MIN_INTERVAL_SECONDS`) als Sicherheitsnetz gegen Kontingent-
+  Verbrauch bei noch unkalibriertem `similarity_threshold`.
+- Titel/Interpret erscheinen bei Erfolg live in der "Jetzt läuft"-Anzeige
+  im Radio-Modus (`webui.py` `/api/status`, bestehender
+  `now_playing_tags`-Mechanismus, keine neuen Templates/JS).
+- `SongFingerprintDB.set_cloud_metadata()` neu: schreibt Titel/Interpret
+  nachträglich in die von `match_or_learn()` angelegte Zeile (kein
+  Schema-Wechsel, Spalten existierten bereits).
+- Vorab geklärt: das bisherige `song_match_log`-Kalibrierungs-Logging
+  (2026-08-23) ist für eine echte `similarity_threshold`-Kalibrierung
+  ungeeignet (Hit/Miss wird tautologisch aus dem Vergleich mit dem
+  aktuellen Threshold selbst abgeleitet) — AudD-Identifikationen sind die
+  bessere Referenz, siehe ARCHITECTURE.md/README.md.
 
 ## 2026-08-24
 

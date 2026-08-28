@@ -118,14 +118,20 @@ DEFAULTS = {
         # verhält sich dadurch exakt wie vor diesem Feature (alles Deutsch).
         "category_languages": {},
     },
-    # Song-Erkennung Phase 1 (siehe ARCHITECTURE.md, Abschnitt
-    # "Song-Erkennung", und python/song_fingerprint.py): lokaler
-    # Chromaprint-Fingerprint-Cache, noch OHNE Cloud-Lookup (Phase 2).
-    # Default AUS wie jedes neue Feature.
+    # Song-Erkennung (siehe ARCHITECTURE.md, Abschnitt "Song-Erkennung",
+    # und python/song_fingerprint.py): lokaler Chromaprint-Fingerprint-
+    # Cache (Phase 1) + optionaler AudD-Cloud-Lookup bei Cache-Miss
+    # (Phase 2). Default AUS wie jedes neue Feature.
     "song_recognition": {
         "enabled": False,
         "interval_seconds": 45.0,
-        "snippet_seconds": 11.0,  # < AudDs 12s-Limit, bewusster Vorgriff auf Phase 2
+        "snippet_seconds": 11.0,  # < AudDs 12s-Limit
+        # Eigener Schalter, UNABHÄNGIG von "enabled" oben: lokales
+        # Fingerprinting kostet nichts, ein Cloud-Lookup schon (AudD-
+        # Kontingent) -- wer Phase 1 schon nutzt, soll nicht überraschend
+        # anfangen, für jeden neuen Song Cloud-Requests abzusetzen. Greift
+        # nur, wenn zusätzlich AUDD_API_TOKEN gesetzt ist (siehe .env).
+        "cloud_lookup_enabled": False,
         # Platzhalter, NICHT empirisch kalibriert (siehe SESSION.md-Muster
         # bei stt_filter.confidence_threshold 0.75) -- vor produktivem
         # Einsatz gegen echtes Stream-Audio nachjustieren.
@@ -307,6 +313,7 @@ def update(prebuffer_seconds=None, prebuffer_count=None, import_url=None,
            song_recognition_interval_seconds=None,
            song_recognition_snippet_seconds=None,
            song_recognition_similarity_threshold=None,
+           song_recognition_cloud_lookup_enabled=None,
            update_check_enabled=None) -> dict:
     """Aktualisiert nur die übergebenen Felder (None = unverändert lassen),
     validiert. Wirft ValueError bei ungültigen Werten.
@@ -508,6 +515,8 @@ def update(prebuffer_seconds=None, prebuffer_count=None, import_url=None,
             if not (lo <= song_recognition_similarity_threshold <= hi):
                 raise ValueError(f"song_recognition_similarity_threshold muss zwischen {lo} und {hi} liegen.")
             sr["similarity_threshold"] = song_recognition_similarity_threshold
+        if song_recognition_cloud_lookup_enabled is not None:
+            sr["cloud_lookup_enabled"] = bool(song_recognition_cloud_lookup_enabled)
 
         if update_check_enabled is not None:
             data["update_check"]["enabled"] = bool(update_check_enabled)

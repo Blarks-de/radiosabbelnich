@@ -152,6 +152,10 @@ services:
       - NEWS_MP3_FOLDER_HOST=${NEWS_MP3_FOLDER:-./data/news_mp3}
       - VOSK_MODEL_FOLDER_HOST=${VOSK_MODEL_FOLDER:-./data/vosk-model-de}
       - MUSIC_LIBRARY_FOLDER_HOST=${MUSIC_LIBRARY_FOLDER:-./data/music_library}
+      # Song-Erkennung Phase 2 (song_fingerprint.py, AudD-Cloud-Lookup) --
+      # leer/nicht gesetzt lässt Phase 2 inaktiv, kein Absturz, siehe
+      # env.example.
+      - AUDD_API_TOKEN=${AUDD_API_TOKEN}
     ports:
       - "${WEBUI_PORT:-5000}:5000"
     volumes:

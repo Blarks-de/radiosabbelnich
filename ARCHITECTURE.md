@@ -295,13 +295,14 @@ thread-übergreifend sicher sind — dasselbe Muster wie bei
 
 ## Song-Erkennung (song_fingerprint.py)
 
-Phase 1 (Stand dieses Abschnitts): erkennt WIEDERHOLTE Musikstücke per
-lokalem Chromaprint-Fingerprint-Cache, noch OHNE Cloud-Anbindung (Phase 2,
-AudD, noch nicht implementiert — `on_unknown_fingerprint()` ist bislang nur
-ein loggender Stub). Komplett getrennt von `fingerprint.py`/
-`fingerprints.db` oben: andere Domäne (Musikstücke statt wiederkehrende
-Sprache-Clips/Jingles), eigene DB-Datei (`song_fingerprints.db`), eigenes
-Matching-Verfahren.
+Phase 1: erkennt WIEDERHOLTE Musikstücke per lokalem Chromaprint-
+Fingerprint-Cache. Phase 2 (seit diesem Abschnitt): identifiziert einen bei
+Phase 1 unbekannten Song optional per AudD-Cloud-Lookup
+(`song_recognition.cloud_lookup_enabled` UND `AUDD_API_TOKEN` gesetzt, siehe
+unten) — `on_unknown_fingerprint()` ist dafür kein reiner Logging-Stub mehr.
+Komplett getrennt von `fingerprint.py`/`fingerprints.db` oben: andere
+Domäne (Musikstücke statt wiederkehrende Sprache-Clips/Jingles), eigene
+DB-Datei (`song_fingerprints.db`), eigenes Matching-Verfahren.
 
 **`song_recognition.enabled` defaultet auf `false` UND fehlt trotzdem oft
 als Key in einer bestehenden `data/settings.json`** — das ist kein Bug,
@@ -320,6 +321,10 @@ zusätzlich explizit "Song-Erkennung: aktiv/inaktiv" (statt nur den
 DB-Pfad wie zuvor), damit der aktive/inaktive Zustand nicht erst über
 `settings.json` oder Log-Rotations-Archäologie rekonstruiert werden muss.
 
+Dem Diagramm unten vorgeschaltet: das Hörer-Gate (siehe unten) — ohne
+Hörer auf dem Restream-Mount passiert hier gar nichts, auch `feed()` wird
+dann nicht aufgerufen.
+
 ```mermaid
 flowchart LR
     PCM["PCM-Fenster<br/>(label == music)"] -->|feed| Ring["Ringpuffer<br/>(snippet_seconds tief)"]
@@ -327,8 +332,15 @@ flowchart LR
     FP --> Cmp{"Ähnlich zum letzten<br/>Song DIESES Senders?"}
     Cmp -->|ja| Skip["nichts weiter tun"]
     Cmp -->|nein| DB["SongFingerprintDB.match_or_learn()<br/>Sliding-Offset-Vergleich gegen alle Songs"]
-    DB -->|Treffer| Hit["play_count++, last_seen/station_id aktualisieren"]
-    DB -->|kein Treffer| Miss["neuer Eintrag + on_unknown_fingerprint() (Stub)"]
+    DB -->|Treffer| Hit["play_count++, last_seen/station_id aktualisieren<br/>_current_song aus title/artist (falls bekannt)"]
+    DB -->|kein Treffer| Miss["neuer Eintrag (title/artist NULL)"]
+    Miss --> Gate{"cloud_lookup_enabled UND<br/>AUDD_API_TOKEN gesetzt?"}
+    Gate -->|nein| Stub["nur Logging (Phase-1-Verhalten)"]
+    Gate -->|ja| Cooldown{"AUDD_MIN_INTERVAL_SECONDS<br/>seit letztem Call verstrichen?"}
+    Cooldown -->|nein| Skip2["Anfrage übersprungen, geloggt"]
+    Cooldown -->|ja| AudD["AudD-Upload (multipart POST)"]
+    AudD -->|Treffer| SetMeta["set_cloud_metadata()<br/>+ _current_song aktualisieren"]
+    AudD -->|kein Treffer/Fehler| None2["_current_song bleibt leer"]
 ```
 
 Warum Chromaprint statt desselben Constellation-Map-Eigenbaus wie
@@ -391,6 +403,111 @@ Hauptloop komplett (siehe "Radio-/Musik-Modus" unten), der Hook-Punkt
 (`else`-Zweig bei `label != "speech"`) wird im Library-Modus dadurch nie
 erreicht, kein Extra-Gate nötig.
 
+**AudD-Cloud-Lookup (Phase 2, `audd_lookup()`/`on_unknown_fingerprint()`):**
+läuft NUR bei einem lokalen Cache-Miss (Phase 1 hat bereits eine neue,
+title/artist=NULL-Zeile angelegt) UND nur, wenn sowohl
+`song_recognition.cloud_lookup_enabled` als auch `AUDD_API_TOKEN` (aus der
+Umgebung, einmal beim Modul-Import gelesen — Grund: keine Secrets in
+`settings.json`, das Web-Interface hat keine Auth, siehe CLAUDE.md) gesetzt
+sind — fehlt eine der beiden Voraussetzungen, unverändertes Phase-1-
+Verhalten (reines Logging). Kein neuer pip-Dependency: das WAV wird per
+`wave`-Modul in einen `io.BytesIO` geschrieben (kein Temp-File nötig wie bei
+`compute_fingerprint()`, da `urllib` kein Dateisystem-Objekt braucht), der
+`multipart/form-data`-Body für den Datei-Upload wird von Hand gebaut
+(`_multipart_encode()`) statt einer zusätzlichen Abhängigkeit wie
+`requests` — gleiche Begründung wie beim Rest des Projekts
+(`update_check.py`/`station_import.py` nutzen ebenfalls nur
+`urllib.request`). Bei Erfolg schreibt `SongFingerprintDB.set_cloud_metadata()`
+Titel/Interpret/Album/Jahr über den `fingerprint_hash`-Text in die von
+`match_or_learn()` angelegte Zeile zurück. `title`/`artist` existierten als
+Spalten bereits (waren nur immer `NULL`); `album`/`year` sind neu (Nutzer-
+Wunsch, siehe SESSION.md) — Migration per `PRAGMA table_info()` +
+`ALTER TABLE ... ADD COLUMN` in `_init_schema()`, identisches Muster wie
+die `bpm`-Spalte in `music_scan.py` (SQLite kennt kein "ADD COLUMN IF NOT
+EXISTS", `CREATE TABLE IF NOT EXISTS` allein reicht bei einer schon
+bestehenden Tabelle nicht). Von AudD zusätzlich gelieferte Felder
+(Streaming-Links, Label) werden weiterhin NICHT persistiert — kein
+Anwendungsfall dafür. `match_or_learn()` liefert Album/Jahr auch bei einem
+lokalen Hit mit (aus der DB, nicht erneut von AudD abgefragt) — ein einmal
+per Cloud identifizierter Song zeigt sie deshalb bei jeder Wiederholung
+weiter an, auch ganz ohne erneuten Cloud-Call.
+
+**Sicherheitsnetz gegen Kontingent-Verbrauch**: `similarity_threshold` ist
+weiterhin ein unkalibrierter Platzhalter (siehe unten) — greift er in der
+Praxis zu locker/streng, könnte `match_or_learn()` denselben Song
+wiederholt als "neu" einstufen und bei JEDEM Intervall einen bezahlten
+AudD-Request auslösen. `AUDD_MIN_INTERVAL_SECONDS` (60s, Modulkonstante,
+kein Settings-Wert — gleiche Kategorie wie `MAX_OFFSET`/`MIN_OVERLAP`)
+erzwingt einen Mindestabstand zwischen Cloud-Calls, unabhängig davon, wie
+oft `on_unknown_fingerprint()` aufgerufen wird.
+
+**Live-Anzeige (`_current_song`, `SongRecognizer.get_current_song()`)**:
+wird bei jedem lokalen Hit (aus dem in der DB gespeicherten title/artist,
+kann dort weiterhin `None` sein, falls der Song nie per Cloud identifiziert
+wurde) UND nach einem erfolgreichen AudD-Identify gesetzt, sonst (kein
+Titel bekannt) auf `None` — lock-geschützt wie `_last_fingerprint`, aus
+demselben Grund bei JEDEM `reset()` mitgeleert (echter Streamwechsel darf
+nicht den Song des ALTEN Senders weiter anzeigen). `webui.py`s
+`_build_status()` liest das im Radio-Zweig (`state.song_recognizer`, dort
+registriert von `radiosabbelnich.py`s `main()`, analog `news_break_tags`/
+`music_tags`) und befüllt `now_playing_tags` — derselbe Anzeige-Slot, den
+News-Pause und Musiksammlung-Modus schon nutzen, keine neuen Templates/JS
+nötig. Läuft `song_recognition.enabled`, aber `get_current_song()` liefert
+`None`, bleibt `now_playing_tags` NICHT einfach `None` (Nutzer-Wunsch,
+"zum Debuggen sichtbar statt still leer") — stattdessen ein Dict mit
+`pending: true` (aktiv, wartet auf den nächsten Treffer) oder zusätzlich
+`paused_no_listeners: true`, falls das Hörer-Gate unten gerade greift. Ohne
+`enabled` bleibt es unverändert bei `None`, kein Anzeige-Rauschen für
+Installationen ohne Song-Erkennung. Die JS-Seite (`applyStatus()`) rendert
+das über zwei neue i18n-Keys (`idx_song_pending`/
+`idx_song_paused_no_listeners`) in dieselbe Titel-Zeile, statt eines echten
+Songtitels.
+
+**Hörer-Gate (`ListenerGate`, Nutzer-Wunsch)**: Song-Erkennung (lokales
+Fingerprinting UND Cloud-Lookup) läuft nur, solange
+`ListenerGate.has_listeners()` `True` liefert — ohne Publikum auf dem
+Restream-Mount kostet die Analyse CPU (fpcalc) bzw. AudD-Kontingent ohne
+Gegenwert. Gate sitzt im Hauptloop VOR `song_recognizer.feed()` (siehe
+`radiosabbelnich.py`), nicht in `song_fingerprint.py` selbst — spart damit
+auch das Auffüllen des Ringpuffers, nicht nur den teuren Analyse-Schritt.
+Pollt Icecasts `/admin/listclients`-Route (dieselbe Route/dieselben
+`ICECAST_ADMIN_*`-Werte wie `webui._fetch_listeners()`, hier bewusst
+eigenständig nachgebaut statt importiert — `song_fingerprint.py` bleibt ein
+reines Audio-/Matching-Modul ohne HTTP-Server-Abhängigkeit) alle
+`LISTENER_CHECK_INTERVAL_SECONDS` (60s) in einem eigenen Hintergrund-Thread,
+NICHT synchron im Hauptloop — eine blockierende Netzwerk-Abfrage dort wäre
+genau die Art Hauptloop-Stall, die der ganze Async-Aufbau in diesem Modul
+vermeiden soll (vgl. `sync_prebuffer()`, "Offene Punkte" unten). Fail-open
+bei fehlender Konfiguration, falschen Credentials oder Timeout — ein
+Admin-API-Problem soll die Song-Erkennung nicht stillschweigend lahmlegen.
+Erster Check verzögert (`LISTENER_CHECK_STARTUP_DELAY_SECONDS`, 15s): live
+beim Rollout gefunden, dass ein Check direkt beim Konstruktor-Aufruf
+(also VOR der eigentlichen Icecast-Source-Verbindung des Hauptloops) einen
+noch nicht existierenden Mount abfragt — Icecast antwortet dafür mit
+`400 Bad Request` statt einer leeren Hörerliste. Kein Funktionsfehler
+(Fail-Open griff korrekt), aber unnötige Warnung bei jedem Start.
+
+**"Stop" statt "Pause" (`on_change`-Callback, Nutzer-Korrektur nach dem
+ersten Rollout)**: ein simples "bei 0 Hörern kein `feed()`/
+`maybe_recognize_async()` mehr aufrufen" (erste Version dieses Features)
+lässt den Ringpuffer mit dem Audio-Stand VOR dem Verschwinden der letzten
+Hörer eingefroren stehen. Kommt später ein Hörer zurück, enthält der
+Puffer dann fast ausschließlich veraltetes Vor-Pause-Audio (nur ein
+einzelnes frisches Fenster kommt pro `feed()`-Aufruf dazu, der Puffer
+braucht `snippet_seconds`, um sich komplett zu erneuern) — die erste
+Analyse nach der Rückkehr liefe auf einem Frankenstein-Schnipsel aus zwei
+Zeiträumen, potenziell ein sinnloser Fingerprint samt unnötigem AudD-Call.
+`ListenerGate` bekommt deshalb einen optionalen `on_change`-Callback,
+aufgerufen bei JEDEM tatsächlichen Wechsel des Hörer-Zustands (nicht bei
+jedem Poll, nur beim Flip) — `radiosabbelnich.py` verdrahtet ihn so, dass
+er bei "keine Hörer mehr" `song_recognizer.reset()` auslöst: derselbe
+Reset wie bei einem echten Streamwechsel (Ringpuffer leeren,
+`_last_fingerprint`/`_last_station_id`/`_current_song` zurücksetzen). Nach
+Rückkehr eines Hörers startet die Erkennung dadurch bewusst komplett neu
+(erst wieder `snippet_seconds` Puffer sammeln, dann `interval_seconds`
+abwarten) statt mit kontaminierten Altdaten weiterzumachen — exakt das vom
+Nutzer gewünschte "Stop", nicht "Pause".
+
 **Kalibrierungs-Logging (`song_match_log`, seit 2026-08-23):**
 `similarity_threshold` (Default 0.65) ist wie oben erwähnt ein
 ungeprüfter Platzhalter. `match_or_learn()` protokolliert deshalb JEDEN
@@ -409,6 +526,20 @@ DERSELBEN Station) — die laufen nie gegen den Cache, sind also kein
 `song_fingerprints`/`fingerprints.db` ohne Pruning (siehe "Offene
 Punkte") — hier unkritisch, weil nur für eine begrenzte
 Sammelphase gedacht.
+
+**Wichtige Einschränkung, live am echten Datensatz gefunden (siehe
+SESSION.md, Eintrag zu diesem Gespräch)**: `is_hit` in `song_match_log`
+wird direkt aus `best_score >= similarity_threshold` abgeleitet (siehe
+`match_or_learn()`) — die Hit/Miss-Verteilung, die
+`check_song_calibration.py` auswertet, ist damit tautologisch, KEINE
+unabhängige Ground Truth. Sie zeigt zwangsläufig eine "perfekte Lücke"
+exakt am aktuellen Threshold, egal wie lange gesammelt wird — das
+bestätigt nur, dass der Code tut, was er soll, sagt aber nichts darüber
+aus, ob der Threshold richtig sitzt. Der AudD-Cloud-Lookup oben liefert
+eine echte externe Referenz (AudD sagt unabhängig vom lokalen Threshold,
+welcher Song es ist) und ist der bessere Weg zu einer fundierten
+Kalibrierung — bislang aber nicht dafür automatisiert ausgewertet, siehe
+"Offene Punkte".
 
 ## Logging
 
@@ -1113,14 +1244,28 @@ hat vollen Zugriff.
 - `sync_prebuffer()`/`pb.stop()` können den Hauptloop blockieren (bis
   ~9 s pro Quelle, siehe Prebuffering oben).
 - Das Web-Interface zeigt keinen Stream-Health-Status.
-- Die Fingerprint-DB wächst ohne Pruning. Gleiches gilt für die neue
-  `song_fingerprints.db` (Song-Erkennung Phase 1) — zusätzlich läuft deren
-  Matching per Brute-Force gegen ALLE gecachten Songs, was nur bis zu
-  einigen hundert/tausend Einträgen praktikabel bleibt (kein Index/keine
-  Kandidaten-Vorauswahl). `similarity_threshold` (Default 0.65) ist ein
-  Platzhalter, noch nicht gegen echtes Stream-Audio kalibriert (siehe
-  README/SESSION.md). Cloud-Anbindung bei Cache-Miss (Phase 2, AudD) fehlt
-  noch komplett — `on_unknown_fingerprint()` ist nur ein loggender Stub.
+- Die Fingerprint-DB wächst ohne Pruning. Gleiches gilt für die
+  `song_fingerprints.db` (Song-Erkennung) — zusätzlich läuft deren Matching
+  per Brute-Force gegen ALLE gecachten Songs, was nur bis zu einigen
+  hundert/tausend Einträgen praktikabel bleibt (kein Index/keine
+  Kandidaten-Vorauswahl). `similarity_threshold` (Default 0.65) ist
+  weiterhin ein Platzhalter, noch nicht gegen echtes Stream-Audio
+  kalibriert — das bisherige `song_match_log`-Kalibrierungs-Logging ist
+  dafür ungeeignet (tautologisch, siehe Abschnitt "Song-Erkennung" oben);
+  die seit Phase 2 verfügbaren AudD-Identifikationen wären die bessere
+  Datenquelle, werden dafür aber noch nicht automatisiert ausgewertet.
+  AudD-Cloud-Lookup (Phase 2) selbst ist implementiert (inkl. Album/Jahr
+  seit dem entsprechenden Nutzer-Wunsch, siehe SESSION.md), aber: keine
+  Vorbefüllung der Referenz-DB aus eigenen ID3-Tags (separates, größeres
+  Vorhaben, siehe README-Roadmap-Notiz), und der feste 60s-Cooldown
+  (`AUDD_MIN_INTERVAL_SECONDS`) ist eine grobe
+  Sicherheitsleitplanke, kein echtes Kontingent-Tracking (kein Tages-
+  Limit-Zähler o.ä.). Das Hörer-Gate (`ListenerGate`) pollt ebenfalls nur
+  alle 60s (`LISTENER_CHECK_INTERVAL_SECONDS`) — nach einem frischen
+  Hörer-Zulauf kann es dadurch bis zu 60s dauern, bis Song-Erkennung
+  überhaupt wieder anspringt, PLUS danach `snippet_seconds`, bis der beim
+  Stop geleerte Ringpuffer wieder voll ist (siehe "Stop statt Pause" oben)
+  — kein Instant-Trigger auf den ersten Client-Connect.
 - Die Config-Seite skaliert nicht auf mehrere hundert Sender (keine
   Suche, kein Bulk-Delete).
 - STT-Sprachfilter: `confidence_threshold=0.75` ist an einem kleinen

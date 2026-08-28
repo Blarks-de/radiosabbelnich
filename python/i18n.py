@@ -109,6 +109,8 @@ _BASE_STRINGS = {
     'idx_filter_off': 'Filter off',
     'idx_listeners_unavailable': 'Listener info unavailable.',
     'idx_listeners_none': 'No listeners currently connected.',
+    'idx_song_pending': '🔍 not recognized yet',
+    'idx_song_paused_no_listeners': '⏸ song recognition paused (no listeners)',
     'idx_listeners_col_ip': 'IP',
     'idx_listeners_col_since': 'Connected since',
     'idx_listeners_col_client': 'Client',

@@ -1,3 +1,5 @@
+> **Hinweis (2026-08-28):** Dieses Log wird nicht mehr aktiv fortgeschrieben. Neue Einträge stehen ab jetzt zentral in `/home/blarks/SESSION.md` (Abschnitt "Konsolidierte Projekt-Zusammenfassungen"). Diese Datei bleibt als historisches Archiv erhalten.
+
 # RadioSabbelNich — Session-Log
 
 Laufendes Protokoll der Arbeit an diesem Projekt (chronologisch, neueste
@@ -9276,3 +9278,327 @@ API/HTML-Inspektion, das deckt den kompletten Server-seitigen Teil ab,
 das reine Client-JS-Reveal (`style.display = 'block'`) ist trivial genug,
 um es ohne visuelle Prüfung als korrekt zu werten. Kein neuer "Jetzt
 prüfen"-Knopf ergänzt (nicht angefragt, hätte den Scope erweitert).
+
+## 2026-08-28 — Song-Erkennung Phase 2: AudD-Cloud-Anbindung
+
+**Auslöser**: Nutzer fragte, ob nach einer Woche Sammelzeit für
+`song_match_log` genug Daten für eine `similarity_threshold`-Kalibrierung
+vorliegen. Beim Prüfen der Live-DB (`check_song_calibration.py` gegen
+`data/song_fingerprints.db`, 4747 Zeilen, 24.-28.08.) fiel auf: die
+Hit/Miss-Trennung im Histogramm liegt exakt bei 0.6500/0.6499 — kein Zufall,
+sondern **tautologisch**, weil `is_hit` in `match_or_learn()`
+(`song_fingerprint.py`) direkt aus `best_score >= similarity_threshold`
+gesetzt wird. Egal wie lange gesammelt wird, das Logging kann den
+Threshold, den es kalibrieren soll, nicht unabhängig bewerten. Nutzer
+gewählte Konsequenz (AskUserQuestion, Option 2 von 2): statt weiter
+Daten zu sammeln, direkt AudD als echte externe Referenz anbinden — Phase 2
+der ursprünglich schon im README/ARCHITECTURE.md als offener Punkt
+vermerkten Roadmap, bislang nur `on_unknown_fingerprint()`-Stub.
+
+Plan vorab vorgelegt (Design-Entscheidungen: kein neuer pip-Dependency,
+Token in `.env` statt `settings.json`, eigener `cloud_lookup_enabled`-
+Schalter, kein DB-Schema-Wechsel, fester In-Process-Cooldown, Anzeige über
+bestehenden `now_playing_tags`-Mechanismus) und vom Nutzer freigegeben,
+bevor implementiert wurde.
+
+**Umsetzung**:
+- `python/song_fingerprint.py`: `AUDD_API_TOKEN` (aus der Umgebung, einmal
+  beim Modul-Import gelesen), `_multipart_encode()` (Multipart-Body von
+  Hand, kein `requests`), `audd_lookup()` (WAV in `io.BytesIO`, POST an
+  `https://api.audd.io/recognize/`, `AUDD_MIN_INTERVAL_SECONDS=60`-Cooldown
+  per Lock+Timestamp, defensiv wie `compute_fingerprint()` — jeder Fehler
+  gibt `None` zurück statt zu werfen). `SongFingerprintDB.set_cloud_metadata()`
+  neu (kurzlebige Connection, gleiches Muster wie `delete_fingerprint()`) —
+  UPDATE über `fingerprint_hash`. `on_unknown_fingerprint()` umgebaut: ohne
+  `cloud_lookup_enabled`/Token unverändertes Stub-Verhalten, sonst
+  `audd_lookup()` + `set_cloud_metadata()`, gibt Ergebnis-Dict zurück.
+  `SongRecognizer` neu: `_current_song`/`get_current_song()`/
+  `_set_current_song()` (lock-geschützt wie `_last_fingerprint`), gesetzt
+  bei jedem lokalen Hit UND nach Cloud-Erfolg, geleert in `reset()`.
+  `maybe_recognize_async()` bekommt neuen Parameter `cloud_lookup_enabled`.
+- `python/settings_store.py`: `song_recognition.cloud_lookup_enabled`
+  (Default `False`, eigener Schalter UNABHÄNGIG von `enabled` — Cloud-
+  Lookups kosten Kontingent, lokales Fingerprinting nicht), `update()`-
+  Parameter + Validierung nach bestehendem Boolean-Muster.
+- `python/radiosabbelnich.py`: `state.song_recognizer = song_recognizer`
+  (analog `news_break_tags`/`music_tags` — webui.py braucht Lesezugriff),
+  `cloud_lookup_enabled` an `maybe_recognize_async()` durchgereicht.
+- `python/webui.py`: `_build_status()`, Radio-Zweig — `now_playing_tags`
+  aus `state.song_recognizer.get_current_song()` befüllt, wenn ein Song
+  erkannt ist (ergänzt das bestehende ICY-`now_playing`, ersetzt es nicht).
+  Kein neues Template/JS nötig, bestehender Rendering-Pfad
+  (`now-playing-title`/`now-playing-subtitle`) wird wiederverwendet.
+- `.env`/`env.example`: `AUDD_API_TOKEN` (leer = Phase 2 inaktiv, kein
+  Absturz). `docker-compose.yml`: Passthrough in den
+  `radiosabbelnich`-Service.
+- README.md (DE+EN, "Song-Erkennung"-Abschnitt + `.env`-Variablentabelle),
+  ARCHITECTURE.md ("Song-Erkennung"-Abschnitt inkl. erweitertem
+  Mermaid-Diagramm, neue Absätze zu AudD-Anbindung/Cooldown/Live-Anzeige,
+  Tautologie-Hinweis zu `song_match_log`, "Offene Punkte") und
+  CHANGELOG.md ("Aktueller Stand" + neuer Datumsabschnitt) nachgezogen.
+
+**Verifiziert** (isoliert, `python/*.py` flach in Temp-Verzeichnis kopiert,
+echtes Deployment nicht angefasst — echter `AUDD_API_TOKEN` fehlt noch,
+Nutzer muss ihn sich unter audd.io besorgen und in `.env` eintragen, siehe
+Voraussetzung im Plan):
+- `python3 -m py_compile` über alle vier geänderten Dateien: keine
+  Syntaxfehler.
+- `SongFingerprintDB.set_cloud_metadata()` gegen eine Wegwerf-`sqlite3`-DB:
+  vorher `(None, None, 'teststation', 1)`, nach dem Call
+  `('Testtitel', 'Testinterpret', 'teststation', 1)` — nur title/artist
+  geändert, station_id/play_count unangetastet.
+- `audd_lookup()` mit einem Fake-Token gegen einen 1s-Stille-Clip: erster
+  Call erreichte AudD tatsächlich (kein `URLError`/Timeout im Log trotz
+  DEBUG-Pegel, also echte HTTP-Antwort, kein Netzwerk-/Parse-Fehlerpfad)
+  und lieferte korrekt `None` zurück (AudD lehnt den ungültigen Token ab,
+  `status != "success"`), kein Crash. Zweiter Call sofort danach: durch
+  `AUDD_MIN_INTERVAL_SECONDS`-Cooldown blockiert, ebenfalls `None`, ohne
+  zweiten Verbindungsversuch.
+- **Noch NICHT verifiziert** (fehlender echter Token): eine tatsächliche
+  erfolgreiche AudD-Identifikation, die Live-Anzeige über eine echte
+  laufende `/api/status`-Instanz, der reale Container-Rebuild/-Neustart —
+  das folgt erst, nachdem der Nutzer einen `AUDD_API_TOKEN` besorgt und
+  eingetragen hat, und mit seiner ausdrücklichen Freigabe (siehe Plan,
+  Verifikationsschritt 4/5, gleiches Vorgehen wie beim Update-Check-Feature
+  2026-08-24).
+
+**Bewusst NICHT gemacht**: keine Vorbefüllung der Referenz-DB aus eigenen
+ID3-Tags (separater, größerer Roadmap-Punkt, nicht Teil dieser Anfrage).
+Kein DB-Schema-Wechsel für Album/Jahr (AudD liefert sie, werden nur für die
+Live-Anzeige durchgereicht, nicht persistiert — kein Anwendungsfall dafür).
+Keine automatisierte Nutzung der AudD-Identifikationen zur
+`similarity_threshold`-Kalibrierung (als Idee in ARCHITECTURE.md/
+CHANGELOG.md vermerkt, aber eigenständiges Folge-Vorhaben). Kein
+`/config`-UI-Schalter für `cloud_lookup_enabled` (Phase 1 hat ebenfalls
+keinen für `enabled`, gleiche bestehende Lücke, nicht in dieser Änderung
+geschlossen). Kein `VERSION`-Bump/Commit (Nutzer hat noch keinen
+angefordert).
+
+## 2026-08-28 (Fortsetzung) — Live-Rebuild von Phase 2, Debug-Anzeige, Hörer-Gate
+
+**Live-Rollout Phase 2**: `AUDD_API_TOKEN` vom Nutzer in `.env` eingetragen,
+`song_recognition.cloud_lookup_enabled` in `data/settings.json` auf `true`
+gesetzt, `docker compose up -d --build radiosabbelnich`. Container startete
+sauber (kein Neustart-Loop, "Song-Erkennung: aktiv" geloggt). Erster echter
+Cache-Miss um 11:55:22 auf Sender `105-5-spreeradio-80er` → AudD-
+Identifikation erfolgreich: *"Rainbirds" – "Blueprint (7\" Version)"*.
+Bestätigt über drei unabhängige Wege: DEBUG-Log
+(`🎵 AudD-Identifikation auf Sender '105-5-spreeradio-80er': 'Rainbirds' –
+'Blueprint (7" Version)'`), `/api/status` (`now_playing_tags` zeigte genau
+diesen Titel/Interpret), `song_fingerprints.db` (Zeile 1381, title/artist
+korrekt persistiert). Damit ist Song-Erkennung Phase 2 nicht nur isoliert,
+sondern auch am echten Betrieb Ende-zu-Ende verifiziert.
+
+**Nutzer-Nachfrage danach**: Versionsanzeige (`v1.2.32 build 2026-08-24`)
+hatte sich trotz Neustart nicht geändert — kein Bug, sondern erwartetes
+Verhalten: `VERSION` wird laut CLAUDE.md-Konvention erst bei einem
+tatsächlichen Commit gebumpt, nicht beim Rebuild/Neustart. Klargestellt,
+kein Code geändert.
+
+**Auslöser für die beiden folgenden Änderungen**: Nutzer fragte, ob die
+"Jetzt läuft"-Anzeige fortlaufend aktualisiert wird (ja, bestätigt: der
+bestehende 1s-Intervall-Poll (`setInterval(refresh, 1000)`, Sicherheitsnetz
+für Werte wie Hörerzahlen, die ohne `SwitcherState._version`-Sprung
+wechseln) liest `_build_status()` bei jedem Tick frisch, mein
+`now_playing_tags`-Feld läuft also automatisch mit, ohne eigene
+Versions-Bump-Verdrahtung), wollte dann aber zum Debuggen eine sichtbare
+"nicht erkannt"-Anzeige statt der bisherigen stillen Leerzeile — UND
+mittendrin per Zwischennachricht: Song-Erkennung soll pausieren, solange
+niemand zuhört (spart CPU/AudD-Kontingent).
+
+**Umsetzung Debug-Anzeige**:
+- Neue i18n-Keys `idx_song_pending`/`idx_song_paused_no_listeners`
+  (`i18n.py`-EN-Basis + `language/Deutsch.lng`).
+- `webui.py` `_build_status()`, Radio-Zweig: `now_playing_tags` bleibt bei
+  `song_recognition.enabled=false` unverändert `None` (kein Anzeige-Rauschen
+  für Installationen ohne das Feature). Bei `enabled=true` UND keinem
+  erkannten Song liefert es jetzt `{"title": None, ..., "pending": True,
+  "paused_no_listeners": <bool>}` statt `None`.
+- `applyStatus()`-JS: rendert `npTags.title` wie bisher, sonst
+  `t('idx_song_paused_no_listeners')` bzw. `t('idx_song_pending')` in
+  dieselbe Titel-Zeile. Subtitle-Zeile (Album/Jahr) bleibt in beiden
+  Debug-Fällen leer.
+
+**Umsetzung Hörer-Gate**:
+- Neue Klasse `song_fingerprint.ListenerGate`: Hintergrund-Thread pollt
+  Icecasts `/admin/listclients`-Route alle `LISTENER_CHECK_INTERVAL_SECONDS`
+  (60s, eigene Modulkonstante), zwischengespeicherter Bool
+  (`has_listeners()`), fail-open (Default `True`) bei fehlender
+  Konfiguration/Timeout/falschen Credentials/sonstigem Fehler — bewusst NICHT
+  über `webui._fetch_listeners()` importiert (Kopplung an den HTTP-Server
+  wollte ich für dieses reine Audio-/Matching-Modul vermeiden), stattdessen
+  dieselbe Route/Logik eigenständig nachgebaut (Auth per `base64`, XML-Parse
+  per `xml.etree.ElementTree`).
+- `radiosabbelnich.py`: `listener_gate` neben `song_db`/`song_recognizer`
+  konstruiert (aus `args.icecast_admin_*`, dieselben Werte wie
+  `icecast_cfg` für webui.py, hier aber VOR dem `if args.webui_port`-Block
+  gebraucht), an `state.song_listener_gate` durchgereicht (webui.py braucht
+  das für den Debug-Anzeige-Zustand oben). Hauptloop-Gate erweitert:
+  `if song_recognizer and song_cfg["enabled"] and (not listener_gate or
+  listener_gate.has_listeners())` — ohne Hörer wird weder `feed()` noch
+  `maybe_recognize_async()` aufgerufen, spart also auch das Auffüllen des
+  Ringpuffers, nicht nur den teuren fpcalc-/AudD-Schritt.
+
+**Verifiziert** (isoliert, `python/*.py` + `language/` flach in
+Temp-Verzeichnis, echtes Deployment noch nicht angefasst):
+- `python3 -m py_compile` über alle vier geänderten Dateien: keine
+  Syntaxfehler.
+- `ListenerGate` gegen drei Fälle: nicht konfiguriert → fail-open `True`,
+  kein Hintergrund-Thread; falsche Credentials gegen den ECHTEN laufenden
+  Icecast (Host-Port 8000) → `_fetch_listener_count()` liefert `None`
+  (echter `HTTP 401`, sauber abgefangen, kein Crash); echte Credentials
+  gegen denselben echten Icecast/Mount → liefert einen echten Zähler
+  (`1`, ein tatsächlich verbundener Hörer zum Testzeitpunkt).
+- `webui.py` isoliert importiert (Dummy-`aubio`-Modul für die sonst fehlende
+  Kompilat-Abhängigkeit von `music_bpm.py`, unabhängig von dieser Änderung)
+  — die echten `_check_i18n_coverage()`-Aufrufe aus dem Modul-Import liefen
+  durch, bestätigt: `t('idx_song_pending')`/
+  `t('idx_song_paused_no_listeners')` sind über die reale Regex erfasst und
+  in `i18n.STRINGS` vorhanden.
+- `_build_status()` mit Fake-`SongRecognizer`/-`ListenerGate`-Objekten gegen
+  vier Fälle geprüft: Feature aus → `now_playing_tags=None`; an, kein Song,
+  kein Gate → `pending=True, paused_no_listeners=False`; an, kein Song, Gate
+  ohne Hörer → `paused_no_listeners=True`; an, Song erkannt → normales
+  Titel/Interpret-Dict wie vorher. Alle vier korrekt.
+
+**Live-Rollout**: Nutzer gab Freigabe, `docker compose up -d --build
+radiosabbelnich`. Container startete sauber, aber im Log direkt beim Start:
+`⚠ Listener-Gate: Icecast-Admin-Abfrage fehlgeschlagen (HTTP Error 400: Bad
+Request)`. Ursache gefunden (manueller Nachbau desselben Requests im
+Container, direkt danach erfolgreich mit `Status 200`): Start-Timing-Rennen
+-- `ListenerGate`s Hintergrund-Thread fragt beim allerersten Check sofort
+nach Konstruktion ab, der Icecast-Mount `/radiosabbelnich.mp3` existiert zu
+dem Zeitpunkt aber noch nicht (Hauptloop hat noch keine Source-Verbindung
+aufgebaut) -- Icecast antwortet für einen nicht existierenden Mount mit
+`400` statt einer leeren Hörerliste. Kein Funktionsfehler: Fail-Open griff
+korrekt (Song-Erkennung lief unbeeinflusst weiter, `now_playing_tags` zeigte
+kurz danach bereits einen echten AudD-Treffer -- *"Heat Of The Moment" –
+"Asia"* --, `/api/status` bestätigte einen echten verbundenen Hörer), nur
+unnötige Warnung bei jedem Start. Fix: neue Konstante
+`LISTENER_CHECK_STARTUP_DELAY_SECONDS=15.0`, `_poll_loop()` wartet das vor
+dem allerersten Check ab (nachfolgende Checks unverändert alle 60s).
+Erneut `docker compose up -d --build radiosabbelnich` mit dem Fix, Log
+danach ohne die Start-Warnung. Erster (jetzt verzögerter) Check nach 15s
+korrekt: `🎧 Listener-Gate: keine Hörer mehr (0 Hörer) -- Song-Erkennung
+pausiert.`
+
+**Zweiter Live-Fund, echter Logikfehler (nicht nur Timing)**: `/api/status`
+zeigte trotz `0 Hörer` weiterhin `now_playing_tags` mit dem VORHER erkannten
+Song ("Into the Groove" – Madonna) statt des `paused_no_listeners`-
+Platzhalters. Ursache: `_build_status()` prüfte `get_current_song()` VOR
+dem Gate-Status -- `_current_song` auf `SongRecognizer` wird nur bei
+echtem `reset()` (Streamwechsel) geleert, nicht wenn das Hörer-Gate
+schließt, blieb also beliebig lange stehen, obwohl die Erkennung längst
+pausiert war. Fix: Reihenfolge in `_build_status()` getauscht -- Gate-
+Status (`paused_no_listeners`) wird jetzt VOR einem evtl. vorhandenen
+`get_current_song()`-Ergebnis geprüft. Isoliert verifiziert (Fake-
+Recognizer mit gesetztem Song + Fake-Gate ohne Hörer → korrekt
+`paused_no_listeners: true`, kein stale Titel mehr). Erneuter
+`docker compose up -d --build radiosabbelnich` mit diesem zweiten Fix.
+Verifiziert: `/api/status` zeigte danach korrekt `paused_no_listeners:
+true` statt des veralteten Titels.
+
+## 2026-08-28 (Fortsetzung) — Stop statt Pause (Nutzer-Korrektur)
+
+**Auslöser**: Nutzer meldete Bedenken direkt nach dem letzten Live-Test —
+"Pause" sei wegen des Puffers evtl. die falsche Strategie, ob "Stop"
+besser wäre. Zutreffend: die bisherige Umsetzung ließ bei 0 Hörern nur
+`feed()`/`maybe_recognize_async()` aus, der `SongRecognizer`-Ringpuffer
+blieb dabei mit dem Audio-Stand VOR dem letzten Hörer eingefroren stehen.
+Kommt später ein Hörer zurück, würde die erste Analyse auf einem
+Frankenstein-Schnipsel laufen (fast nur altes Audio + ein einzelnes
+frisches Fenster) -- potenziell ein sinnloser Fingerprint samt unnötigem
+AudD-Call. Direkt als echtes Problem bestätigt, nicht nur Geschmacksfrage.
+
+**Umsetzung**: `ListenerGate` bekommt einen optionalen `on_change`-
+Callback-Parameter (`Callable[[bool], None]`), aufgerufen in `_check_once()`
+bei JEDEM tatsächlichen Wechsel des Hörer-Zustands (nicht bei jedem Poll).
+`radiosabbelnich.py` verdrahtet ihn: `on_change=lambda has_listeners:
+(None if has_listeners else song_recognizer.reset())` -- bei "keine Hörer
+mehr" derselbe `reset()` wie bei einem echten Streamwechsel (Ringpuffer
+leeren, `_last_fingerprint`/`_last_station_id`/`_current_song`
+zurücksetzen). Nach Rückkehr eines Hörers startet die Erkennung dadurch
+komplett neu (`snippet_seconds` Puffer sammeln, dann `interval_seconds`
+abwarten), keine kontaminierten Altdaten.
+
+**Verifiziert** (isoliert, `python/*.py` in Temp-Verzeichnis): `python3 -m
+py_compile` fehlerfrei. Simulierter Hörer-Verlust (Ringpuffer vorher voll
+mit 3 Fenstern + gesetztem `_last_fingerprint`/`_current_song`, `on_change`
+manuell wie bei einem echten `_check_once()`-Übergang ausgelöst) →
+Ringpuffer danach `0/3`, `_last_fingerprint` und `get_current_song()`
+beide `None` -- Reset greift korrekt.
+
+**Bewusst NICHT gemacht**: kein Verifizieren am echten Deployment in
+diesem Schritt (folgt im nächsten Rebuild, siehe Doku-Updates direkt vor
+diesem Eintrag). Kein Umbenennen der bestehenden `paused_no_listeners`-
+i18n-Keys/Settings-Namen -- aus Nutzersicht bleibt es weiterhin sichtbar
+"pausiert" (keine Erkennung läuft gerade), nur die interne Umsetzung ist
+jetzt ein Stop statt eines Freeze, das rechtfertigt keine Nutzer-sichtbare
+Umbenennung.
+
+## 2026-08-28 (Fortsetzung) — Album/Erscheinungsjahr in der Song-Erkennung
+
+**Auslöser**: Nutzer fragte, ob es aufwendig wäre, mehr Infos zum
+laufenden Song bereitzustellen (Erscheinungsjahr, Album, Länge). Antwort
+vorab abgewogen: Album/Jahr kommen schon in AudDs Standard-Antwort mit
+(keine zusätzlichen API-Parameter/Kosten nötig), Länge dagegen nicht (nur
+über optionale Spotify-/Apple-Music-Zusatzdaten, unzuverlässig verfügbar,
+andere Datenstruktur) — Nutzer entschied sich für Album+Jahr, Länge
+weglassen.
+
+**Umsetzung**:
+- `song_fingerprint.py`: neue Funktion `_parse_release_year()` (parst
+  AudDs `release_date`-String wie "1983-04-01" zu `int | None`, gleiches
+  Format wie `audio_tags.extract_year()`). `audd_lookup()` liefert jetzt
+  `{"title","artist","album","year"}` statt nur title/artist.
+- `SongFingerprintDB._init_schema()`: Migration für bestehende DBs (neue
+  Spalten `album TEXT`/`year INTEGER`, per `PRAGMA table_info()` +
+  `ALTER TABLE ... ADD COLUMN`, exakt das Muster aus `music_scan.py`s
+  `bpm`-Spalten-Migration).
+- `match_or_learn()`: SELECT/Rückgabe um `album`/`year` erweitert — auch
+  bei einem lokalen HIT (aus der DB, nicht erneut von AudD abgefragt), ein
+  einmal identifizierter Song zeigt sie damit bei jeder Wiederholung
+  weiter an.
+- `set_cloud_metadata()`: neue optionale Parameter `album`/`year`,
+  UPDATE-Statement erweitert.
+- `on_unknown_fingerprint()`: reicht `result.get("album")`/`.get("year")`
+  an `set_cloud_metadata()` durch, Log-Zeile um Album/Jahr ergänzt.
+- `SongRecognizer._set_current_song()`/`_current_song`: um
+  `album`/`year` erweitert (beide Aufrufstellen in `_run()`, Hit UND
+  Cloud-Erfolg).
+- `webui.py` `_build_status()`: `now_playing_tags` liest jetzt
+  `recognized.get("album")`/`.get("year")` statt hartcodiertem `None` —
+  **kein JS/Template-Änderung nötig**, die "Album (Jahr)"-Zeile existierte
+  im Rendering schon (bisher nur für News-Pause/Musiksammlung befüllt).
+
+**Verifiziert** (isoliert, `python/*.py` in Temp-Verzeichnis):
+- `python3 -m py_compile` fehlerfrei.
+- Migration gegen eine SIMULIERTE alte DB (Tabelle ohne album/year-Spalten,
+  wie die echte Live-DB) — `SongFingerprintDB`-Konstruktion zieht die
+  Migration automatisch durch, `PRAGMA table_info()` bestätigt beide neuen
+  Spalten danach.
+- `set_cloud_metadata()` mit Album/Jahr → korrekt in der DB.
+- `_parse_release_year()`: `"1983-04-01"` → `1983`, `None`/`""`/`"garbage"`
+  → `None`.
+- `match_or_learn()`: erster Aufruf lernt neu (kein Treffer), nach
+  `set_cloud_metadata()` liefert ein zweiter Aufruf denselben Fingerprint
+  jetzt als Treffer MIT Album/Jahr im Rückgabe-Dict.
+- **Echter AudD-Call** (echter Token, bekannter Testsong "A Little
+  Closer"/Julien Jabre, wie beim ursprünglichen Phase-2-Test): liefert
+  jetzt `{'title': 'A Little Closer', 'artist': 'Julien Jabre', 'album':
+  'A Little Closer', 'year': 2014}` — Album/Jahr kommen tatsächlich mit.
+
+**Noch NICHT verifiziert am echten Deployment**: Rebuild/Neustart steht
+noch aus.
+
+**Bewusst NICHT gemacht**: keine Song-Länge (Nutzer-Entscheidung, siehe
+Auslöser oben — höherer Aufwand, unzuverlässige Datenquelle). Kein
+`VERSION`-Bump/Commit (Nutzer hat noch keinen angefordert).
+
+**Bewusst NICHT gemacht**: kein `/config`-UI-Element für das Hörer-Gate
+(nicht angefragt, fester Verhaltens-Bestandteil sobald Song-Erkennung an
+ist, kein zusätzlicher Schalter nötig). Keine Beschleunigung des
+60s-Poll-Intervalls für schnelleres Wiederanspringen nach einem frischen
+Hörer-Zulauf (als bekannte Grobheit in ARCHITECTURE.md/"Offene Punkte"
+vermerkt, nicht Teil dieser Anfrage). Kein `VERSION`-Bump/Commit (Nutzer hat
+noch keinen angefordert).

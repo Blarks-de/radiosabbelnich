@@ -688,12 +688,33 @@ def main():
 
     song_db = None
     song_recognizer = None
+    listener_gate = None
     if not args.no_song_recognition:
         song_db = song_fingerprint.SongFingerprintDB(args.song_recognition_db)
         song_recognizer = song_fingerprint.SongRecognizer(
             song_db, SAMPLE_RATE, WINDOW_SECONDS,
             state.song_recognition_cfg["snippet_seconds"],
         )
+        # Song-Erkennung kostet CPU/AudD-Kontingent, ist aber wertlos, wenn
+        # niemand den Restream hört -- siehe song_fingerprint.ListenerGate.
+        # Dieselben ICECAST_ADMIN_*-Werte, die webui.py schon für die
+        # Hörer-Anzeige nutzt (args statt icecast_cfg, weil das hier VOR
+        # dem "if args.webui_port"-Block unten läuft und unabhängig davon
+        # gebraucht wird). on_change: "Stop" statt "Pause" (Nutzer-Wunsch)
+        # -- sobald keine Hörer mehr da sind, wird der Ringpuffer per
+        # reset() geleert, statt ihn mit veraltetem Vor-Pause-Audio
+        # einzufrieren (siehe ListenerGate-Docstring für die Begründung).
+        listener_gate = song_fingerprint.ListenerGate(
+            args.icecast_admin_url, args.icecast_admin_user,
+            args.icecast_admin_password, args.icecast_mount,
+            on_change=lambda has_listeners: (None if has_listeners else song_recognizer.reset()),
+        )
+        # webui.py liest get_current_song()/has_listeners() für
+        # now_playing_tags im Radio-Zweig (siehe /api/status) -- gleiches
+        # "Objekt an state durchreichen"-Prinzip wie news_break_tags/
+        # music_tags.
+        state.song_recognizer = song_recognizer
+        state.song_listener_gate = listener_gate
         log.info("🎵 Song-Fingerprint-DB: %s", args.song_recognition_db)
         # Getrennt von der DB-Pfad-Zeile oben, weil "DB initialisiert"
         # NICHTS über song_recognition.enabled aussagt (Gate sitzt im
@@ -1853,13 +1874,19 @@ def main():
                 # bei label == "music" (dieser else-Zweig) UND nur im
                 # Radio-Modus (dieser Codepfad wird im Library-Modus wegen
                 # des classify()-Skips oben nie erreicht, siehe song_
-                # fingerprint.py-Moduldocstring).
+                # fingerprint.py-Moduldocstring). Zusätzliches Gate: ohne
+                # Hörer (listener_gate.has_listeners(), zwischengespeichert
+                # -- kein Netzwerk-Call im Hauptloop-Thread) wird weder
+                # gefüttert noch analysiert, spart CPU/AudD-Kontingent für
+                # ein Publikum, das gerade nicht existiert.
                 song_cfg = state.song_recognition_cfg
-                if song_recognizer and song_cfg["enabled"]:
+                if (song_recognizer and song_cfg["enabled"]
+                        and (not listener_gate or listener_gate.has_listeners())):
                     song_recognizer.feed(pcm)
                     song_recognizer.maybe_recognize_async(
                         now, current["id"],
                         song_cfg["interval_seconds"], song_cfg["similarity_threshold"],
+                        song_cfg["cloud_lookup_enabled"],
                     )
 
             # "and not speech_gate_active": gleicher Grund wie beim

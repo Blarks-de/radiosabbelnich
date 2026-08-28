@@ -1189,7 +1189,42 @@ def _build_status(state: SwitcherState, icecast_cfg: dict, host_paths: dict = No
         now_playing_tags = music["tags"]
     else:
         now_playing = _fetch_now_playing(current) if current else None
-        now_playing_tags = None
+        # Song-Erkennung Phase 2 (song_fingerprint.py, AudD-Cloud-Lookup):
+        # dritter Fall, in dem now_playing_tags gesetzt wird (Kommentar oben
+        # bezog sich nur auf News-Break/Musiksammlung, bevor es diesen Fall
+        # gab). Ergänzt den ICY-now_playing-Text oben, ersetzt ihn nicht.
+        # Debug-Zwischenzustände (Nutzer-Wunsch, siehe SESSION.md): solange
+        # das Feature aus ist, bleibt es bei None wie bisher (kein
+        # Anzeige-Rauschen für alle, die Song-Erkennung nie eingeschaltet
+        # haben). Ist es AN, aber noch kein Song erkannt, zeigt "pending"/
+        # "paused_no_listeners" (siehe applyStatus() unten) einen sichtbaren
+        # Platzhalter statt stillschweigend leer zu bleiben -- sonst nicht
+        # unterscheidbar, ob das Feature überhaupt läuft.
+        song_recognizer = getattr(state, "song_recognizer", None)
+        song_recognition_enabled = state.song_recognition_cfg.get("enabled", False)
+        if not (song_recognizer and song_recognition_enabled):
+            now_playing_tags = None
+        else:
+            # Pausiert-Status geht VOR einem evtl. erkannten Song: der
+            # Hauptloop aktualisiert _current_song nur bei echten Analyse-
+            # Läufen, die bei geschlossenem Hörer-Gate gar nicht mehr
+            # stattfinden -- ohne diese Reihenfolge würde ein einmal
+            # erkannter Titel beliebig lange stehen bleiben, obwohl gerade
+            # niemand mehr zuhört und die Erkennung längst pausiert ist
+            # (live beim Rollout beobachtet, siehe SESSION.md).
+            gate = getattr(state, "song_listener_gate", None)
+            paused = bool(gate) and not gate.has_listeners()
+            if paused:
+                now_playing_tags = {"title": None, "artist": None, "album": None, "year": None,
+                                     "pending": True, "paused_no_listeners": True}
+            else:
+                recognized = song_recognizer.get_current_song()
+                if recognized:
+                    now_playing_tags = {"title": recognized["title"], "artist": recognized["artist"],
+                                         "album": recognized.get("album"), "year": recognized.get("year")}
+                else:
+                    now_playing_tags = {"title": None, "artist": None, "album": None, "year": None,
+                                         "pending": True, "paused_no_listeners": False}
     return {
         "current_id": current["id"] if current else None,
         "current_name": current["name"] if current else None,
@@ -1634,18 +1669,30 @@ function applyStatus(data) {
     : (data.current_name ? t('idx_current_playing', {name: data.current_name}) : t('idx_no_station_active'));
   document.getElementById('now-playing').textContent = data.now_playing ? '🎵 ' + data.now_playing : '';
 
-  // Zwei-Zeilen-Tag-Anzeige (News-Break/Musik-Player, seit 2026-08-15) --
-  // now_playing_tags ist nur in diesen beiden Fällen gesetzt (siehe
-  // _build_status() in webui.py), sonst null -> beide Zeilen bleiben leer
+  // Zwei-Zeilen-Tag-Anzeige (News-Break/Musik-Player, seit 2026-08-15;
+  // Radio-Song-Erkennung seit Phase 2) -- now_playing_tags ist nur in
+  // diesen Fällen gesetzt (siehe _build_status() in webui.py), sonst
+  // null -> beide Zeilen bleiben leer
   // und werden per :empty ausgeblendet (siehe CSS). Zeile 1: "Interpret –
   // Titel" (nur Titel, falls kein Interpret-Tag). Zeile 2: "Album (Jahr)",
   // nur Album bzw. nur Jahr falls jeweils das andere fehlt, komplett leer
   // falls beide fehlen -- keine Platzhalter wie "Album: – / Jahr: –".
+  // Song-Erkennung ohne (noch) erkannten Titel liefert stattdessen
+  // pending/paused_no_listeners (Debug-Zwischenzustände, siehe
+  // _build_status()) -- Zeile 1 zeigt dann einen i18n-Platzhalter statt
+  // leer zu bleiben, Zeile 2 bleibt in dem Fall leer (kein Album/Jahr).
   const npTags = data.now_playing_tags;
-  document.getElementById('now-playing-title').textContent =
-    npTags ? (npTags.artist ? `${npTags.artist} – ${npTags.title}` : npTags.title) : '';
+  let npTitleText = '';
+  if (npTags && npTags.title) {
+    npTitleText = npTags.artist ? `${npTags.artist} – ${npTags.title}` : npTags.title;
+  } else if (npTags && npTags.paused_no_listeners) {
+    npTitleText = t('idx_song_paused_no_listeners');
+  } else if (npTags && npTags.pending) {
+    npTitleText = t('idx_song_pending');
+  }
+  document.getElementById('now-playing-title').textContent = npTitleText;
   document.getElementById('now-playing-subtitle').textContent =
-    npTags ? (npTags.album && npTags.year ? `${npTags.album} (${npTags.year})` : (npTags.album || (npTags.year ? String(npTags.year) : ''))) : '';
+    (npTags && npTags.title) ? (npTags.album && npTags.year ? `${npTags.album} (${npTags.year})` : (npTags.album || (npTags.year ? String(npTags.year) : ''))) : '';
 
   const filterBtn = document.getElementById('btn-filter-toggle');
   if (data.filter_enabled === false) {
