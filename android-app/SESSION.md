@@ -1,3 +1,5 @@
+> **Hinweis (2026-08-28):** Dieses Log wird nicht mehr aktiv fortgeschrieben. Neue Einträge stehen ab jetzt zentral in `/home/blarks/SESSION.md` (Abschnitt "Konsolidierte Projekt-Zusammenfassungen"). Diese Datei bleibt als historisches Archiv erhalten.
+
 # RadioSabbelNich Android MVP — Session-Log
 
 Laufendes Protokoll der Arbeit an `android-app/` (chronologisch, neueste
@@ -1698,5 +1700,126 @@ und freigegeben (siehe Konversation), dann umgesetzt.
   Sprache-Gates bzw. eine echte Werbeblock-Übernahme auf einem realen
   Sender zur vollen/halben Stunde) — das braucht laufenden Realbetrieb
   über Zeit. Offen für eine spätere Session mit echten Beobachtungen.
+- Build + Upload nach `blarks.de/radio/update/` (Pflicht laut
+  `CLAUDE.md`) im Anschluss an diesen Eintrag durchgeführt.
+
+## 2026-08-28 — Song-Erkennung (lokaler Cache + AudD-Cloud-Lookup + UI), Vorbild song_fingerprint.py im Docker-Projekt
+
+Auslöser: Nutzer bat, dieselbe Song-Erkennung, die am selben Tag im
+Docker-Projekt fertiggestellt wurde (lokaler Fingerprint-Cache + AudD-
+Cloud-Lookup, siehe `../SESSION.md`/`../ARCHITECTURE.md`), auch in die
+Android-App zu bringen — auf Nachfrage (AskUserQuestion) explizit "volle
+Song-Erkennung wie im Docker-Projekt" gewählt, nicht nur ICY-Metadaten
+oder ein Abfragen des Docker-Servers. Plan vorab erstellt und
+freigegeben (drei Phasen: lokaler Cache, Cloud-Lookup, UI), dann
+umgesetzt und nach jeder Phase live im Emulator verifiziert, bevor die
+nächste begann.
+
+### Umsetzung
+
+- **Kein Chromaprint-Port**: das Docker-Projekt nutzt dort bewusst
+  `fpcalc` (fertiges Debian-Paket) statt eines eigenen Constellation-Map-
+  Verfahrens, weil Letzteres laut dessen Moduldoc "eine deutlich größere
+  Baustelle" gewesen wäre. Auf Android gibt es kein entsprechendes
+  Kompilat ohne NDK/JNI-Aufwand — stattdessen wird das bereits
+  vorhandene, funktionierende Constellation-Map-Verfahren aus
+  `fingerprint/Fingerprint.kt` (bislang nur fürs Sprache-Fingerprinting)
+  direkt wiederverwendet: `SongFingerprintDb.matchOrLearn()`
+  (`songfingerprint/`, neues Package) ruft `Fingerprint.
+  fingerprintClip()` unverändert mit identischen Peak-/Hash-Parametern
+  auf. Kein eigener `SongFingerprint.kt`-Wrapper — eine erste Fassung
+  davon war nur eine 1:1-Alias-Klasse auf `Fingerprint`s eigene
+  Konstanten, direkt wieder verworfen. Einziger eigener Wert:
+  `MIN_HASH_MATCHES=140` (statt `25`), proportional aus dem
+  Sprache-Wert hergeleitet (`25 * 11.0s/2.0s ≈ 137.5`, aufgerundet) —
+  Song-Schnipsel sind mit 11.0s (bewusst identisch zu Dockers
+  `snippet_seconds`, unter AudDs 12s-Limit) deutlich länger als die
+  2s-Sprache-Clips, für die der Original-Wert kalibriert wurde.
+- `StreamAnalyzer.kt`: neuer Song-Puffer, gefüllt NUR solange der
+  geglättete Status `MUSIC` ist (anders als der bestehende Sprache-
+  Fingerprint-Trigger, der auf dem rohen Streak feuert). Fester
+  Puffer + Cooldown-Chunks (`SONG_CHECK_INTERVAL_SECONDS=45.0`) statt
+  eines echten Ringpuffers wie im Docker-Vorbild — bewusste
+  Vereinfachung, der Cooldown zählt dabei nur während MUSIC-Chunks
+  herunter (eine Moderation zwischen zwei Songs "pausiert" den
+  Intervall-Countdown mit, statt real weiterzulaufen; unkritisch, da
+  hier kein Icecast-Hörerpublikum wie beim Docker-Hörer-Gate dranhängt).
+- **AudD-Cloud-Lookup** (`songfingerprint/AudDClient.kt`): reines
+  `HttpURLConnection` (kein OkHttp/Retrofit, gleiches Muster wie
+  `importer/StationImporter.kt`), Multipart-Body + WAV-Header von Hand
+  gebaut (kein `javax.sound.sampled` auf Android), `org.json` für die
+  Antwort. Eigener `AUDD_MIN_INTERVAL_MS=60_000`-Cooldown als zweite
+  Sicherheitsebene gegen Kontingent-Verbrauch. Token + Cloud-Lookup-
+  Schalter in `songfingerprint/SongRecognitionSettings.kt`
+  (SharedPreferences, gleiches Muster wie die Update-Server-URL in
+  `UpdateManager.kt`).
+- **Wichtiger Fund während der Umsetzung**: der AudD-Netzwerk-Call MUSS
+  in einer eigenen, vom laufenden `runAnalysis()`-Job LOSGELÖSTEN
+  Coroutine laufen (`scope.launch(Dispatchers.IO) { ... }` an der
+  Fundstelle selbst, nicht inline) — sonst blockiert er die laufende
+  Audio-Dekodierung/Vosk-Verarbeitung für die Dauer des Requests (bis zu
+  mehrere Sekunden), exakt das, was das Docker-Pendant per eigenem
+  Hintergrund-Thread vermeidet. Der PCM-Schnipsel wird dafür VOR dem
+  Zurücksetzen des Puffers per `.copyOf()` kopiert — der als Referenz
+  übergebene, weiterhin lebende Puffer würde sonst vom nächsten Zyklus
+  überschrieben, während der Cloud-Call noch läuft.
+- `PlaybackService.currentSong` (StateFlow) wird bei JEDEM
+  `refreshAnalyzer()`-Aufruf (echter Senderwechsel UND
+  kalibrierungsbedingter Sprachwechsel auf demselben Sender) sofort auf
+  `null` gesetzt, BEVOR der Analyzer neu startet — sonst würde ein
+  inzwischen nicht mehr passender alter Song weiter angezeigt bleiben.
+  Dieselbe "Stale-Anzeige"-Falle wurde am selben Tag zuerst beim
+  Docker-Projekt-Hörer-Gate live gefunden (siehe `../SESSION.md`) und
+  hier von vornherein vermieden.
+- UI: Chip "🎵 Song" + Button "🗑 Song-DB leeren" (mit Rückfrage), analog
+  zum bestehenden Fingerprint-Chip. Checkbox "Identify unknown songs via
+  AudD" + Token-Textfeld auf der Startseite. `res/values/strings.xml` +
+  `res/values-de/strings.xml` um je 11 neue Keys ergänzt (parallel,
+  identische Platzhalter). `README.md` (neuer Feature-Bullet, neuer
+  Architektur-Abschnitt "Song-Erkennung", neuer Bullet in "Bekannte
+  Grenzen") nachgezogen.
+
+### Bewusst NICHT gemacht
+
+- Kein normiertes Ähnlichkeits-Verhältnis wie Dockers Chromaprint-
+  `similarity()` (Bits geteilt durch tatsächliche Überlappungslänge) —
+  roher Übereinstimmungs-Zähler stattdessen, gleiches Muster wie
+  `FingerprintDb`. Kann bei nur teilweise überlappenden Song-Schnipseln
+  (unterschiedlicher Einstiegspunkt im Song) zu niedrigeren Werten
+  führen als eine normierte Metrik liefern würde — als offener Punkt in
+  README.md vermerkt.
+- Keine Vorbefüllung der Song-Referenz-DB aus eigenen ID3-Tags
+  (separates, größeres Vorhaben, analog zur gleichnamigen offenen
+  Docker-Roadmap-Notiz).
+- Kein eigener Ringpuffer wie im Docker-Vorbild (siehe oben, Puffer +
+  Cooldown-Chunks als Vereinfachung).
+
+### Verifiziert
+
+- `./gradlew assembleDebug` nach jeder der drei Phasen: `BUILD
+  SUCCESSFUL`, keine Compile-Fehler (zwei kleinere Fehler unterwegs
+  selbst gefunden und behoben: ein fehlender Parameter an einer zweiten
+  `analyzer.start()`-Aufrufstelle in `AdSkipPrebuffer.kt`, die beim
+  ersten Kompilieren dieser Session übersehen wurde, und ein doppeltes
+  `--` in einem neuen XML-Kommentar, das der XML-Parser als ungültig
+  ablehnte).
+- Install + Start auf dem lokalen Emulator (`test_device`), SWR3 live
+  abgespielt:
+  - Phase 1 (nur lokal): erster Song gelernt (1002 Hashes), zweiter
+    Song ~1 Min. später korrekt als ANDERER Song erkannt (nur 2 von
+    1368 Hashes trafen zufällig, deutlich unter der Schwelle 140).
+  - Phase 2 (AudD aktiviert, echter Token): nach einem Cache-Reset
+    (Nutzer wollte kürzere Wartezeiten für den Test) echter Cache-Miss
+    → `SongFingerprintDb`-Log zeigt `neuer Song #5 gelernt` →
+    `AudDClient`/`PlaybackService`-Log zeigt `☁️ Song #5 per AudD
+    identifiziert: 'Bebe Rexha' - 'I Got You (The White Panda Remix)'`
+    binnen unter einer Sekunde, DB-Auszug bestätigt Titel/Interpret/
+    Album/Jahr korrekt geschrieben, Hauptanalyse-Schleife lief
+    währenddessen unbeeinflusst weiter (kein Blocking).
+  - Phase 3 (UI): "🎵 Song"-Chip zeigt live "Clovis – Let Me Talk To
+    You" nach einem weiteren echten AudD-Treffer (Screenshot-bestätigt).
+    "🗑 Song-DB leeren"-Button öffnet den Rückfrage-Dialog korrekt
+    (Text/Buttons wie erwartet, Dialog mit "Abbrechen" verlassen, um die
+    Test-DB für eventuelle spätere Prüfung zu erhalten).
 - Build + Upload nach `blarks.de/radio/update/` (Pflicht laut
   `CLAUDE.md`) im Anschluss an diesen Eintrag durchgeführt.
