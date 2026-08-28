@@ -1823,3 +1823,52 @@ nächste begann.
     Test-DB für eventuelle spätere Prüfung zu erhalten).
 - Build + Upload nach `blarks.de/radio/update/` (Pflicht laut
   `CLAUDE.md`) im Anschluss an diesen Eintrag durchgeführt.
+
+## 2026-08-28 (Fortsetzung) — Zwei verbliebene Docker-Lücken nachgezogen: Song-Debug-Anzeige + Nachrichten-Pause-Skip
+
+Auslöser: Nutzer fragte nach verbliebenen Leistungsunterschieden zur
+Docker-Version. Zwei genannt, beide auf Wunsch nachgezogen (drittes,
+größeres Thema — fehlender Musik-Library-Modus — bewusst nicht
+angefasst, nicht Teil dieser Anfrage).
+
+### Umsetzung
+
+- **Song-Chip-Debug-Zustand**: `MainActivity` kombiniert jetzt
+  `service.status` und `service.currentSong` über zwei einfache Felder
+  (`lastPlaybackStatus`/`lastSongMatch`) statt eines eigenen
+  `combine()`-Flows — beide bestehenden Collectors rufen `renderSongChip()`
+  gegenseitig mit auf. Neuer String `song_chip_pending` ("🔍 noch nicht
+  erkannt"/"not recognized yet"), gezeigt sobald `status != IDLE` UND
+  kein Titel bekannt ist. KEIN Pendant zum Docker-Zustand "pausiert
+  (keine Hörer)" — Android hat kein Hörer-Gate-Konzept (kein
+  Icecast-Publikum), das wäre vorgetäuscht gewesen.
+- **Nachrichten-Pause-Skip**: neue `PlaybackService.
+  manualNewsBreakSkip()`, ruft bei `_newsBreakActive == true`
+  unverändert `playNextNewsBreakFile()` auf (dieselbe Funktion, die
+  `advanceNewsBreak()` beim natürlichen Dateiende schon nutzt, inkl.
+  deren `newsBreakRecentFiles`-Dedup) — Pause bleibt aktiv, nur die MP3
+  wechselt. Neuer Button "⏭ Andere Pause-MP3" unter ZAP/STOP,
+  `isEnabled` an den bestehenden `newsBreakActive`-Collector gehängt
+  (gleiche Stelle, an der auch `latestNewsBreakActive` schon gepflegt
+  wird).
+- `README.md` (zwei neue Feature-Bullets, zwei Ergänzungen im
+  Architektur-Abschnitt "Song-Erkennung", zwei neue Bullets in "Bekannte
+  Grenzen") nachgezogen.
+
+### Verifiziert
+
+- `./gradlew assembleDebug`: `BUILD SUCCESSFUL`, keine Compile-Fehler.
+- Live im Emulator (SWR3): Song-Chip zeigt "🔍 not recognized yet",
+  solange ein Sender läuft, aber noch nichts erkannt wurde (per
+  `uiautomator dump` bestätigt, nicht nur Screenshot) — reines "–" nur
+  vor dem ersten Play-Klick. "⏭ Different break clip"-Button korrekt
+  `disabled`, solange keine Nachrichten-Pause aktiv ist.
+- **Nicht verifiziert**: ein echter Klick auf "⏭ Andere Pause-MP3"
+  während einer tatsächlich laufenden Pause — die App-Konfiguration
+  nutzt das reguläre volle/halbe-Stunden-Zeitfenster, kein kurzfristig
+  erreichbares Testfenster in dieser Session. Risiko als gering
+  eingeschätzt, da `manualNewsBreakSkip()` dieselbe, bereits
+  nachweislich funktionierende `playNextNewsBreakFile()` unverändert
+  aufruft.
+- Build + Upload nach `blarks.de/radio/update/` (Pflicht laut
+  `CLAUDE.md`) im Anschluss an diesen Eintrag durchgeführt.

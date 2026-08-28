@@ -497,6 +497,29 @@ class PlaybackService : LifecycleService() {
     }
 
     /**
+     * Eigener Skip-Knopf NUR für eine laufende Nachrichten-Pause (Nutzer-
+     * Wunsch, siehe SESSION.md): ANDERS als manualSkip() oben (das
+     * "ZAP!", beendet die Pause komplett) wählt dieser nur eine ANDERE
+     * MP3 aus demselben Ordner, die Pause selbst läuft weiter. Ignoriert
+     * außerhalb einer aktiven Pause (Button ist dann in der UI ohnehin
+     * deaktiviert, dieser Guard ist nur Verteidigung gegen einen Race).
+     * Wiederverwendet playNextNewsBreakFile() unverändert - dieselbe
+     * Funktion, die auch advanceNewsBreak() beim natürlichen Dateiende
+     * aufruft, inkl. der dort schon eingebauten Dedup-Logik
+     * (newsBreakRecentFiles).
+     */
+    fun manualNewsBreakSkip() {
+        if (!_newsBreakActive.value) return
+        lifecycleScope.launch {
+            if (playNextNewsBreakFile()) {
+                Log.i(TAG, "📰 Nachrichten-Pause: andere MP3 gewählt (Skip-Knopf): '${_newsBreakFileName.value}'")
+            } else {
+                Log.w(TAG, "⚠ Nachrichten-Pause-Skip: keine (weitere) MP3 verfügbar, aktuelle läuft weiter.")
+            }
+        }
+    }
+
+    /**
      * Uebernimmt den vorgewaermten Player, falls `station` genau der laut
      * `refreshPreload()` vorbereitete Kandidat ist (der Normalfall bei
      * automatischem Umschalten, ZAPPEN! und dem Watchdog - alle drei waehlen

@@ -59,6 +59,11 @@ class MainActivity : AppCompatActivity() {
     private var fingerprintOutcomeJob: Job? = null
     private var fingerprintMatchJob: Job? = null
     private var currentSongJob: Job? = null
+    // Fuer den "🎵 Song"-Chip-Debug-Zustand (renderSongChip()): kombiniert
+    // zwei unabhaengige Flows (Status + currentSong), deshalb als Felder
+    // statt eines einzelnen Collector-Werts gehalten.
+    private var lastPlaybackStatus: PlaybackStatus = PlaybackStatus.IDLE
+    private var lastSongMatch: SongFingerprintOutcome.Match? = null
     private var sttModelMissingJob: Job? = null
     private var analyzerErrorJob: Job? = null
     private var calibrationJob: Job? = null
@@ -99,7 +104,11 @@ class MainActivity : AppCompatActivity() {
 
             statusJob?.cancel()
             statusJob = lifecycleScope.launch {
-                service.status.collect { status -> renderStatus(status) }
+                service.status.collect { status ->
+                    renderStatus(status)
+                    lastPlaybackStatus = status
+                    renderSongChip(lastSongMatch)
+                }
             }
 
             // Beobachtet den Sender direkt vom Service statt ihn nur beim eigenen
@@ -123,6 +132,10 @@ class MainActivity : AppCompatActivity() {
                     latestNewsBreakActive = active
                     renderCurrentDisplay()
                     if (active) binding.statusText.text = "" // sonst stuende irrefuehrend "Gestoppt" da (analyzer.stop())
+                    // Nur waehrend einer laufenden Pause sinnvoll - sonst
+                    // gibt es keine "andere MP3", die dieser Knopf waehlen
+                    // koennte (siehe PlaybackService.manualNewsBreakSkip()).
+                    binding.newsBreakSkipButton.isEnabled = active
                 }
             }
             newsBreakFileNameJob?.cancel()
@@ -162,7 +175,10 @@ class MainActivity : AppCompatActivity() {
 
             currentSongJob?.cancel()
             currentSongJob = lifecycleScope.launch {
-                service.currentSong.collect { match -> renderSongChip(match) }
+                service.currentSong.collect { match ->
+                    lastSongMatch = match
+                    renderSongChip(match)
+                }
             }
 
             // Sprache, fuer die kein Vosk-Modell heruntergeladen ist (siehe
@@ -282,6 +298,10 @@ class MainActivity : AppCompatActivity() {
 
         binding.zapButton.setOnClickListener {
             playbackService?.manualSkip()
+        }
+
+        binding.newsBreakSkipButton.setOnClickListener {
+            playbackService?.manualNewsBreakSkip()
         }
 
         binding.zappingErrorButton.setOnClickListener {
@@ -538,12 +558,23 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** "🎵 Song"-Chip (Phase 3): aktuell erkannter Song (Artist – Titel) oder "–", solange keiner (mit Titel) bekannt ist -- siehe PlaybackService.currentSong. */
+    /**
+     * "🎵 Song"-Chip: aktuell erkannter Song (Artist – Titel), oder einer
+     * von zwei Debug-Zwischenzuständen (Nutzer-Wunsch, analog zum
+     * gleichnamigen Docker-Web-Interface-Zustand, siehe SESSION.md) --
+     * "🔍 noch nicht erkannt", solange ein Sender läuft (jeder Status
+     * außer IDLE, lokales Fingerprinting läuft hier immer automatisch
+     * mit, anders als im Docker-Projekt gibt es keinen eigenen Ein/Aus-
+     * Schalter dafür), aber noch kein Titel bekannt ist, sonst "–" bei
+     * IDLE. KEIN Docker-Pendant zu "pausiert (keine Hörer)" -- die
+     * Android-App hat kein Icecast-Publikum, das Konzept "Hörer-Gate"
+     * gibt es hier nicht.
+     */
     private fun renderSongChip(match: SongFingerprintOutcome.Match?) {
-        binding.songChipText.text = if (match?.title != null) {
-            getString(R.string.song_chip_match, match.artist ?: "?", match.title)
-        } else {
-            getString(R.string.song_chip_off)
+        binding.songChipText.text = when {
+            match?.title != null -> getString(R.string.song_chip_match, match.artist ?: "?", match.title)
+            lastPlaybackStatus == PlaybackStatus.IDLE -> getString(R.string.song_chip_off)
+            else -> getString(R.string.song_chip_pending)
         }
     }
 

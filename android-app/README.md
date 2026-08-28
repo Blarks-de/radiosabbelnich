@@ -204,8 +204,18 @@ merkt (siehe "Bekannte Grenzen").
   eigener, standardmäßig AUS-geschalteter Schalter ("Identify unknown
   songs via AudD") + Textfeld für den API-Token auf der Startseite, ganz
   unabhängig von der immer laufenden lokalen Erkennung. Chip "🎵 Song"
-  zeigt den aktuell erkannten Song, Button "🗑 Song-DB leeren" setzt die
-  Erkennung zurück.
+  zeigt den aktuell erkannten Song, sonst "🔍 noch nicht erkannt" (läuft
+  ein Sender, aber noch kein Titel bekannt) oder "–" (nichts läuft) -
+  analog zur gleichnamigen Debug-Anzeige im Docker-Web-Interface, ohne
+  deren dritten "pausiert (keine Hörer)"-Zustand (kein Icecast-Publikum
+  auf Android). Button "🗑 Song-DB leeren" setzt die Erkennung zurück.
+- **"⏭ Andere Pause-MP3"-Knopf** (`PlaybackService.
+  manualNewsBreakSkip()`) - nur während einer laufenden Nachrichten-
+  Pause aktiv, wählt eine andere zufällige MP3 aus demselben Ordner, die
+  Pause selbst läuft weiter (anders als "⚡ ZAP!", das die Pause komplett
+  beendet). Wiederverwendet `playNextNewsBreakFile()` unverändert -
+  dieselbe Funktion, die auch beim natürlichen Dateiende die nächste MP3
+  wählt, inklusive der dort schon eingebauten Wiederholungs-Vermeidung.
 - **Build-Zeitstempel in der UI** (`Build: YYYY-MM-DD HH:MM` direkt unter
   dem App-Titel, `BuildConfig.BUILD_TIME`) - entsteht automatisch bei
   jedem Build. Zweck: von aussen erkennbar, ob eine gerade installierte
@@ -883,9 +893,26 @@ kalibrierungsbedingter Sprachwechsel auf demselben Sender) sofort auf
 `null` gesetzt, BEVOR der Analyzer neu startet - sonst würde ein
 inzwischen nicht mehr passender alter Song weiter angezeigt (dieselbe
 "Stale-Anzeige"-Falle, die auch beim Docker-Hörer-Gate live gefunden
-wurde, siehe dessen `SESSION.md`). Chip "🎵 Song" zeigt "Artist – Titel"
-oder "–", Button "🗑 Song-DB leeren" (mit Rückfrage, analog "🗑
-Fingerprint-DB leeren") setzt die Erkennung komplett zurück.
+wurde, siehe dessen `SESSION.md`). Chip "🎵 Song" zeigt "Artist – Titel",
+sonst (Nutzer-Wunsch, analog zum Docker-Web-Interface) "🔍 noch nicht
+erkannt" solange `service.status` ungleich `IDLE` ist (irgendein Sender
+läuft, MainActivity kombiniert dafür den `status`- und den
+`currentSong`-Flow über zwei einfache Felder statt eines eigenen
+`combine()`-Flows), sonst "–". KEIN Docker-Pendant zum dortigen dritten
+Zustand "pausiert (keine Hörer)" - das Hörer-Gate-Konzept gibt es auf
+Android nicht (kein Icecast-Restream-Publikum). Button "🗑 Song-DB
+leeren" (mit Rückfrage, analog "🗑 Fingerprint-DB leeren") setzt die
+Erkennung komplett zurück.
+
+**Nachrichten-Pause-Skip (`manualNewsBreakSkip()`)**: eigener Knopf
+"⏭ Andere Pause-MP3", unabhängig vom bestehenden `manualSkip()`
+("⚡ ZAP!", das die Pause komplett beendet und `interruptNewsBreak()`
+aufruft). Ruft stattdessen unverändert `playNextNewsBreakFile()` auf -
+dieselbe Funktion, die `advanceNewsBreak()` beim natürlichen Dateiende
+sowieso schon aufruft, inklusive deren `newsBreakRecentFiles`-Dedup -
+während `_newsBreakActive` weiter `true` bleibt. In der UI nur
+klickbar, während eine Pause läuft (`newsBreakActive`-Flow steuert
+`isEnabled`, gleiches Muster wie bei den Musiksammlung-Track-Buttons).
 
 ### Mehrsprachiges STT (Schritt 1: Grundgerüst)
 
@@ -1164,6 +1191,15 @@ echten Stand zurueckgesetzt.
   Song-Schnipseln (unterschiedlicher Einstiegspunkt im Song) zu
   niedrigeren Treffer-Zahlen fuehren kann, als eine normierte Metrik
   liefern wuerde.
+- **"⏭ Andere Pause-MP3"-Knopf noch nicht gegen eine ECHTE laufende
+  Nachrichten-Pause live getestet** - der deaktivierte Zustand außerhalb
+  einer Pause wurde live bestätigt, ein tatsächlicher Klick während
+  einer aktiven Pause mangels eines kurzfristig erreichbaren
+  Zeitfensters (naechste volle/halbe Stunde) noch nicht. Ruft
+  unveraendert dieselbe `playNextNewsBreakFile()`-Funktion auf, die
+  `advanceNewsBreak()` beim natuerlichen Dateiende bereits nachweislich
+  fehlerfrei nutzt - Risiko dadurch gering, aber nicht End-zu-Ende
+  bestaetigt.
 - **Ein Vosk-Modellwechsel kostet weiterhin Ladezeit** (ca. 1-2s), wenn
   die Zielsprache nicht mehr im `VoskModelCache` liegt - innerhalb der
   `MAX_LOADED_VOSK_LANGUAGES=2` zuletzt genutzten Sprachen wird das

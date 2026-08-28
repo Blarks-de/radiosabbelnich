@@ -92,6 +92,7 @@
     <string name="lock_reason_dead">⚠ Antwortet nicht</string>
 
     <string name="btn_zappen">⚡ ZAPPEN!</string>
+    <string name="btn_news_break_skip">⏭ Andere Pause-MP3</string>
     <string name="bs_meter_label">🤥 Bullshitometer</string>
     <string name="bs_meter_off">–</string>
     <string name="bs_meter_pct">%1$d%%</string>
@@ -137,6 +138,7 @@
 
     <string name="song_chip_label">🎵 Song</string>
     <string name="song_chip_off">–</string>
+    <string name="song_chip_pending">🔍 noch nicht erkannt</string>
     <string name="song_chip_match">%1$s – %2$s</string>
     <string name="btn_clear_song_fingerprints">🗑 Song-DB leeren</string>
     <string name="song_cleared">Song-DB geleert: %1$d Song(s) gelöscht.</string>

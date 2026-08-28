@@ -141,6 +141,19 @@
                 android:text="@string/btn_stop" />
         </LinearLayout>
 
+        <!-- Nur waehrend einer laufenden Nachrichten-Pause aktiv (siehe
+             PlaybackService.manualNewsBreakSkip()) - ANDERS als "ZAP!" oben
+             (das die Pause komplett beendet) waehlt dieser nur eine ANDERE
+             MP3 aus demselben Ordner, die Pause selbst laeuft weiter. -->
+        <Button
+            android:id="@+id/newsBreakSkipButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/btn_news_break_skip"
+            android:enabled="false" />
+
+
         <!-- Bullshitometer: Live-Balken fuer die rohe Sprache-Wahrscheinlichkeit
              (StreamAnalyzer.speechRatio), analog zum Web-Interface (webui.py). -->
         <LinearLayout
