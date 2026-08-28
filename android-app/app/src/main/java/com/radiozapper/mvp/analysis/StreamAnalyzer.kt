@@ -13,6 +13,9 @@ import com.radiozapper.mvp.fingerprint.Fingerprint
 import com.radiozapper.mvp.fingerprint.FingerprintDb
 import com.radiozapper.mvp.fingerprint.FingerprintOutcome
 import com.radiozapper.mvp.playback.PlaybackStatus
+import com.radiozapper.mvp.songfingerprint.AudDClient
+import com.radiozapper.mvp.songfingerprint.SongFingerprintDb
+import com.radiozapper.mvp.songfingerprint.SongFingerprintOutcome
 import com.radiozapper.mvp.vosk.VoskModelCache
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -51,6 +54,20 @@ private const val FINGERPRINT_TRIGGER_CHUNKS = 4
 // Nutzer vorgeschlagenen Spanne von 3-5s; ueber PARAMETER anpassbar zum Tunen.
 private const val SMOOTHING_WINDOW_SECONDS = 4.0
 private val SMOOTHING_WINDOW_CHUNKS = (SMOOTHING_WINDOW_SECONDS * TARGET_SAMPLE_RATE / CHUNK_SAMPLES).toInt() // 8
+
+// Song-Erkennung (siehe songfingerprint/SongFingerprintDb.kt): mirrors
+// song_recognition.snippet_seconds/interval_seconds im Docker-Projekt.
+// 11.0s bewusst identisch zum dortigen Wert uebernommen -- unter AudDs
+// 12s-Limit, relevant fuer den spaeteren Cloud-Lookup (Phase 2), nicht nur
+// fuer den hiesigen lokalen Match. Anders als der Sprache-Fingerprint-
+// Trigger oben (der auf einem rohen SPRACHE-Streak feuert) sammelt dieser
+// Puffer nur, solange der GEGLAETTETE Status MUSIC ist (Docker-Pendant:
+// "label == music" im Hauptloop) -- deshalb erst NACH der Hysterese-
+// Aktualisierung im Chunk-Loop platziert, siehe runAnalysis().
+private const val SONG_SNIPPET_SECONDS = 11.0
+private val SONG_SNIPPET_SAMPLES = (SONG_SNIPPET_SECONDS * TARGET_SAMPLE_RATE).toInt()
+private const val SONG_CHECK_INTERVAL_SECONDS = 45.0
+private val SONG_CHECK_INTERVAL_CHUNKS = (SONG_CHECK_INTERVAL_SECONDS / CHUNK_SECONDS).toInt()
 
 
 /**
@@ -149,6 +166,11 @@ class StreamAnalyzer(private val scope: CoroutineScope) {
     private val _fingerprintOutcomes = MutableSharedFlow<FingerprintOutcome>(extraBufferCapacity = 1)
     val fingerprintOutcomes: SharedFlow<FingerprintOutcome> = _fingerprintOutcomes
 
+    // Song-Erkennung: gleiches SharedFlow-statt-StateFlow-Argument wie oben
+    // bei _fingerprintOutcomes (einmalige Ereignisse, kein Dauerzustand).
+    private val _songFingerprintOutcomes = MutableSharedFlow<SongFingerprintOutcome>(extraBufferCapacity = 1)
+    val songFingerprintOutcomes: SharedFlow<SongFingerprintOutcome> = _songFingerprintOutcomes
+
     private var job: Job? = null
 
     // Siehe Klassen-Doc: laufende Nummer des aktuell gueltigen Laufs. Wird
@@ -165,6 +187,9 @@ class StreamAnalyzer(private val scope: CoroutineScope) {
         ratioToConfirmMusic: Double,
         stationLabel: String,
         fingerprintDb: FingerprintDb?,
+        songFingerprintDb: SongFingerprintDb?,
+        cloudLookupEnabled: Boolean = false,
+        audDToken: String? = null,
     ) {
         stop()
         val myGeneration = ++generation
@@ -172,7 +197,8 @@ class StreamAnalyzer(private val scope: CoroutineScope) {
         job = scope.launch(Dispatchers.IO) {
             runAnalysis(
                 myGeneration, url, modelPath, language, voskModelCache,
-                ratioToConfirmSpeech, ratioToConfirmMusic, stationLabel, fingerprintDb,
+                ratioToConfirmSpeech, ratioToConfirmMusic, stationLabel, fingerprintDb, songFingerprintDb,
+                cloudLookupEnabled, audDToken,
             )
         }
     }
@@ -200,6 +226,9 @@ class StreamAnalyzer(private val scope: CoroutineScope) {
         ratioToConfirmMusic: Double,
         stationLabel: String,
         fingerprintDb: FingerprintDb?,
+        songFingerprintDb: SongFingerprintDb?,
+        cloudLookupEnabled: Boolean,
+        audDToken: String?,
     ) {
         var extractor: MediaExtractor? = null
         var codec: MediaCodec? = null
@@ -259,6 +288,15 @@ class StreamAnalyzer(private val scope: CoroutineScope) {
             val fingerprintBuffer = ShortArray(CHUNK_SAMPLES * FINGERPRINT_TRIGGER_CHUNKS)
             var fingerprintFilled = 0
             var fingerprintCheckedThisRun = false
+
+            // Song-Erkennung (siehe Konstanten oben) -- lokale Variablen wie
+            // beim Sprache-Fingerprinting oben, dadurch bei jedem start()
+            // automatisch frisch. songCooldownChunks > 0: Puffer wird NICHT
+            // befuellt (wartet auf das naechste Intervall, mirrors Dockers
+            // interval_seconds-Gate in SongRecognizer.maybe_recognize_async()).
+            val songBuffer = ShortArray(SONG_SNIPPET_SAMPLES)
+            var songFilled = 0
+            var songCooldownChunks = 0
 
             val bufferInfo = MediaCodec.BufferInfo()
             var sawInputEos = false
@@ -361,6 +399,81 @@ class StreamAnalyzer(private val scope: CoroutineScope) {
                                         hasConfirmedOnce = true
                                         _status.value = if (shouldBeSpeech) PlaybackStatus.SPEECH else PlaybackStatus.MUSIC
                                     }
+                                }
+
+                                // Song-Erkennung: nur befuellen, solange der
+                                // GEGLAETTETE Status MUSIC ist (Docker-Pendant:
+                                // "label == music" im Hauptloop) -- anders als der
+                                // Sprache-Fingerprint-Trigger oben, der auf dem
+                                // ROHEN Streak feuert. songCooldownChunks zaehlt nur
+                                // waehrend MUSIC herunter (bewusste Vereinfachung
+                                // ggue. Dockers reiner Wall-Clock-Wartezeit -- eine
+                                // laengere Moderation zwischen zwei Songs "pausiert"
+                                // den Intervall-Countdown hier mit, statt real
+                                // weiterzulaufen; unkritisch, kein Cloud-Kontingent
+                                // haengt Vorabkosten-relevant daran wie im
+                                // Hoerer-Gate-Fall der Docker-Instanz).
+                                if (songFingerprintDb != null && hasConfirmedOnce && !confirmedSpeech) {
+                                    if (songCooldownChunks > 0) {
+                                        songCooldownChunks--
+                                    } else {
+                                        val songRoom = songBuffer.size - songFilled
+                                        val songTake = minOf(songRoom, chunk.size)
+                                        if (songTake > 0) {
+                                            chunk.copyInto(songBuffer, songFilled, 0, songTake)
+                                            songFilled += songTake
+                                        }
+                                        if (songFilled >= songBuffer.size) {
+                                            // Snapshot statt der lebenden songBuffer-Referenz:
+                                            // die wird direkt im Anschluss (songFilled = 0)
+                                            // fuer den naechsten Zyklus weiter ueberschrieben,
+                                            // waehrend der Cloud-Lookup unten (siehe scope.launch)
+                                            // noch asynchron auf den ALTEN Inhalt zugreift.
+                                            val songSnapshot = songBuffer.copyOf()
+                                            val songOutcome = songFingerprintDb.matchOrLearn(songSnapshot, TARGET_SAMPLE_RATE)
+                                            if (songOutcome != null && isCurrent(runGeneration)) {
+                                                _songFingerprintOutcomes.tryEmit(songOutcome)
+                                                // AudD-Cloud-Lookup (Phase 2, siehe AudDClient.kt)
+                                                // NUR bei einem echten Cache-Miss (Learned) UND
+                                                // aktivierter Einstellung. Bewusst eine EIGENE,
+                                                // vom aktuellen runAnalysis()-Job LOSGELOESTE
+                                                // Coroutine (scope.launch, nicht inline hier) --
+                                                // der Netzwerk-Call kann bis zu mehrere Sekunden
+                                                // dauern und darf die laufende Decode-/Vosk-
+                                                // Schleife hier NICHT blockieren (exakt das, was
+                                                // das Docker-Pendant per eigenem Hintergrund-
+                                                // Thread vermeidet, siehe song_fingerprint.py).
+                                                if (songOutcome is SongFingerprintOutcome.Learned &&
+                                                    cloudLookupEnabled && !audDToken.isNullOrBlank()
+                                                ) {
+                                                    val songId = songOutcome.songId
+                                                    scope.launch(Dispatchers.IO) {
+                                                        val result = AudDClient.recognize(songSnapshot, TARGET_SAMPLE_RATE, audDToken)
+                                                        if (result != null) {
+                                                            songFingerprintDb.setCloudMetadata(
+                                                                songId, result.title, result.artist, result.album, result.year,
+                                                            )
+                                                            if (isCurrent(runGeneration)) {
+                                                                _songFingerprintOutcomes.tryEmit(
+                                                                    SongFingerprintOutcome.Match(
+                                                                        songId, result.title, result.artist,
+                                                                        result.album, result.year, 1, 0,
+                                                                    )
+                                                                )
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            songFilled = 0
+                                            songCooldownChunks = SONG_CHECK_INTERVAL_CHUNKS
+                                        }
+                                    }
+                                } else {
+                                    // Sprache (oder noch keine Klassifikation) --
+                                    // Puffer verwerfen statt Audio zweier
+                                    // unterschiedlicher Abschnitte zu vermischen.
+                                    songFilled = 0
                                 }
                             }
                             if (consumed > 0) pending = pending.copyOfRange(consumed, pending.size)

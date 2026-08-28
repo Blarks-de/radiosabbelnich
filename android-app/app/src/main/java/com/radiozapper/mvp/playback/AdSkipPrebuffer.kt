@@ -84,6 +84,7 @@ class AdSkipPrebuffer(
                 station.url, modelPath, language, voskModelCache,
                 cfg.ratioToConfirmSpeech, cfg.ratioToConfirmMusic, station.name,
                 fingerprintDb = null,
+                songFingerprintDb = null,
             )
         }
     }

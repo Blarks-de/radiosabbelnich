@@ -33,6 +33,8 @@ import com.radiozapper.mvp.newsbreak.NewsBreakSettings
 import com.radiozapper.mvp.playback.PlaybackService
 import com.radiozapper.mvp.playback.PlaybackStatus
 import com.radiozapper.mvp.playback.StationLockReason
+import com.radiozapper.mvp.songfingerprint.SongFingerprintOutcome
+import com.radiozapper.mvp.songfingerprint.SongRecognitionSettings
 import com.radiozapper.mvp.station.StationManagementActivity
 import com.radiozapper.mvp.stt.SttSettingsActivity
 import com.radiozapper.mvp.update.UpdateManager
@@ -56,6 +58,7 @@ class MainActivity : AppCompatActivity() {
     private var newsBreakFileNameJob: Job? = null
     private var fingerprintOutcomeJob: Job? = null
     private var fingerprintMatchJob: Job? = null
+    private var currentSongJob: Job? = null
     private var sttModelMissingJob: Job? = null
     private var analyzerErrorJob: Job? = null
     private var calibrationJob: Job? = null
@@ -157,6 +160,11 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
+            currentSongJob?.cancel()
+            currentSongJob = lifecycleScope.launch {
+                service.currentSong.collect { match -> renderSongChip(match) }
+            }
+
             // Sprache, fuer die kein Vosk-Modell heruntergeladen ist (siehe
             // PlaybackService.play() - loest dort einen Passthrough OHNE
             // Analyse aus, nicht sichtbar ohne diesen Hinweis).
@@ -250,6 +258,22 @@ class MainActivity : AppCompatActivity() {
             binding.updateStatusText.text = getString(R.string.update_server_saved)
         }
 
+        // AudD-Cloud-Lookup-Einstellungen (Phase 2, siehe
+        // songfingerprint/SongRecognitionSettings.kt) -- Token bewusst nicht
+        // hartcodiert, gleiches Freitext-Prinzip wie die Update-Server-URL
+        // oben. Wirkt erst beim naechsten Senderwechsel/-neustart
+        // (refreshAnalyzer() liest die Einstellung frisch, siehe dort), nicht
+        // live auf eine bereits laufende Analyse.
+        binding.audDTokenInput.setText(SongRecognitionSettings.getAudDToken(this) ?: "")
+        binding.saveAudDTokenButton.setOnClickListener {
+            SongRecognitionSettings.setAudDToken(this, binding.audDTokenInput.text.toString())
+            Toast.makeText(this, getString(R.string.audd_token_saved), Toast.LENGTH_SHORT).show()
+        }
+        binding.cloudLookupEnabledCheckbox.isChecked = SongRecognitionSettings.isCloudLookupEnabled(this)
+        binding.cloudLookupEnabledCheckbox.setOnCheckedChangeListener { _, isChecked ->
+            SongRecognitionSettings.setCloudLookupEnabled(this, isChecked)
+        }
+
         binding.stopButton.setOnClickListener {
             // Sender-/Statusanzeige aktualisiert sich selbst ueber die
             // currentStation-/status-Flows des Service (siehe onServiceConnected).
@@ -265,6 +289,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         binding.clearFingerprintsButton.setOnClickListener { confirmClearFingerprints() }
+        binding.clearSongFingerprintsButton.setOnClickListener { confirmClearSongFingerprints() }
 
         setupNewsBreakSection()
     }
@@ -511,6 +536,31 @@ class MainActivity : AppCompatActivity() {
             is FingerprintOutcome.Match -> getString(R.string.fp_chip_match, outcome.label, outcome.timesSeen)
             is FingerprintOutcome.Learned -> getString(R.string.fp_chip_learned)
         }
+    }
+
+    /** "🎵 Song"-Chip (Phase 3): aktuell erkannter Song (Artist – Titel) oder "–", solange keiner (mit Titel) bekannt ist -- siehe PlaybackService.currentSong. */
+    private fun renderSongChip(match: SongFingerprintOutcome.Match?) {
+        binding.songChipText.text = if (match?.title != null) {
+            getString(R.string.song_chip_match, match.artist ?: "?", match.title)
+        } else {
+            getString(R.string.song_chip_off)
+        }
+    }
+
+    /** Rueckfrage vor dem Leeren, analog confirmClearFingerprints() oben. */
+    private fun confirmClearSongFingerprints() {
+        val service = playbackService ?: return
+        AlertDialog.Builder(this)
+            .setTitle(R.string.song_clear_confirm_title)
+            .setMessage(R.string.song_clear_confirm_message)
+            .setPositiveButton(R.string.btn_clear_song_fingerprints) { _, _ ->
+                lifecycleScope.launch {
+                    val deleted = service.clearSongFingerprints()
+                    Toast.makeText(this@MainActivity, getString(R.string.song_cleared, deleted), Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton(R.string.btn_cancel, null)
+            .show()
     }
 
     /** Android kennt nur HSV, keine HSL-Konvertierung - eigene Umrechnung fuer denselben Farbverlauf wie im Web. */

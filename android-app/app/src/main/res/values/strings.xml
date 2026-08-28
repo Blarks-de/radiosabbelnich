@@ -134,5 +134,17 @@
     <string name="fp_cleared">Fingerprint DB cleared: %1$d clip(s) deleted.</string>
     <string name="fp_clear_confirm_title">Clear fingerprint DB?</string>
     <string name="fp_clear_confirm_message">All learned jingle/ad clips will be deleted. Detection then starts learning from scratch.</string>
+
+    <string name="song_chip_label">🎵 Song</string>
+    <string name="song_chip_off">–</string>
+    <string name="song_chip_match">%1$s – %2$s</string>
+    <string name="btn_clear_song_fingerprints">🗑 Clear song DB</string>
+    <string name="song_cleared">Song DB cleared: %1$d song(s) deleted.</string>
+    <string name="song_clear_confirm_title">Clear song DB?</string>
+    <string name="song_clear_confirm_message">All learned songs (including identified titles) will be deleted. Recognition then starts learning from scratch.</string>
+    <string name="song_cloud_lookup_checkbox">Identify unknown songs via AudD (cloud lookup)</string>
+    <string name="audd_token_label">AudD API token:</string>
+    <string name="btn_save_audd_token">Save</string>
+    <string name="audd_token_saved">AudD token saved.</string>
     <string name="btn_zapping_error">🛑 Zap error</string>
 </resources>

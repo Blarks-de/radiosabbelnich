@@ -23,8 +23,9 @@ Ursprünglich bewusst minimal gestartet (drei hartcodierte Sender, kein
 Watchdog/Ban-System, kein News-Break, keine Settings-UI) und dann entlang
 des Feature-Parität-Fahrplans (`RadioSabbelNich_Android_Fahrplan.md`) auf den
 heutigen Stand gewachsen: Senderverwaltung, Watchdog, Vorwärmung,
-M3U-Import, Nachrichten-Pause, Audio-Fingerprinting und mehrsprachiges STT
-inklusive Kalibrierungs-Wizard - siehe Feature-Liste unten. Weiterhin
+M3U-Import, Nachrichten-Pause, Audio-Fingerprinting, Song-Erkennung
+(inkl. AudD-Cloud-Lookup) und mehrsprachiges STT inklusive
+Kalibrierungs-Wizard - siehe Feature-Liste unten. Weiterhin
 bewusst kein Ban-System, das eine Sperre über einen App-Neustart hinweg
 merkt (siehe "Bekannte Grenzen").
 
@@ -194,6 +195,17 @@ merkt (siehe "Bekannte Grenzen").
   gelernt. Chip "🔎 Fingerprint" zeigt das letzte Ereignis, Button "🛑
   Zapping-Fehler" nimmt einen fälschlichen Treffer zurück (Clip aus der
   DB werfen, kein automatisches Umschalten rückgängig machen).
+- **Song-Erkennung** (`songfingerprint/`, Vorbild `song_fingerprint.py` im
+  Docker-Projekt - siehe eigener Architektur-Abschnitt unten) - erkennt
+  wiederholte Musikstücke lokal (Adaption desselben Constellation-Map-
+  Verfahrens wie beim Audio-Fingerprinting oben, eigene DB
+  `song_fingerprints.db`) und identifiziert unbekannte optional per
+  AudD-Cloud-Lookup (Titel/Interpret/Album/Jahr). Cloud-Lookup ist ein
+  eigener, standardmäßig AUS-geschalteter Schalter ("Identify unknown
+  songs via AudD") + Textfeld für den API-Token auf der Startseite, ganz
+  unabhängig von der immer laufenden lokalen Erkennung. Chip "🎵 Song"
+  zeigt den aktuell erkannten Song, Button "🗑 Song-DB leeren" setzt die
+  Erkennung zurück.
 - **Build-Zeitstempel in der UI** (`Build: YYYY-MM-DD HH:MM` direkt unter
   dem App-Titel, `BuildConfig.BUILD_TIME`) - entsteht automatisch bei
   jedem Build. Zweck: von aussen erkennbar, ob eine gerade installierte
@@ -782,6 +794,99 @@ Jingle erkannt")`, erbt den bestehenden Cooldown automatisch). Pausiert
 implizit waehrend einer Nachrichten-Pause, weil `analyzer.stop()` dort
 bereits die komplette Analyse-Coroutine abbricht.
 
+### Song-Erkennung (`songfingerprint/`)
+
+Vorbild: `song_fingerprint.py` im Docker-Projekt (siehe dessen Moduldoc/
+`ARCHITECTURE.md`, Abschnitt "Song-Erkennung", für die volle Herleitung
+inkl. Phase 1/Phase 2). **Wichtiger Unterschied**: das Docker-Projekt
+nutzt dort bewusst Chromaprint (`fpcalc`, fertiges Debian-Paket) statt
+eines eigenen Constellation-Map-Verfahrens - Letzteres wäre laut dessen
+Moduldoc "eine deutlich größere Baustelle" gewesen. Auf Android gibt es
+kein entsprechendes vorgefertigtes Kompilat ohne NDK/JNI-Aufwand, aber
+das genau dafür geeignete Constellation-Map-Verfahren existiert hier
+bereits (siehe "Audio-Fingerprinting" oben) - Wiederverwendung statt
+Neuentwicklung: `SongFingerprintDb.matchOrLearn()` ruft
+`Fingerprint.fingerprintClip()` (dieselbe Funktion wie fürs
+Sprache-Fingerprinting) unverändert mit denselben Algorithmus-/
+Peak-Konstanten auf, nur der Match-Schwellwert unterscheidet sich
+(`MIN_HASH_MATCHES=140` statt `25` - Song-Schnipsel sind mit 11.0s
+deutlich länger als die 2s-Sprache-Clips, für die der Original-Wert
+kalibriert wurde: `25 * 11.0/2.0 ≈ 137.5`, aufgerundet). **Kein eigener
+`SongFingerprint.kt`-Wrapper** - da aktuell alle Peak-/Hash-Parameter mit
+`Fingerprint.kt` identisch sind, wäre eine reine 1:1-Alias-Klasse nur
+unnötige Indirektion gewesen.
+
+**UNKALIBRIERTER PLATZHALTER** (siehe "Bekannte Grenzen" unten): anders
+als beim ursprünglichen Sprache-Fingerprinting (dort ein echter
+351-Paar-Cross-Match-Test) gibt es für Musik auf Android keinen
+Testkorpus. Sowohl `MIN_HASH_MATCHES` als auch der rohe
+Übereinstimmungs-Zähler selbst (statt eines auf die Überlappungslänge
+normierten Verhältnisses, wie es Dockers Chromaprint-`similarity()`
+nutzt) sind bewusste Vereinfachungen, keine Messwerte. Live im Emulator
+gegen den echten SWR3-Stream beobachtet: neue Songs mit ~1000-1400
+Hashes, Zufalls-Übereinstimmungen zwischen verschiedenen Songs im
+niedrigen einstelligen Bereich (2, 5, 6 von jeweils >1000 Hashes) - ein
+deutlicher Abstand zur Schwelle 140, aber ohne einen echten Wiederholungs-
+Testfall bislang nicht als "Trefferseite" verifiziert.
+
+**Puffer + Cooldown statt echtem Ringpuffer**: `StreamAnalyzer.kt` sammelt
+PCM nur, solange der GEGLÄTTETE Status `MUSIC` ist (Docker-Pendant:
+`label == "music"`), in einen fest dimensionierten `SONG_SNIPPET_SAMPLES`-
+Puffer (11.0s bei 16kHz, bewusst identisch zu `song_recognition.
+snippet_seconds` im Docker-Projekt - unter AudDs 12s-Limit). Ist der
+Puffer voll, läuft ein Check, danach `songCooldownChunks` Chunks Pause
+(mirrors `interval_seconds=45.0`) - anders als Dockers echter Sliding-
+Ringpuffer zählt der Cooldown hier nur während MUSIC-Chunks herunter
+(bewusste Vereinfachung, siehe Code-Kommentar in `StreamAnalyzer.kt`:
+eine längere Moderation zwischen zwei Songs "pausiert" den Intervall-
+Countdown mit, statt real weiterzulaufen - unkritisch, da hier kein
+Icecast-Publikum wie beim Docker-Hörer-Gate dranhängt).
+
+**AudD-Cloud-Lookup (`AudDClient.kt`)**: `HttpURLConnection` (kein
+OkHttp/Retrofit, siehe `importer/StationImporter.kt` als bestehendes
+Muster in diesem Projekt), Multipart-Body + WAV-Header von Hand gebaut
+(kein `javax.sound.sampled` auf Android, anders als Pythons `wave`-Modul),
+JSON-Antwort per `org.json` (Android-SDK-Bordmittel). Läuft nur bei einem
+echten lokalen Cache-Miss (`Learned`) UND aktiviertem
+"Identify unknown songs via AudD"-Schalter UND gesetztem Token
+(`SongRecognitionSettings.kt`, SharedPreferences-Textfeld auf der
+Startseite, gleiches Muster wie die Update-Server-URL in
+`UpdateManager.kt` - Token bewusst nicht in `stations.json`). Eigener
+`AUDD_MIN_INTERVAL_MS=60_000`-Cooldown direkt in `AudDClient`, unabhängig
+vom lokalen Song-Cooldown - zweite Sicherheitsebene gegen
+Kontingent-Verbrauch bei einem zu locker/streng greifenden, unkalibrierten
+`MIN_HASH_MATCHES`.
+
+**Wichtig, live gefunden: der Netzwerk-Call läuft in einer eigenen,
+LOSGELÖSTEN Coroutine** (`scope.launch(Dispatchers.IO) { ... }` direkt an
+der Fundstelle in `StreamAnalyzer.runAnalysis()`), NICHT inline im
+Decode-Loop - ein AudD-Request kann mehrere Sekunden dauern und darf die
+laufende Audio-Dekodierung/Vosk-Verarbeitung nicht blockieren (exakt das,
+was das Docker-Pendant per eigenem Hintergrund-Thread vermeidet). Der
+PCM-Schnipsel wird dafür VOR dem Zurücksetzen des Puffers per
+`.copyOf()` kopiert (`songSnapshot`) - sonst würde der als Referenz
+übergebene, weiterhin lebende Puffer bereits vom nächsten Zyklus
+überschrieben, während der Cloud-Call noch läuft. Bei Erfolg schreibt
+`SongFingerprintDb.setCloudMetadata()` Titel/Interpret/Album/Jahr in die
+von `matchOrLearn()` schon angelegte Zeile (kein Umweg über einen
+Hash-Text wie beim Docker-Pendant nötig - die Zeilen-ID ist hier direkt
+aus dem `Learned`-Rückgabewert bekannt) und emittiert ein synthetisches
+`Match`-Ereignis, damit die UI sofort aktualisiert. Per `isCurrent(runGeneration)`
+abgesichert: ein während des Cloud-Calls längst abgelöster Sender-Lauf
+(Nutzer hat inzwischen weitergeschaltet) schreibt die DB zwar noch
+korrekt (kein Datenverlust), aktualisiert aber NICHT mehr die Anzeige des
+inzwischen falschen Senders.
+
+**`currentSong`/UI**: `PlaybackService.currentSong` (StateFlow) wird bei
+JEDEM `refreshAnalyzer()`-Aufruf (echter Senderwechsel UND
+kalibrierungsbedingter Sprachwechsel auf demselben Sender) sofort auf
+`null` gesetzt, BEVOR der Analyzer neu startet - sonst würde ein
+inzwischen nicht mehr passender alter Song weiter angezeigt (dieselbe
+"Stale-Anzeige"-Falle, die auch beim Docker-Hörer-Gate live gefunden
+wurde, siehe dessen `SESSION.md`). Chip "🎵 Song" zeigt "Artist – Titel"
+oder "–", Button "🗑 Song-DB leeren" (mit Rückfrage, analog "🗑
+Fingerprint-DB leeren") setzt die Erkennung komplett zurück.
+
 ### Mehrsprachiges STT (Schritt 1: Grundgerüst)
 
 (Schritt 2, der Kalibrierungs-Wizard, ist ein eigener Abschnitt weiter
@@ -1044,6 +1149,21 @@ echten Stand zurueckgesetzt.
   UEBER der Schwelle) wurde mangels eines garantiert wiederkehrenden
   Test-Clips noch nicht live beobachtet, nur der gleiche, im Docker-Projekt
   bereits bewaehrte Algorithmus neu in Kotlin geschrieben.
+- **`MIN_HASH_MATCHES=140` fuer die Song-Erkennung ist ebenfalls ein
+  unkalibrierter Startwert** (siehe "Song-Erkennung" oben) - reine
+  Verhaeltnisrechnung aus dem Sprache-Wert, kein eigener
+  Cross-Match-Test. Live gegen den echten SWR3-Stream beobachtet: neue
+  Songs mit ~1000-1400 Hashes, Zufalls-Uebereinstimmungen zwischen
+  verschiedenen Songs im niedrigen einstelligen Bereich - deutlicher
+  Abstand zur Schwelle, aber mangels eines garantiert wiederkehrenden
+  Song-Testfalls noch nicht auf der ECHTEN Treffer-Seite verifiziert
+  (gleiche Einschraenkung wie beim Sprache-Fingerprinting oben). Der rohe
+  Uebereinstimmungs-Zaehler (statt eines auf die Ueberlappungslaenge
+  normierten Verhaeltnisses wie bei Dockers Chromaprint-`similarity()`)
+  ist eine bewusste Vereinfachung, die bei nur teilweise ueberlappenden
+  Song-Schnipseln (unterschiedlicher Einstiegspunkt im Song) zu
+  niedrigeren Treffer-Zahlen fuehren kann, als eine normierte Metrik
+  liefern wuerde.
 - **Ein Vosk-Modellwechsel kostet weiterhin Ladezeit** (ca. 1-2s), wenn
   die Zielsprache nicht mehr im `VoskModelCache` liegt - innerhalb der
   `MAX_LOADED_VOSK_LANGUAGES=2` zuletzt genutzten Sprachen wird das

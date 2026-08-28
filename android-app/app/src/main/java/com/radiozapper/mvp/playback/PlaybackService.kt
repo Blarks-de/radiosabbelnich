@@ -31,6 +31,9 @@ import com.radiozapper.mvp.model.StationRepository
 import com.radiozapper.mvp.newsbreak.NewsBreak
 import com.radiozapper.mvp.newsbreak.NewsBreakConfig
 import com.radiozapper.mvp.newsbreak.NewsBreakSettings
+import com.radiozapper.mvp.songfingerprint.SongFingerprintDb
+import com.radiozapper.mvp.songfingerprint.SongFingerprintOutcome
+import com.radiozapper.mvp.songfingerprint.SongRecognitionSettings
 import com.radiozapper.mvp.stt.CalibrationLevel
 import com.radiozapper.mvp.stt.CalibrationSuggestion
 import com.radiozapper.mvp.stt.SttSettings
@@ -300,6 +303,14 @@ class PlaybackService : LifecycleService() {
     /** Fuer den "🛑 Zapping-Fehler"-Knopf - nur bei Match gesetzt (Learned kann nicht "falsch" sein, da kein Wechsel ausgeloest wurde). */
     val lastFingerprintMatch: StateFlow<FingerprintOutcome.Match?> = _lastFingerprintMatch
 
+    // Song-Erkennung (Phase 1, siehe songfingerprint/SongFingerprintDb.kt) --
+    // gleiches Lifecycle-Muster wie fingerprintDb oben (eine langlebige
+    // Instanz gehoert dem Service).
+    private lateinit var songFingerprintDb: SongFingerprintDb
+    private val _currentSong = MutableStateFlow<SongFingerprintOutcome.Match?>(null)
+    /** Fuers UI ("🎵 Song"-Chip, Phase 3) -- nur bei einem TITEL-tragenden Match gesetzt (siehe handleSongFingerprintOutcome()), null solange nichts (mit Titel) erkannt ist oder seit dem letzten Streamwechsel. */
+    val currentSong: StateFlow<SongFingerprintOutcome.Match?> = _currentSong
+
     // Mehrsprachiges STT (Phase 7, siehe stt/SttSettings.kt): eine einzige,
     // langlebige VoskModelCache-Instanz gehoert diesem Service (analog
     // fingerprintDb) - LRU-verwaltet, mehrere Sprachen koennen sich so ueber
@@ -407,6 +418,7 @@ class PlaybackService : LifecycleService() {
         super.onCreate()
         analyzer = StreamAnalyzer(lifecycleScope)
         fingerprintDb = FingerprintDb(this)
+        songFingerprintDb = SongFingerprintDb(this)
         player = ExoPlayer.Builder(this).build().apply {
             // Nutzt die im Manifest laengst deklarierte WAKE_LOCK-Berechtigung
             // (Review-Befund 7): ohne Wake-Mode kann die CPU bei
@@ -423,6 +435,10 @@ class PlaybackService : LifecycleService() {
 
         lifecycleScope.launch {
             analyzer.fingerprintOutcomes.collect { outcome -> handleFingerprintOutcome(outcome) }
+        }
+
+        lifecycleScope.launch {
+            analyzer.songFingerprintOutcomes.collect { outcome -> handleSongFingerprintOutcome(outcome) }
         }
 
         // Analyse-Fehler (NICHT Sender-Fehler, siehe Klassen-Doc).
@@ -551,6 +567,15 @@ class PlaybackService : LifecycleService() {
      * Kategorie-Aufloesung - genau dafuer ist die Kalibrierung da.
      */
     private fun refreshAnalyzer(station: Station) {
+        // Jeder Aufruf (echter Senderwechsel UND kalibrierungsbedingter
+        // Sprachwechsel auf demselben Sender) reisst die Analyse-Coroutine
+        // ab und startet sie neu (siehe StreamAnalyzer.start(), das immer
+        // erst stop() aufruft) -- der Song-Erkennungs-Puffer DORT startet
+        // dadurch ohnehin leer. _currentSong hier mitleeren, sonst wuerde
+        // ein laengst nicht mehr passender, alter Song weiter angezeigt
+        // (exakt dieselbe "Stale-Anzeige"-Falle wie beim Docker-Hoerer-Gate,
+        // siehe dessen SESSION.md).
+        _currentSong.value = null
         val language = _calibrationLanguage.value ?: SttSettings.resolveLanguage(this, station.category)
         val cfg = SttSettings.getLanguages(this)[language]
         val modelPath = cfg?.let { VoskModelManager.modelPathOrNull(this, language, it.modelUrl) }
@@ -565,6 +590,9 @@ class PlaybackService : LifecycleService() {
                 cfg.ratioToConfirmMusic,
                 station.name,
                 fingerprintDb,
+                songFingerprintDb,
+                SongRecognitionSettings.isCloudLookupEnabled(this),
+                SongRecognitionSettings.getAudDToken(this),
             )
         } else {
             _sttModelMissing.value = language
@@ -1040,6 +1068,36 @@ class PlaybackService : LifecycleService() {
     }
 
     /**
+     * Reagiert auf ein Song-Erkennungs-Ereignis aus StreamAnalyzer (Phase 1,
+     * siehe songfingerprint/SongFingerprintDb.kt). ANDERS als bei
+     * `handleFingerprintOutcome()` oben: ein Song-Match ist rein
+     * informativ, loest KEIN `attemptAutoSwitch()` aus (ein wiedererkannter
+     * Song ist kein Grund zum Wegschalten, anders als ein bekannter Jingle/
+     * Werbespot). `Match` aktualisiert `currentSong` nur, wenn schon ein
+     * Titel bekannt ist (Phase 1: title/artist sind nach einem lokalen
+     * Match ohne vorherigen Cloud-Lookup immer null, siehe
+     * SongFingerprintDb-Klassendoc -- Phase 2 fuellt sie ueber
+     * `setCloudMetadata()`). `Learned` loest in Phase 2 den
+     * AudD-Cloud-Lookup aus, hier noch ein reines No-Op.
+     */
+    private fun handleSongFingerprintOutcome(outcome: SongFingerprintOutcome) {
+        when (outcome) {
+            is SongFingerprintOutcome.Match -> {
+                Log.i(
+                    TAG,
+                    "🎵 Song wiedererkannt: Song #${outcome.songId} " +
+                        "('${outcome.artist ?: "?"}' - '${outcome.title ?: "?"}'), " +
+                        "${outcome.playCount}x gehört, Stärke ${outcome.matchStrength}",
+                )
+                _currentSong.value = if (outcome.title != null) outcome else null
+            }
+            is SongFingerprintOutcome.Learned -> {
+                Log.d(TAG, "🎵 Neuer Song gelernt (#${outcome.songId})")
+            }
+        }
+    }
+
+    /**
      * Fuer den "🛑 Zapping-Fehler"-Knopf: falls ein Fingerprint-Treffer
      * faelschlich einen Wechsel ausgeloest hat, wirft das den zugrunde
      * liegenden Clip wieder aus der DB - ohne das wuerde er dauerhaft weiter
@@ -1067,6 +1125,13 @@ class PlaybackService : LifecycleService() {
         val deleted = withContext(Dispatchers.IO) { fingerprintDb.clearAll() }
         _lastFingerprintMatch.value = null
         _lastFingerprintOutcome.value = null
+        return deleted
+    }
+
+    /** "🗑 Song-DB leeren"-Knopf (Phase 3), analog clearFingerprints() oben. */
+    suspend fun clearSongFingerprints(): Int {
+        val deleted = withContext(Dispatchers.IO) { songFingerprintDb.clearAll() }
+        _currentSong.value = null
         return deleted
     }
 
@@ -1299,6 +1364,7 @@ class PlaybackService : LifecycleService() {
         player = null
         clearPreload()
         fingerprintDb.close()
+        songFingerprintDb.close()
         voskModelCache.clear()
         super.onDestroy()
     }
