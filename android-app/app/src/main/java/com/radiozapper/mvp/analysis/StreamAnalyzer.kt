@@ -451,13 +451,14 @@ class StreamAnalyzer(private val scope: CoroutineScope) {
                                                         val result = AudDClient.recognize(songSnapshot, TARGET_SAMPLE_RATE, audDToken)
                                                         if (result != null) {
                                                             songFingerprintDb.setCloudMetadata(
-                                                                songId, result.title, result.artist, result.album, result.year,
+                                                                songId, result.title, result.artist,
+                                                                result.album, result.year, result.durationSeconds,
                                                             )
                                                             if (isCurrent(runGeneration)) {
                                                                 _songFingerprintOutcomes.tryEmit(
                                                                     SongFingerprintOutcome.Match(
                                                                         songId, result.title, result.artist,
-                                                                        result.album, result.year, 1, 0,
+                                                                        result.album, result.year, result.durationSeconds, 1, 0,
                                                                     )
                                                                 )
                                                             }

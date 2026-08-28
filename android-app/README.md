@@ -200,15 +200,18 @@ merkt (siehe "Bekannte Grenzen").
   wiederholte Musikstücke lokal (Adaption desselben Constellation-Map-
   Verfahrens wie beim Audio-Fingerprinting oben, eigene DB
   `song_fingerprints.db`) und identifiziert unbekannte optional per
-  AudD-Cloud-Lookup (Titel/Interpret/Album/Jahr). Cloud-Lookup ist ein
-  eigener, standardmäßig AUS-geschalteter Schalter ("Identify unknown
-  songs via AudD") + Textfeld für den API-Token auf der Startseite, ganz
-  unabhängig von der immer laufenden lokalen Erkennung. Chip "🎵 Song"
-  zeigt den aktuell erkannten Song, sonst "🔍 noch nicht erkannt" (läuft
-  ein Sender, aber noch kein Titel bekannt) oder "–" (nichts läuft) -
-  analog zur gleichnamigen Debug-Anzeige im Docker-Web-Interface, ohne
-  deren dritten "pausiert (keine Hörer)"-Zustand (kein Icecast-Publikum
-  auf Android). Button "🗑 Song-DB leeren" setzt die Erkennung zurück.
+  AudD-Cloud-Lookup (Titel/Interpret/Album/Jahr/Länge - Länge kommt aus
+  zusätzlich angeforderten Spotify-/Apple-Music-Daten, AudDs Kernantwort
+  liefert sie nicht). Cloud-Lookup ist ein eigener, standardmäßig
+  AUS-geschalteter Schalter ("Identify unknown songs via AudD") + Textfeld
+  für den API-Token auf der Startseite, ganz unabhängig von der immer
+  laufenden lokalen Erkennung. Chip "🎵 Song" zeigt den aktuell erkannten
+  Song (inkl. Länge in Klammern, z.B. "Artist – Titel (3:17)", falls
+  bekannt), sonst "🔍 noch nicht erkannt" (läuft ein Sender, aber noch
+  kein Titel bekannt) oder "–" (nichts läuft) - analog zur gleichnamigen
+  Debug-Anzeige im Docker-Web-Interface, ohne deren dritten "pausiert
+  (keine Hörer)"-Zustand (kein Icecast-Publikum auf Android). Button "🗑
+  Song-DB leeren" setzt die Erkennung zurück.
 - **"⏭ Andere Pause-MP3"-Knopf** (`PlaybackService.
   manualNewsBreakSkip()`) - nur während einer laufenden Nachrichten-
   Pause aktiv, wählt eine andere zufällige MP3 aus demselben Ordner, die
@@ -856,7 +859,12 @@ Icecast-Publikum wie beim Docker-Hörer-Gate dranhängt).
 OkHttp/Retrofit, siehe `importer/StationImporter.kt` als bestehendes
 Muster in diesem Projekt), Multipart-Body + WAV-Header von Hand gebaut
 (kein `javax.sound.sampled` auf Android, anders als Pythons `wave`-Modul),
-JSON-Antwort per `org.json` (Android-SDK-Bordmittel). Läuft nur bei einem
+JSON-Antwort per `org.json` (Android-SDK-Bordmittel). Multipart-Feld
+`return=apple_music,spotify` zusätzlich zu `api_token`/`file` (Nutzer-
+Wunsch, nachträglich ergänzt) NUR wegen der Songlänge -- AudDs
+Kernantwort liefert sie nicht, `parseDurationSeconds()` liest
+`result.spotify.duration_ms` bzw. `result.apple_music.durationInMillis`
+(live geprüft, praktisch identisch, Spotify bevorzugt). Läuft nur bei einem
 echten lokalen Cache-Miss (`Learned`) UND aktiviertem
 "Identify unknown songs via AudD"-Schalter UND gesetztem Token
 (`SongRecognitionSettings.kt`, SharedPreferences-Textfeld auf der

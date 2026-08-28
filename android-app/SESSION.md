@@ -1872,3 +1872,43 @@ angefasst, nicht Teil dieser Anfrage).
   aufruft.
 - Build + Upload nach `blarks.de/radio/update/` (Pflicht laut
   `CLAUDE.md`) im Anschluss an diesen Eintrag durchgeführt.
+
+## 2026-08-28 (Fortsetzung) — Songlänge doch noch ergänzt (Docker zuerst, dann hierher portiert)
+
+Auslöser: Nutzer bat, die beim Album/Jahr-Gespräch bewusst weggelassene
+Songlänge doch noch zu versuchen. Zuerst im Docker-Projekt umgesetzt und
+live gegen die echte AudD-API verifiziert (siehe `../SESSION.md`), dann
+1:1 hierher portiert.
+
+### Umsetzung
+
+- `AudDClient.kt`: neues Multipart-Feld `return=apple_music,spotify`
+  neben `api_token`/`file`. Neue `parseDurationSeconds()`: liest
+  `result.spotify.duration_ms` (Millisekunden), Fallback
+  `result.apple_music.durationInMillis` — beide praktisch identisch
+  (Rundungsdifferenz ~1ms, live gegen einen bekannten Testsong geprüft:
+  197142 vs. 197143). `AudDResult` um `durationSeconds: Int?` erweitert.
+- `SongFingerprintDb.kt`: neue Spalte `duration_seconds`, `DB_VERSION`
+  1 → 2 (Drop+Recreate in `onUpgrade()`, kein ALTER-TABLE-Migrationspfad
+  wie im Docker-Projekt nötig — reiner Testbestand auf dem Emulator).
+  `SongFingerprintOutcome.Match` um `durationSeconds` erweitert,
+  `matchOrLearn()`/`setCloudMetadata()` reichen den Wert durch.
+- `StreamAnalyzer.kt`: `result.durationSeconds` an `setCloudMetadata()`
+  und das synthetische `Match`-Ereignis weitergereicht — keine neue
+  Logik nötig, exakt derselbe Pfad wie Album/Jahr vorhin.
+- UI: `MainActivity.renderSongChip()` hängt bei bekannter Länge
+  `" (m:ss)"` an den bestehenden "Artist – Titel"-Text (neue kleine
+  `formatDuration()`-Hilfsfunktion). Keine neuen Strings nötig.
+
+### Verifiziert
+
+- `./gradlew assembleDebug`: `BUILD SUCCESSFUL`.
+- Live im Emulator (SWR3, echter AudD-Token): DB-Schema-Migration lief
+  beim ersten Start nach dem Update automatisch (Version 1 → 2).
+  Song #1 gelernt → AudD identifiziert `'Måneskin' - 'Beggin''` →
+  DB-Auszug bestätigt `duration_seconds=212`. Zweiter Durchlauf (Song
+  #2, `'Chris de Sarandy' - 'Good Old Days'`): `songChipText` per
+  `uiautomator dump` sofort nach dem AudD-Log-Treffer geprüft, zeigt
+  korrekt `"Chris de Sarandy – Good Old Days (3:00)"`.
+- Build + Upload nach `blarks.de/radio/update/` (Pflicht laut
+  `CLAUDE.md`) im Anschluss an diesen Eintrag durchgeführt.

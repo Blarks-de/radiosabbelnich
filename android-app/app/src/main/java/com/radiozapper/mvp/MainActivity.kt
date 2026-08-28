@@ -572,10 +572,20 @@ class MainActivity : AppCompatActivity() {
      */
     private fun renderSongChip(match: SongFingerprintOutcome.Match?) {
         binding.songChipText.text = when {
-            match?.title != null -> getString(R.string.song_chip_match, match.artist ?: "?", match.title)
+            match?.title != null -> {
+                val base = getString(R.string.song_chip_match, match.artist ?: "?", match.title)
+                match.durationSeconds?.let { "$base (${formatDuration(it)})" } ?: base
+            }
             lastPlaybackStatus == PlaybackStatus.IDLE -> getString(R.string.song_chip_off)
             else -> getString(R.string.song_chip_pending)
         }
+    }
+
+    /** "m:ss", z.B. 197 -> "3:17" - fuer die Songlaenge im "🎵 Song"-Chip. */
+    private fun formatDuration(seconds: Int): String {
+        val m = seconds / 60
+        val s = seconds % 60
+        return "$m:${s.toString().padStart(2, '0')}"
     }
 
     /** Rueckfrage vor dem Leeren, analog confirmClearFingerprints() oben. */

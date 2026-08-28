@@ -17,7 +17,11 @@ import java.util.Locale
 
 private const val TAG = "SongFingerprintDb"
 private const val DB_NAME = "song_fingerprints.db"
-private const val DB_VERSION = 1
+// Bump 1 -> 2 fuer die duration_seconds-Spalte (Nutzer-Wunsch): reiner
+// Testbestand auf dem Emulator, deshalb Drop+Recreate in onUpgrade()
+// statt einer ALTER-TABLE-Migration wie im Docker-Pendant -- siehe
+// onUpgrade()-Kommentar fuer die Begruendung.
+private const val DB_VERSION = 2
 // Gleicher Grund wie in FingerprintDb.kt: SQLite erlaubt bis zu 999
 // Platzhalter pro Statement.
 private const val QUERY_CHUNK_SIZE = 500
@@ -41,6 +45,7 @@ sealed class SongFingerprintOutcome {
         val artist: String?,
         val album: String?,
         val year: Int?,
+        val durationSeconds: Int?,
         val playCount: Int,
         val matchStrength: Int,
     ) : SongFingerprintOutcome()
@@ -86,6 +91,7 @@ class SongFingerprintDb(context: Context) : SQLiteOpenHelper(context.application
                 artist TEXT,
                 album TEXT,
                 year INTEGER,
+                duration_seconds INTEGER,
                 first_seen TEXT,
                 last_seen TEXT,
                 play_count INTEGER DEFAULT 1
@@ -180,7 +186,7 @@ class SongFingerprintDb(context: Context) : SQLiteOpenHelper(context.application
                     arrayOf(now, bestSongId),
                 )
                 db.rawQuery(
-                    "SELECT title, artist, album, year, play_count FROM songs WHERE id = ?",
+                    "SELECT title, artist, album, year, duration_seconds, play_count FROM songs WHERE id = ?",
                     arrayOf(bestSongId.toString()),
                 ).use { cursor ->
                     if (cursor.moveToFirst()) {
@@ -188,13 +194,16 @@ class SongFingerprintDb(context: Context) : SQLiteOpenHelper(context.application
                         val artist = cursor.getString(1)
                         val album = cursor.getString(2)
                         val year = if (cursor.isNull(3)) null else cursor.getInt(3)
-                        val playCount = cursor.getInt(4)
+                        val durationSeconds = if (cursor.isNull(4)) null else cursor.getInt(4)
+                        val playCount = cursor.getInt(5)
                         Log.d(
                             TAG,
                             "Treffer: Song #$bestSongId ('$artist' - '$title'), $bestCount " +
                                 "konsistente Hash-Matches, bereits ${playCount}x gehört",
                         )
-                        return SongFingerprintOutcome.Match(bestSongId, title, artist, album, year, playCount, bestCount)
+                        return SongFingerprintOutcome.Match(
+                            bestSongId, title, artist, album, year, durationSeconds, playCount, bestCount,
+                        )
                     }
                 }
             }
@@ -211,6 +220,7 @@ class SongFingerprintDb(context: Context) : SQLiteOpenHelper(context.application
                 putNull("artist")
                 putNull("album")
                 putNull("year")
+                putNull("duration_seconds")
                 put("first_seen", now)
                 put("last_seen", now)
                 put("play_count", 1)
@@ -228,17 +238,20 @@ class SongFingerprintDb(context: Context) : SQLiteOpenHelper(context.application
     }
 
     /**
-     * Trägt Titel/Interpret/Album/Jahr aus einem erfolgreichen AudD-Lookup
+     * Trägt Titel/Interpret/Album/Jahr/Länge aus einem erfolgreichen AudD-Lookup
      * (Phase 2) in die von `matchOrLearn()` angelegte Zeile nach --
      * `songId` kommt direkt aus deren `Learned`-Rückgabewert (kein Umweg
      * über einen Hash-Text wie beim Docker-Pendant nötig, hier ist die
      * Zeilen-ID schon bekannt).
      */
-    fun setCloudMetadata(songId: Long, title: String, artist: String, album: String?, year: Int?) {
+    fun setCloudMetadata(
+        songId: Long, title: String, artist: String,
+        album: String?, year: Int?, durationSeconds: Int?,
+    ) {
         val db = writableDatabase
         db.execSQL(
-            "UPDATE songs SET title = ?, artist = ?, album = ?, year = ? WHERE id = ?",
-            arrayOf(title, artist, album, year, songId),
+            "UPDATE songs SET title = ?, artist = ?, album = ?, year = ?, duration_seconds = ? WHERE id = ?",
+            arrayOf(title, artist, album, year, durationSeconds, songId),
         )
         Log.i(TAG, "☁️ Song #$songId per AudD identifiziert: '$artist' - '$title'")
     }
