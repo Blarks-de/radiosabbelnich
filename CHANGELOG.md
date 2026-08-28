@@ -40,6 +40,12 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 
 ## 2026-08-28
 
+- Neu: Song-Erkennung liefert jetzt auch die Songlänge (Album/Jahr waren
+  schon da), wenn AudD sie mitliefert — erscheint in der "Jetzt
+  läuft"-Anzeige als "Album (Jahr) · m:ss". Kommt aus zusätzlich
+  angeforderten Spotify-/Apple-Music-Daten (`return=apple_music,spotify`),
+  da AudDs Kernantwort keine Länge liefert. Neue Spalte `duration_seconds`
+  in `song_fingerprints.db` (Migration für bestehende DBs).
 - Neu: "⏭ Andere Pause-MP3"-Knopf auf der Player-Seite — wählt während
   einer laufenden Nachrichten-Pause eine andere zufällige MP3 aus
   demselben Ordner, ohne die Pause (anders als "⚡ ZAPPEN!") komplett zu

@@ -277,12 +277,32 @@ def _parse_release_year(release_date) -> Optional[int]:
         return None
 
 
+def _parse_duration_seconds(result: dict) -> Optional[int]:
+    """AudDs Kernantwort liefert KEINE Songlänge -- nur mit `return=
+    apple_music,spotify` (siehe audd_lookup()) kommen zwei zusätzliche,
+    verschachtelte Objekte mit je einem Millisekunden-Feld mit
+    (live geprüft, siehe SESSION.md): `result["spotify"]["duration_ms"]`
+    bzw. `result["apple_music"]["durationInMillis"]` -- beide praktisch
+    identisch (Rundungsdifferenz im Bereich 1ms), Spotify bevorzugt, weil
+    zuerst im Response-JSON. Keins von beiden ist garantiert vorhanden
+    (nicht jeder Song hat einen Spotify-/Apple-Music-Treffer)."""
+    spotify = result.get("spotify") or {}
+    apple_music = result.get("apple_music") or {}
+    duration_ms = spotify.get("duration_ms") or apple_music.get("durationInMillis")
+    if not duration_ms:
+        return None
+    try:
+        return round(int(duration_ms) / 1000)
+    except (TypeError, ValueError):
+        return None
+
+
 def audd_lookup(pcm_int16: np.ndarray, sample_rate: int, api_token: str) -> Optional[dict]:
     """Schickt `pcm_int16` als WAV an AudD (https://audd.io) und gibt bei
-    einer erfolgreichen Identifikation {"title", "artist", "album", "year"}
-    zurück (album/year können weiterhin None sein, falls AudD sie nicht
-    mitliefert -- title/artist sind die einzigen Pflichtfelder), sonst
-    None -- sowohl bei "AudD kennt den Song nicht" als auch bei jedem
+    einer erfolgreichen Identifikation {"title", "artist", "album", "year",
+    "duration_seconds"} zurück (alle außer title/artist können None sein,
+    falls AudD sie nicht mitliefert), sonst None -- sowohl bei "AudD kennt
+    den Song nicht" als auch bei jedem
     Netzwerk-/Timeout-/Parse-Fehler (gleiches defensives Muster wie
     compute_fingerprint(): ein Cloud-Lookup darf den Analyse-Thread nie
     mitreißen). Respektiert AUDD_MIN_INTERVAL_SECONDS als Sicherheitsnetz
@@ -310,7 +330,12 @@ def audd_lookup(pcm_int16: np.ndarray, sample_rate: int, api_token: str) -> Opti
             wf.writeframes(pcm_int16.astype(np.int16).tobytes())
 
         body, content_type = _multipart_encode(
-            {"api_token": api_token}, "file", "snippet.wav", buf.getvalue()
+            # "return=apple_music,spotify" NUR wegen der Songlänge (siehe
+            # _parse_duration_seconds()) -- AudDs Kernantwort liefert sie
+            # nicht. Kostet keine zusätzliche Anfrage, nur mehr Felder in
+            # derselben Antwort.
+            {"api_token": api_token, "return": "apple_music,spotify"},
+            "file", "snippet.wav", buf.getvalue()
         )
         req = urllib.request.Request(
             AUDD_URL, data=body, method="POST",
@@ -329,6 +354,7 @@ def audd_lookup(pcm_int16: np.ndarray, sample_rate: int, api_token: str) -> Opti
             "title": title, "artist": artist,
             "album": result.get("album") or None,
             "year": _parse_release_year(result.get("release_date")),
+            "duration_seconds": _parse_duration_seconds(result),
         }
     except Exception as e:
         # Breiter Fang wie bei compute_fingerprint() -- ein Cloud-Lookup
@@ -406,6 +432,9 @@ class SongFingerprintDB:
             if "year" not in columns:
                 conn.execute("ALTER TABLE song_fingerprints ADD COLUMN year INTEGER")
                 log.info("🎵 Song-Fingerprint-DB-Schema migriert: Spalte 'year' ergänzt.")
+            if "duration_seconds" not in columns:
+                conn.execute("ALTER TABLE song_fingerprints ADD COLUMN duration_seconds INTEGER")
+                log.info("🎵 Song-Fingerprint-DB-Schema migriert: Spalte 'duration_seconds' ergänzt.")
             # Kalibrierungs-Logging für similarity_threshold (siehe
             # SESSION.md, Eintrag zu diesem Zwischenschritt): ein Ähnlichkeit-
             # Skalarwert taugt nichts, eine ganze Verteilung von Hit- vs.
@@ -450,20 +479,20 @@ class SongFingerprintDB:
         try:
             c = conn.cursor()
             rows = c.execute(
-                "SELECT id, fingerprint_hash, title, artist, play_count, album, year "
+                "SELECT id, fingerprint_hash, title, artist, play_count, album, year, duration_seconds "
                 "FROM song_fingerprints"
             ).fetchall()
 
             best_id, best_score, best_row = None, 0.0, None
-            for row_id, fp_text, title, artist, play_count, album, year in rows:
+            for row_id, fp_text, title, artist, play_count, album, year, duration_seconds in rows:
                 candidate = [int(v) for v in fp_text.split(",")] if fp_text else []
                 score = similarity(fingerprint, candidate)
                 if score > best_score:
-                    best_id, best_score, best_row = row_id, score, (title, artist, play_count, album, year)
+                    best_id, best_score, best_row = row_id, score, (title, artist, play_count, album, year, duration_seconds)
 
             now = time.strftime("%Y-%m-%d %H:%M:%S")
             if best_id is not None and best_score >= similarity_threshold:
-                title, artist, play_count, album, year = best_row
+                title, artist, play_count, album, year, duration_seconds = best_row
                 c.execute(
                     "UPDATE song_fingerprints SET play_count = play_count + 1, last_seen = ?, "
                     "station_id = ? WHERE id = ?",
@@ -478,7 +507,7 @@ class SongFingerprintDB:
                 log.debug("[song_fingerprint] Treffer: Song #%d ('%s' - '%s'), Ähnlichkeit %.2f, "
                           "bereits %dx gehört", best_id, artist, title, best_score, play_count + 1)
                 return {"song_id": best_id, "title": title, "artist": artist,
-                        "album": album, "year": year,
+                        "album": album, "year": year, "duration_seconds": duration_seconds,
                         "play_count": play_count + 1, "similarity": best_score}
 
             c.execute(
@@ -501,8 +530,9 @@ class SongFingerprintDB:
             conn.close()
 
     def set_cloud_metadata(self, fingerprint_hash: str, title: str, artist: str,
-                            album: Optional[str] = None, year: Optional[int] = None):
-        """Trägt Titel/Interpret (+ optional Album/Jahr, siehe
+                            album: Optional[str] = None, year: Optional[int] = None,
+                            duration_seconds: Optional[int] = None):
+        """Trägt Titel/Interpret (+ optional Album/Jahr/Länge, siehe
         audd_lookup()) aus einem erfolgreichen AudD-Lookup (Phase 2, siehe
         on_unknown_fingerprint() unten) in die Zeile nach, die
         match_or_learn() beim Cache-Miss mit title/artist=NULL angelegt hat
@@ -514,9 +544,9 @@ class SongFingerprintDB:
         conn = sqlite3.connect(self.db_path)
         try:
             conn.execute(
-                "UPDATE song_fingerprints SET title = ?, artist = ?, album = ?, year = ? "
-                "WHERE fingerprint_hash = ?",
-                (title, artist, album, year, fingerprint_hash),
+                "UPDATE song_fingerprints SET title = ?, artist = ?, album = ?, year = ?, "
+                "duration_seconds = ? WHERE fingerprint_hash = ?",
+                (title, artist, album, year, duration_seconds, fingerprint_hash),
             )
             conn.commit()
         finally:
@@ -559,11 +589,11 @@ def on_unknown_fingerprint(db: "SongFingerprintDB", pcm_int16: np.ndarray, finge
     sowohl `cloud_lookup_enabled` (song_recognition.cloud_lookup_enabled)
     ALS AUCH AUDD_API_TOKEN gesetzt sind -- fehlt eine der beiden
     Voraussetzungen, unverändertes Phase-1-Verhalten (reines Logging, kein
-    Netzwerk-Call). Schreibt Titel/Interpret/Album/Jahr bei Erfolg über
-    SongFingerprintDB.set_cloud_metadata() in die von match_or_learn()
-    gerade angelegte Zeile zurück und gibt {"title","artist","album","year"}
-    zurück (für SongRecognizers aktuellen "jetzt läuft"-Zustand, siehe
-    dort) -- sonst None."""
+    Netzwerk-Call). Schreibt Titel/Interpret/Album/Jahr/Länge bei Erfolg
+    über SongFingerprintDB.set_cloud_metadata() in die von match_or_learn()
+    gerade angelegte Zeile zurück und gibt {"title","artist","album","year",
+    "duration_seconds"} zurück (für SongRecognizers aktuellen "jetzt
+    läuft"-Zustand, siehe dort) -- sonst None."""
     if not cloud_lookup_enabled or not AUDD_API_TOKEN:
         log.info("🎵 Unbekannter Song auf Sender '%s' (%d Fingerprint-Werte) -- Cloud-Lookup %s.",
                  station_id, len(fingerprint),
@@ -579,10 +609,11 @@ def on_unknown_fingerprint(db: "SongFingerprintDB", pcm_int16: np.ndarray, finge
 
     fingerprint_hash = ",".join(str(v) for v in fingerprint)
     db.set_cloud_metadata(fingerprint_hash, result["title"], result["artist"],
-                           result.get("album"), result.get("year"))
-    log.info("🎵 AudD-Identifikation auf Sender '%s': '%s' – '%s' (Album: %s, Jahr: %s)",
+                           result.get("album"), result.get("year"), result.get("duration_seconds"))
+    log.info("🎵 AudD-Identifikation auf Sender '%s': '%s' – '%s' (Album: %s, Jahr: %s, Länge: %s)",
              station_id, result["artist"], result["title"],
-             result.get("album") or "unbekannt", result.get("year") or "unbekannt")
+             result.get("album") or "unbekannt", result.get("year") or "unbekannt",
+             result.get("duration_seconds") or "unbekannt")
     return result
 
 
@@ -628,10 +659,12 @@ class SongRecognizer:
             return dict(self._current_song) if self._current_song else None
 
     def _set_current_song(self, title: Optional[str], artist: Optional[str],
-                           album: Optional[str] = None, year: Optional[int] = None):
+                           album: Optional[str] = None, year: Optional[int] = None,
+                           duration_seconds: Optional[int] = None):
         with self._lock:
             self._current_song = (
-                {"title": title, "artist": artist, "album": album, "year": year} if title else None
+                {"title": title, "artist": artist, "album": album, "year": year,
+                 "duration_seconds": duration_seconds} if title else None
             )
 
     def reset(self):
@@ -685,7 +718,8 @@ class SongRecognizer:
                 match = self.db.match_or_learn(fp, station_id, similarity_threshold)
                 if match is not None:
                     self._set_current_song(match.get("title"), match.get("artist"),
-                                            match.get("album"), match.get("year"))
+                                            match.get("album"), match.get("year"),
+                                            match.get("duration_seconds"))
                 else:
                     result = on_unknown_fingerprint(
                         self.db, snapshot, fp, self.sample_rate, station_id, cloud_lookup_enabled
@@ -695,6 +729,7 @@ class SongRecognizer:
                         result.get("artist") if result else None,
                         result.get("album") if result else None,
                         result.get("year") if result else None,
+                        result.get("duration_seconds") if result else None,
                     )
             except Exception as e:
                 log.warning("⚠ Song-Erkennungs-Sample übersprungen (Fehler: %s)", e)

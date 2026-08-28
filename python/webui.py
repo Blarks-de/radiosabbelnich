@@ -1236,7 +1236,8 @@ def _build_status(state: SwitcherState, icecast_cfg: dict, host_paths: dict = No
                 recognized = song_recognizer.get_current_song()
                 if recognized:
                     now_playing_tags = {"title": recognized["title"], "artist": recognized["artist"],
-                                         "album": recognized.get("album"), "year": recognized.get("year")}
+                                         "album": recognized.get("album"), "year": recognized.get("year"),
+                                         "duration_seconds": recognized.get("duration_seconds")}
                 else:
                     now_playing_tags = {"title": None, "artist": None, "album": None, "year": None,
                                          "pending": True, "paused_no_listeners": False}
@@ -1693,6 +1694,9 @@ function applyStatus(data) {
   // Titel" (nur Titel, falls kein Interpret-Tag). Zeile 2: "Album (Jahr)",
   // nur Album bzw. nur Jahr falls jeweils das andere fehlt, komplett leer
   // falls beide fehlen -- keine Platzhalter wie "Album: – / Jahr: –".
+  // duration_seconds (nur Radio-Song-Erkennung, siehe _build_status() --
+  // News-Pause/Musiksammlung liefern es nicht) haengt sich als "m:ss" per
+  // " · " an Zeile 2 an, unabhaengig von Album/Jahr.
   // Song-Erkennung ohne (noch) erkannten Titel liefert stattdessen
   // pending/paused_no_listeners (Debug-Zwischenzustände, siehe
   // _build_status()) -- Zeile 1 zeigt dann einen i18n-Platzhalter statt
@@ -1707,8 +1711,20 @@ function applyStatus(data) {
     npTitleText = t('idx_song_pending');
   }
   document.getElementById('now-playing-title').textContent = npTitleText;
-  document.getElementById('now-playing-subtitle').textContent =
-    (npTags && npTags.title) ? (npTags.album && npTags.year ? `${npTags.album} (${npTags.year})` : (npTags.album || (npTags.year ? String(npTags.year) : ''))) : '';
+  let npSubtitleText = '';
+  if (npTags && npTags.title) {
+    const parts = [];
+    if (npTags.album && npTags.year) parts.push(`${npTags.album} (${npTags.year})`);
+    else if (npTags.album) parts.push(npTags.album);
+    else if (npTags.year) parts.push(String(npTags.year));
+    if (npTags.duration_seconds != null) {
+      const m = Math.floor(npTags.duration_seconds / 60);
+      const s = npTags.duration_seconds % 60;
+      parts.push(`${m}:${String(s).padStart(2, '0')}`);
+    }
+    npSubtitleText = parts.join(' · ');
+  }
+  document.getElementById('now-playing-subtitle').textContent = npSubtitleText;
 
   const filterBtn = document.getElementById('btn-filter-toggle');
   if (data.filter_enabled === false) {

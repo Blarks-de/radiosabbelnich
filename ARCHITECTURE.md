@@ -427,10 +427,23 @@ die `bpm`-Spalte in `music_scan.py` (SQLite kennt kein "ADD COLUMN IF NOT
 EXISTS", `CREATE TABLE IF NOT EXISTS` allein reicht bei einer schon
 bestehenden Tabelle nicht). Von AudD zusätzlich gelieferte Felder
 (Streaming-Links, Label) werden weiterhin NICHT persistiert — kein
-Anwendungsfall dafür. `match_or_learn()` liefert Album/Jahr auch bei einem
-lokalen Hit mit (aus der DB, nicht erneut von AudD abgefragt) — ein einmal
-per Cloud identifizierter Song zeigt sie deshalb bei jeder Wiederholung
-weiter an, auch ganz ohne erneuten Cloud-Call.
+Anwendungsfall dafür. `match_or_learn()` liefert Album/Jahr/Länge auch bei
+einem lokalen Hit mit (aus der DB, nicht erneut von AudD abgefragt) — ein
+einmal per Cloud identifizierter Song zeigt sie deshalb bei jeder
+Wiederholung weiter an, auch ganz ohne erneuten Cloud-Call.
+
+**Songlänge (`duration_seconds`, Nutzer-Wunsch nachträglich ergänzt)**:
+AudDs Kernantwort liefert KEINE Länge — nur mit dem zusätzlichen
+Multipart-Feld `return=apple_music,spotify` (kostet keinen separaten
+Request, nur mehr Felder in derselben Antwort) kommen zwei verschachtelte
+Objekte mit je einem Millisekunden-Feld (live geprüft, siehe SESSION.md):
+`result["spotify"]["duration_ms"]` bzw.
+`result["apple_music"]["durationInMillis"]` — beide praktisch identisch
+(Rundungsdifferenz im Bereich 1ms), Spotify bevorzugt, weil zuerst im
+Response-JSON. `_parse_duration_seconds()` rundet auf ganze Sekunden.
+Keins von beiden ist garantiert vorhanden (nicht jeder Song hat einen
+Spotify-/Apple-Music-Treffer) — `duration_seconds` bleibt dann `None`,
+genau wie Album/Jahr in diesem Fall.
 
 **Sicherheitsnetz gegen Kontingent-Verbrauch**: `similarity_threshold` ist
 weiterhin ein unkalibrierter Platzhalter (siehe unten) — greift er in der

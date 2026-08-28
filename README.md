@@ -551,11 +551,16 @@ gesehenen Song desselben Senders, ein DB-Abgleich läuft nur bei
 tatsächlichem Wechsel. Kennt der lokale Cache den Song noch nicht UND ist
 `cloud_lookup_enabled` (siehe unten) aktiv, identifiziert AudD ihn per
 Snippet-Upload; bei Erfolg landen Titel/Interpret UND — falls von AudD
-mitgeliefert — Album/Erscheinungsjahr sowohl im lokalen Cache als auch —
-solange der Song weiterläuft — in der "Jetzt läuft"-Anzeige auf der
-Player-Seite (zweite Zeile, "Album (Jahr)", gleiches Anzeigeformat wie bei
-News-Pause/Musiksammlung). Album/Jahr sind optional — nicht jeder
-AudD-Treffer liefert beides, die Anzeige zeigt dann nur, was vorhanden ist.
+mitgeliefert — Album/Erscheinungsjahr/Länge sowohl im lokalen Cache als
+auch — solange der Song weiterläuft — in der "Jetzt läuft"-Anzeige auf der
+Player-Seite (zweite Zeile, "Album (Jahr) · m:ss", gleiches Anzeigeformat
+wie bei News-Pause/Musiksammlung, dort ohne die Längenangabe). Album/Jahr/
+Länge sind optional — nicht jeder AudD-Treffer liefert alle drei, die
+Anzeige zeigt dann nur, was vorhanden ist. Die Länge kommt NICHT aus
+AudDs Kernantwort (die liefert sie nicht), sondern aus zusätzlich
+angeforderten Spotify-/Apple-Music-Zusatzdaten (`return=apple_music,
+spotify`) — kostet keinen zusätzlichen Request, nur mehr Felder in
+derselben Antwort.
 
 ```json
 "song_recognition": {
@@ -1685,12 +1690,15 @@ cache — song-change detection first compares against the last song seen on
 the same station, a full cache lookup only runs on an actual change. If the
 local cache doesn't know the song yet AND `cloud_lookup_enabled` (see below)
 is on, AudD identifies it from the uploaded snippet; on success, title/artist
-AND — if AudD supplies them — album/release year are written back into the
-local cache and — while that song keeps playing — shown in the "now
-playing" display on the player page (second line, "Album (Year)", same
-display format as news break/music library). Album/year are optional — not
-every AudD match returns both, the display then just shows whatever is
-available.
+AND — if AudD supplies them — album/release year/duration are written back
+into the local cache and — while that song keeps playing — shown in the
+"now playing" display on the player page (second line, "Album (Year) ·
+m:ss", same display format as news break/music library, minus the duration
+there). Album/year/duration are optional — not every AudD match returns
+all three, the display then just shows whatever is available. Duration
+does NOT come from AudD's core response (it doesn't provide it), but from
+additionally requested Spotify/Apple Music data (`return=apple_music,
+spotify`) — no extra request, just more fields in the same response.
 
 ```json
 "song_recognition": {

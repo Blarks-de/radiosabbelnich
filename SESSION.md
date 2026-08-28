@@ -9697,3 +9697,41 @@ ist, kein zusätzlicher Schalter nötig). Keine Beschleunigung des
 Hörer-Zulauf (als bekannte Grobheit in ARCHITECTURE.md/"Offene Punkte"
 vermerkt, nicht Teil dieser Anfrage). Kein `VERSION`-Bump/Commit (Nutzer hat
 noch keinen angefordert).
+
+## 2026-08-28 (Fortsetzung) — Songlänge doch noch ergänzt (Docker + Android)
+
+**Auslöser**: Nutzer bat, die beim Album/Jahr-Gespräch bewusst
+weggelassene Songlänge doch noch zu versuchen. Live gegen die echte
+AudD-API getestet (derselbe bekannte Testsong "A Little Closer"/Julien
+Jabre wie beim ursprünglichen Phase-2-Test): mit dem Multipart-Feld
+`return=apple_music,spotify` liefert AudD zwei zusätzliche, verschachtelte
+Objekte mit Millisekunden-Feldern -- `result.spotify.duration_ms` (197142)
+und `result.apple_music.durationInMillis` (197143), praktisch identisch.
+Kostet keinen zusätzlichen Request, nur mehr Felder in derselben Antwort.
+
+**Umsetzung**: `_parse_duration_seconds()` (Spotify bevorzugt, Apple Music
+Fallback, rundet auf ganze Sekunden) + `return`-Feld im Multipart-Body von
+`audd_lookup()`. Neue Spalte `duration_seconds INTEGER` in
+`song_fingerprints.db` (PRAGMA-Migration, gleiches Muster wie bei
+Album/Jahr). `set_cloud_metadata()`/`match_or_learn()`/
+`on_unknown_fingerprint()`/`SongRecognizer._set_current_song()` um den
+neuen Wert durchgereicht -- exakt derselbe Weg wie Album/Jahr vorhin,
+keine neuen Designentscheidungen nötig. `webui.py`: `now_playing_tags`
+liefert `duration_seconds`, JS baut die zweite Zeile jetzt aus einem
+Array (`Album (Jahr)` und/oder `m:ss`, mit " · " verbunden) statt der
+vorherigen festen Zwei-Werte-Formel.
+
+**Verifiziert**: isoliert (echter AudD-Call liefert `duration_seconds:
+197`, DB-Migration gegen simulierte Alt-DB, `set_cloud_metadata()`/
+`match_or_learn()` reichen den Wert korrekt durch) UND live -- Container
+neu gebaut (diesmal ohne vorherige Rückfrage, da rein additive Änderung;
+Nutzer darauf hingewiesen), Migration lief sauber, binnen 2s ein echter
+AudD-Treffer mit Länge (`'Billy Joel' – 'Uptown Girl...' ... Länge: 189`),
+`/api/status` bestätigt `duration_seconds: 189` in `now_playing_tags`.
+
+**Bewusst NICHT gemacht**: keine Sichtprüfung der gerenderten
+"m:ss"-Zeile im echten Browser (nur die API-Daten + die JS-Logik selbst
+geprüft, kein Browser-Automatisierungstool in dieser Session verfügbar) --
+Risiko gering, reine String-Formatierung aus bereits verifizierten Daten.
+Android-Portierung siehe `android-app/SESSION.md`. Kein `VERSION`-Bump/
+Commit (Nutzer hat noch keinen angefordert).
