@@ -690,6 +690,12 @@ Erreichbar unter `http://<host>:5000/`:
 - **Sender-Liste** zum manuellen Umschalten
 - **⚡ ZAPPEN!** — hast du selbst erkannt, dass gerade geredet wird
   (die Automatik aber noch nicht reagiert hat)? Schaltet sofort weiter.
+  Während einer laufenden Nachrichten-Pause beendet dieser Knopf die
+  Pause komplett und schaltet zurück zum vorher laufenden Sender.
+- **⏭ Andere Pause-MP3** — nur während einer laufenden Nachrichten-Pause
+  aktiv (sonst ausgegraut): wählt eine ANDERE zufällige MP3 aus demselben
+  Ordner, die Pause selbst läuft weiter. Anders als "⚡ ZAPPEN!" oben, das
+  die Pause komplett beendet.
 - **🛑 Zapping-Fehler** — hat die Fingerprint-Erkennung fälschlich
   umgeschaltet (z.B. ein kurzer Sender-übergreifender Sting über einem
   Musikbett)? Wirft den zugrundeliegenden Clip aus der Datenbank, damit
@@ -1811,7 +1817,13 @@ Reachable at `http://<host>:5000/`:
   offline in the browser).
 - **Station list** for manual switching
 - **⚡ ZAP!** — noticed someone talking yourself (before automation
-  reacted)? Switches immediately.
+  reacted)? Switches immediately. During a running news break, this
+  button ends the break entirely and switches back to the station that
+  was playing before.
+- **⏭ Different break clip** — only active during a running news break
+  (grayed out otherwise): picks a DIFFERENT random MP3 from the same
+  folder, the break itself keeps running. Unlike "⚡ ZAP!" above, which
+  ends the break entirely.
 - **🛑 Zap error** — did fingerprint detection switch away incorrectly
   (e.g. a short cross-station sting over a music bed)? Throws the
   underlying clip out of the database so it won't be misdetected

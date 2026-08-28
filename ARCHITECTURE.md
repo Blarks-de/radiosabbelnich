@@ -604,6 +604,27 @@ einen Wahrheitswert — sonst würde eine ungewöhnlich lange MP3-Kette, die
 zufällig ins nächste Halbe-Stunde-Fenster hineinreicht, fälschlich als
 "noch dasselbe Fenster" durchgehen.
 
+**Manueller Skip innerhalb der Pause (Nutzer-Wunsch)**: eigener Knopf
+"⏭ Andere Pause-MP3" auf der Player-Seite, unabhängig vom bestehenden
+"⚡ ZAPPEN!"-Knopf. Wichtige Unterscheidung: `request_skip()`/
+`note_news_break_interrupted()` (ZAPPEN) BEENDET eine laufende Pause
+komplett und markiert den Slot als bedient — der neue
+`request_news_break_skip()`/`pop_news_break_skip_request()` löst
+stattdessen einfach `start_news_break_mp3(cfg)` ERNEUT aus, während
+`news_break_active` weiter `True` bleibt. Funktioniert ohne Sonderfall,
+weil `start_news_break_mp3()` ohnehin für den Erstaufruf gebaut ist:
+`source.start(path, realtime=True)` räumt die noch laufende alte MP3
+selbst auf (gleiches Verhalten wie beim Wechsel Sender→MP3), und
+`news_break.pick_random_mp3(..., recent=news_break_recent_files)`
+schließt die gerade zu Ende gebrachte Datei automatisch von der Auswahl
+aus (dieselbe Dedup-Liste, die auch normale Wiederholungen über mehrere
+Pausen hinweg vermeidet) — ein Skip liefert also so gut wie nie zweimal
+hintereinander dieselbe Datei. Im Web-Interface nur klickbar, während
+`news_break_active` true ist (`disabled`-Attribut wie bei den
+Musiksammlung-Track-Buttons); der Hauptloop ignoriert eine Anfrage
+außerhalb einer aktiven Pause zusätzlich selbst (Verteidigung gegen einen
+Race zwischen Klick und Pausen-Ende).
+
 ### Werbeblock-Vorbuffering (ad_skip_prebuffer.py, seit 2026-08-21)
 
 Optionales Zusatzfeature (`news_break.ad_prebuffer_enabled`, Default

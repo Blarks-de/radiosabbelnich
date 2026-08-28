@@ -157,6 +157,7 @@ class SwitcherState:
         self._manual_request = None
         self._reload_requested = False
         self._skip_requested = False
+        self._news_break_skip_requested = False
         self._last_fingerprint_clip = None  # {"clip_id", "label", "previous_station_id"}
         self._filter_enabled = True
         self._filter_toggle_requested = False
@@ -397,6 +398,20 @@ class SwitcherState:
         with self._lock:
             flag = self._skip_requested
             self._skip_requested = False
+            return flag
+
+    def request_news_break_skip(self):
+        """Eigener Skip-Knopf NUR für eine laufende Nachrichten-Pause
+        (Nutzer-Wunsch, siehe SESSION.md): ANDERS als request_skip() oben
+        (das "ZAPPEN!", beendet die Pause komplett) wählt dieser nur eine
+        ANDERE MP3 aus demselben Ordner, die Pause selbst läuft weiter."""
+        with self._lock:
+            self._news_break_skip_requested = True
+
+    def pop_news_break_skip_request(self) -> bool:
+        with self._lock:
+            flag = self._news_break_skip_requested
+            self._news_break_skip_requested = False
             return flag
 
     def set_last_fingerprint_clip(self, clip_id: int, label: str, previous_station_id: str):
@@ -1476,6 +1491,7 @@ _PAGE_HTML = """<!doctype html>
 <div class="action-buttons">
   <button id="btn-zapping-error" title="Letzten fälschlich erkannten Werbe-Clip aus der Datenbank löschen" data-i18n="idx_zapping_error_btn" data-i18n-title="idx_zapping_error_title">🛑 Zapping-Fehler</button>
   <button id="btn-gesabbel" title="Sofort weiterschalten, weil hier gerade geredet wird" data-i18n="idx_gesabbel_btn" data-i18n-title="idx_gesabbel_title">⚡ ZAPPEN!</button>
+  <button id="btn-news-break-skip" title="Andere MP3 während der Nachrichten-Pause (Pause bleibt aktiv)" data-i18n="idx_news_break_skip_btn" data-i18n-title="idx_news_break_skip_title" disabled>⏭ Andere Pause-MP3</button>
 </div>
 <div class="filter-toggle-row">
   <button id="btn-filter-toggle" title="Automatische Sprache-Erkennung komplett pausieren/wieder anschalten" data-i18n="idx_filter_disable_btn" data-i18n-title="idx_filter_toggle_title">Sabbelfilter deaktivieren</button>
@@ -1702,6 +1718,10 @@ function applyStatus(data) {
     filterBtn.textContent = t('idx_filter_disable_btn');
     filterBtn.classList.remove('disabled-state');
   }
+
+  // Nur während einer laufenden Nachrichten-Pause sinnvoll -- sonst gibt
+  // es keine "andere MP3", die dieser Knopf auswählen könnte.
+  document.getElementById('btn-news-break-skip').disabled = !data.news_break_active;
 
   // VU-Meter: legt hier nur die neue Werte-Charge für die nächste Sekunde
   // in vuQueue, animiert wird unabhängig davon im 100ms-Tick (vuTick()
@@ -2039,6 +2059,16 @@ document.getElementById('btn-gesabbel').addEventListener('click', async () => {
   try {
     await fetch('/api/skip', {method: 'POST'});
     setActionMsg(t('idx_zap_switching'));
+    setTimeout(refresh, 1500);
+  } catch (e) {
+    setActionMsg(t('common_error', {msg: e.message}));
+  }
+});
+
+document.getElementById('btn-news-break-skip').addEventListener('click', async () => {
+  try {
+    await fetch('/api/news-break/skip', {method: 'POST'});
+    setActionMsg(t('idx_news_break_skip_switching'));
     setTimeout(refresh, 1500);
   } catch (e) {
     setActionMsg(t('common_error', {msg: e.message}));
@@ -4284,6 +4314,8 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                 self._handle_switch_relative(-1)
             elif self.path == "/api/skip":
                 self._handle_skip()
+            elif self.path == "/api/news-break/skip":
+                self._handle_news_break_skip()
             elif self.path == "/api/filter/toggle":
                 self._handle_filter_toggle()
             elif self.path == "/api/fingerprint/undo":
@@ -4664,6 +4696,19 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
             # weiterschalten, ohne auf die automatische Erkennung zu warten.
             log.info("🎛  Web-Interface: '⚡ ZAPPEN!' gedrückt.")
             state.request_skip()
+            self._send_json({"ok": True})
+
+        def _handle_news_break_skip(self):
+            # Eigener Skip-Knopf NUR für eine laufende Nachrichten-Pause
+            # (Nutzer-Wunsch, siehe SESSION.md) -- wählt nur eine ANDERE
+            # MP3 aus demselben Ordner, anders als "ZAPPEN!" oben (das die
+            # Pause komplett beendet). Kein Guard auf news_break_active
+            # hier -- der Hauptloop ignoriert die Anfrage selbst, falls
+            # gerade keine Pause läuft (siehe radiosabbelnich.py), und der
+            # Button ist im Web-Interface ohnehin nur während einer Pause
+            # aktiv.
+            log.info("🎛  Web-Interface: Nachrichten-Pause-Skip gedrückt.")
+            state.request_news_break_skip()
             self._send_json({"ok": True})
 
         def _handle_filter_toggle(self):

@@ -9631,6 +9631,65 @@ mitgeleert -- blockiert nichts (kein Einfluss auf Matching/Cloud-Lookup),
 war nicht Teil der genannten Begründung, bleibt als (ohnehin tautologische,
 siehe früherer Eintrag) Historie stehen.
 
+## 2026-08-28 (Fortsetzung) — Album/Jahr für Musiksammlung geprüft (schon da), Skip-Knopf für Nachrichten-Pause
+
+**Auslöser**: Nutzer fragte nach Album/Jahr für den Musiksammlung-Modus
+(Player-Seite) UND nach einem fehlenden Next/Zurück-Button "für den Song".
+Erste Vermutung beim zweiten Punkt (Musiksammlung-Skip funktioniert nicht)
+war falsch — per AskUserQuestion nachgefragt (zwei Runden, da die erste
+Antwort "Nachrichtenpause" als Freitext kam und den ursprünglichen Rahmen
+sprengte): tatsächlicher Kontext ist die NACHRICHTEN-PAUSE, nicht die
+Musiksammlung, und der gewünschte Effekt ist "andere MP3 aus demselben
+Ordner, Pause bleibt aktiv" (nicht "Pause beenden", das kann der
+bestehende "⚡ ZAPPEN!"-Knopf schon).
+
+**Album/Jahr-Recherche (kein Code geändert)**: `python/audio_tags.py`s
+`read_display_tags()` liefert bereits `{"title","artist","album","year"}`
+aus den ID3-Tags, `radiosabbelnich.py`s `start_music_track()` ruft das
+schon für JEDEN Track auf (Ordner- UND Query-Modus einheitlich) und
+übergibt es an `state.set_music_status(..., tags=...)`. Die Player-Seite
+zeigt das bereits an — `#track-title`/`#track-subtitle` (webui.py,
+existiert seit 2026-08-15), exakt dasselbe "Zwei-Zeilen"-Muster wie bei
+der Radio-Seite/Song-Erkennung, nur unter anderer Element-ID (`track-*`
+statt `now-playing-*`) — deshalb bei der ersten Einschätzung im Gespräch
+übersehen. Nutzer korrekt informiert: nichts zu tun, Feature existiert
+schon.
+
+**Umsetzung Nachrichten-Pause-Skip**:
+- `webui.py` `SwitcherState`: neue Methoden `request_news_break_skip()`/
+  `pop_news_break_skip_request()`, exaktes Muster von `request_skip()`/
+  `pop_skip_request()` (dem bestehenden ZAPPEN-Mechanismus), neues Feld
+  `_news_break_skip_requested`.
+- Neuer Endpoint `/api/news-break/skip` + `_handle_news_break_skip()`,
+  gleiches Muster wie `_handle_skip()`.
+- `radiosabbelnich.py`: neuer Zweig direkt nach dem bestehenden
+  `pop_skip_request()`-Block im Hauptloop — bei `news_break_active` ruft
+  er `start_news_break_mp3(state.news_break_cfg)` ERNEUT auf (kein
+  Sonderfall nötig: `source.start()` räumt die laufende MP3 selbst auf,
+  `pick_random_mp3(recent=news_break_recent_files)` schließt die gerade
+  beendete Datei automatisch von der Auswahl aus). Ignoriert außerhalb
+  einer aktiven Pause (Verteidigung gegen Race Klick/Pausen-Ende).
+- Neuer Button "⏭ Andere Pause-MP3" auf der Player-Seite, neben
+  ZAPPEN/Zapping-Fehler, `disabled` außerhalb einer aktiven Pause
+  (`data.news_break_active`-gesteuert wie andere Buttons im Projekt).
+  Drei neue i18n-Keys (`idx_news_break_skip_title/_btn/_switching`,
+  i18n.py-EN-Basis + Deutsch.lng).
+
+**Verifiziert** (isoliert, `python/*.py` + `language/` in Temp-Verzeichnis):
+- `python3 -m py_compile` fehlerfrei.
+- `request_news_break_skip()`/`pop_news_break_skip_request()`: liefert
+  `False` vor dem ersten Request, `True` genau einmal nach `request_...()`,
+  danach wieder `False` (korrektes "einmal abholen"-Verhalten).
+- `webui.py`-Modul-Import (Dummy-`aubio`) lief durch — echter
+  `_check_i18n_coverage()`-Aufruf bestand mit den drei neuen Keys.
+
+**Noch NICHT verifiziert am echten Deployment**: Rebuild/Neustart steht
+noch aus.
+
+**Bewusst NICHT gemacht**: kein Code für Musiksammlung-Album/Jahr (schon
+vorhanden, siehe oben). Kein `VERSION`-Bump/Commit (Nutzer hat noch keinen
+angefordert).
+
 **Bewusst NICHT gemacht**: kein `/config`-UI-Element für das Hörer-Gate
 (nicht angefragt, fester Verhaltens-Bestandteil sobald Song-Erkennung an
 ist, kein zusätzlicher Schalter nötig). Keine Beschleunigung des

@@ -1562,6 +1562,24 @@ def main():
                 do_switch("Nutzer meldete Gesabbel (ZAPPEN!-Knopf)")
                 continue
 
+            if state.pop_news_break_skip_request():
+                # Eigener Skip-Knopf NUR für eine laufende Nachrichten-
+                # Pause (Nutzer-Wunsch, siehe SESSION.md): ANDERS als
+                # "ZAPPEN!" oben (das die Pause komplett beendet) wählt
+                # dieser nur eine ANDERE MP3 aus demselben Ordner, die
+                # Pause selbst läuft weiter. Ignoriert außerhalb einer
+                # aktiven Pause (Button ist dann im Web-Interface ohnehin
+                # deaktiviert, dieser Guard ist nur Verteidigung gegen
+                # einen Race zwischen Klick und Pausen-Ende).
+                if news_break_active:
+                    if start_news_break_mp3(state.news_break_cfg):
+                        log.info("📰 Nachrichten-Pause: andere MP3 gewählt (Skip-Knopf): '%s'",
+                                 news_break_recent_files[-1])
+                    else:
+                        log.warning("⚠ Nachrichten-Pause-Skip: keine (weitere) MP3 verfügbar, "
+                                    "aktuelle läuft weiter.")
+                continue
+
             if state.pop_filter_toggle_request():
                 # "Sabbelfilter (de)aktivieren"-Knopf: automatische
                 # Erkennung komplett pausieren/wieder anschalten. Streak-

@@ -40,6 +40,11 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 
 ## 2026-08-28
 
+- Neu: "⏭ Andere Pause-MP3"-Knopf auf der Player-Seite — wählt während
+  einer laufenden Nachrichten-Pause eine andere zufällige MP3 aus
+  demselben Ordner, ohne die Pause (anders als "⚡ ZAPPEN!") komplett zu
+  beenden. Neuer Endpoint `/api/news-break/skip`, nur klickbar während
+  einer aktiven Pause.
 - Neu: Song-Erkennung liefert jetzt auch Album/Erscheinungsjahr (nicht nur
   Titel/Interpret), wenn AudD sie mitliefert — erscheinen in der zweiten
   Zeile der "Jetzt läuft"-Anzeige. Neue Spalten `album`/`year` in
