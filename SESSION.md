@@ -9592,8 +9592,44 @@ weglassen.
 noch aus.
 
 **Bewusst NICHT gemacht**: keine Song-Länge (Nutzer-Entscheidung, siehe
-Auslöser oben — höherer Aufwand, unzuverlässige Datenquelle). Kein
-`VERSION`-Bump/Commit (Nutzer hat noch keinen angefordert).
+Auslöser oben — höherer Aufwand, unzuverlässige Datenquelle).
+
+**Live-Rollout + Commit**: Rebuild/Neustart, Schema-Migration lief sauber
+gegen die echte Live-DB (`🎵 Song-Fingerprint-DB-Schema migriert: Spalte
+'album'/'year' ergänzt`). `VERSION` auf `v1.2.33 build 2026-08-28 14:48
+Uhr` gebumpt, Commit `c109799` ("Add AudD cloud lookup for song
+recognition, listener gate, album/year") — `android-app/SESSION.md` bewusst
+NICHT mitcommitet (unabhängige, nicht von dieser Session stammende
+Änderung, siehe dortiger Hinweis zur Session-Log-Konsolidierung). Gepusht
+zu BEIDEN Remotes (`origin` = getrackter Server, `github` = von
+`update_check.py` abgefragtes Repo) — waren vor diesem Commit synchron,
+deshalb beide aktualisiert statt nur den getrackten.
+
+## 2026-08-28 (Fortsetzung) — Song-Fingerprint-Cache geleert
+
+**Auslöser**: Live-Beobachtung nach dem Rollout -- auch mehrere Minuten
+nach Neustart kamen nur lokale "Treffer" gegen alte, aus der reinen
+Phase-1-Sammelzeit stammende Einträge (`title=NULL`), kein einziger echter
+Cache-Miss, also kein neuer AudD-Aufruf. Nutzer erkannte den Grund selbst:
+die ~1385 Alteinträge (nur 5 davon mit Titel, aus den heutigen Tests) sind
+wertlos UND blockieren aktiv echte Erkennung -- ein Match gegen so einen
+Alteintrag zählt als "Treffer", `on_unknown_fingerprint()`/AudD wird dann
+nie aufgerufen. Genau die Songs, die während der tagelangen Vor-AudD-Phase
+gelernt wurden, hätten so nie einen Titel bekommen.
+
+**Umsetzung**: `song_fingerprint.clear_all()` (existierte schon, war aber
+an keinen Web-UI-Knopf gebunden -- siehe ARCHITECTURE.md/"Offene Punkte",
+kein Pruning) direkt gegen die laufende Produktiv-DB aufgerufen
+(`docker exec radiosabbelnich python3 -c "song_fingerprint.clear_all(...)"`)
+-- 1385 Einträge gelöscht, DB danach bei 0. Kein Container-Neustart nötig:
+`SongFingerprintDB` öffnet ohnehin nur kurzlebige Connections pro Aufruf
+(siehe Klassendocstring), der laufende Hauptprozess sieht die leere Tabelle
+beim nächsten Zugriff automatisch.
+
+**Bewusst NICHT gemacht**: `song_match_log` (Kalibrierungs-Tabelle) NICHT
+mitgeleert -- blockiert nichts (kein Einfluss auf Matching/Cloud-Lookup),
+war nicht Teil der genannten Begründung, bleibt als (ohnehin tautologische,
+siehe früherer Eintrag) Historie stehen.
 
 **Bewusst NICHT gemacht**: kein `/config`-UI-Element für das Hörer-Gate
 (nicht angefragt, fester Verhaltens-Bestandteil sobald Song-Erkennung an
