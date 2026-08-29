@@ -38,6 +38,18 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 - Musik-Library: Enrichment (Cover/Lyrics), Energy-Erkennung/Browse-UI
 - iOS-App (Idee, kein Zeitplan)
 
+## 2026-08-29
+
+- Fix: Update-Prüfung zeigte nach einem Rebuild kurz nach einem gefundenen
+  Update bis zu 24h lang fälschlich "Update verfügbar" für eine bereits
+  installierte Version — der gecachte Zustand korrigiert sich jetzt sofort
+  selbst, sobald die laufende Version aufgeholt hat.
+- Neu: Live-Statusanzeige für AudD-Cloud-Lookup — die "Jetzt
+  läuft"-Anzeige zeigt jetzt "⚠️ AudD-Kontingent aufgebraucht"/"⚠️ AudD
+  nicht erreichbar"/"⚠️ AudD-Fehler (Code X)" anstelle des neutralen "🔍
+  noch nicht erkannt", wenn Cloud-Lookup gerade nicht funktioniert. AudDs
+  Fehlercodes #900/#901/#902 gelten dabei als Kontingent-Fall.
+
 ## 2026-08-28
 
 - Neu: Song-Erkennung liefert jetzt auch die Songlänge (Album/Jahr waren

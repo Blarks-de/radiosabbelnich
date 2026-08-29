@@ -627,6 +627,16 @@ auf den nächsten Treffer) oder "⏸ Song-Erkennung pausiert (keine Hörer)"
 (Hörer-Gate greift gerade). Ohne aktiviertes Feature bleibt die Zeile wie
 bisher komplett leer.
 
+Funktioniert Cloud-Lookup gerade nicht, ersetzt genau diese Zeile den
+neutralen "🔍 noch nicht erkannt"-Platzhalter durch den konkreten Grund,
+statt für den Betreiber ununterscheidbar auszusehen von "läuft normal, hat
+den Song nur noch nicht gefunden": "⚠️ AudD-Kontingent aufgebraucht" (AudD-
+Fehlercodes #900/#901/#902, siehe `song_fingerprint.py`), "⚠️ AudD nicht
+erreichbar" (Netzwerk/Timeout) oder "⚠️ AudD-Fehler (Code X)" (jeder andere,
+nicht gesondert dokumentierte AudD-Fehlercode). Fehlt nur der API-Token
+oder ist `cloud_lookup_enabled` aus, bleibt es beim neutralen "🔍
+noch nicht erkannt" — das ist kein Fehlerzustand.
+
 ## Sprache des Web-Interfaces
 
 Player- und Config-Seite gibt es auf Englisch (im Code eingebaute
@@ -1061,6 +1071,13 @@ kommt regulär beim nächsten fälligen 24h-Check, kein Retry-Spam. Der
 eigentliche GitHub-Check läuft ausschließlich in einem Hintergrund-Thread;
 ein Seitenaufruf des Web-Interfaces wartet nie auf GitHub, er liest nur
 den zuletzt gecachten Zustand.
+
+Der gecachte Zustand korrigiert sich zusätzlich SOFORT selbst (statt erst
+beim nächsten fälligen 24h-Check), sobald die aktuell laufende lokale
+Version die zuletzt als "verfügbar" gemeldete bereits erreicht hat — z.B.
+nach einem `git pull` + Rebuild kurz nachdem der letzte Check ein Update
+gefunden hatte. Ohne das könnte der Banner ein längst installiertes Update
+bis zu 24h lang fälschlich weiter als "verfügbar" anzeigen.
 
 ## Bekannte Einschränkungen
 
@@ -1761,6 +1778,15 @@ waiting for the next match) or "⏸ song recognition paused (no listeners)"
 (listener gate is currently in effect). With the feature off, the line stays
 completely empty as before.
 
+If cloud lookup currently isn't working, this same line replaces the neutral
+"🔍 not recognized yet" placeholder with the concrete reason instead of
+looking indistinguishable from "running fine, just hasn't found the song
+yet": "⚠️ AudD quota exhausted" (AudD error codes #900/#901/#902, see
+`song_fingerprint.py`), "⚠️ AudD unreachable" (network/timeout), or "⚠️ AudD
+error (code X)" (any other, not specifically documented AudD error code).
+If only the API token is missing or `cloud_lookup_enabled` is off, it stays
+at the neutral "🔍 not recognized yet" — that's not an error state.
+
 ## Web interface language
 
 The player and config pages are available in English (the base
@@ -2186,6 +2212,13 @@ error — the next attempt happens at the regular next-due 24h check, no
 retry spam. The actual GitHub check runs exclusively in a background
 thread; loading the web interface never waits on GitHub, it only reads
 the last cached state.
+
+The cached state also corrects itself IMMEDIATELY (instead of waiting for
+the next-due 24h check) as soon as the currently running local version has
+already caught up with the one last reported as "available" — e.g. after a
+`git pull` + rebuild shortly after the last check found an update. Without
+this, the banner could keep falsely showing an already-installed update as
+"available" for up to 24h.
 
 ## Known limitations
 

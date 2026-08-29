@@ -340,7 +340,10 @@ flowchart LR
     Cooldown -->|nein| Skip2["Anfrage übersprungen, geloggt"]
     Cooldown -->|ja| AudD["AudD-Upload (multipart POST)"]
     AudD -->|Treffer| SetMeta["set_cloud_metadata()<br/>+ _current_song aktualisieren"]
-    AudD -->|kein Treffer/Fehler| None2["_current_song bleibt leer"]
+    AudD -->|kein Treffer| None2["_current_song bleibt leer<br/>Status: ok"]
+    AudD -->|"Kontingent (#900/#901/#902)"| Quota["Status: quota"]
+    AudD -->|sonstiger AudD-Fehler| AuddErr["Status: audd_error"]
+    AudD -->|Netzwerk/Timeout| NetErr["Status: network_error"]
 ```
 
 Warum Chromaprint statt desselben Constellation-Map-Eigenbaus wie
@@ -475,6 +478,39 @@ Installationen ohne Song-Erkennung. Die JS-Seite (`applyStatus()`) rendert
 das über zwei neue i18n-Keys (`idx_song_pending`/
 `idx_song_paused_no_listeners`) in dieselbe Titel-Zeile, statt eines echten
 Songtitels.
+
+**AudD-Statusanzeige (`get_audd_status()`/`_record_audd_status()`,
+Nutzer-Wunsch, siehe SESSION.md)**: bis hierhin landeten "AudD kennt den
+Song nicht" (`status: "success"` ohne Treffer) UND jede AudD-eigene
+Fehlerantwort (`status: "error"`, siehe unten) in derselben Rückgabe
+(`None`) — für den Betreiber ununterscheidbar von "läuft normal, hat den
+Song nur noch nicht gefunden". `audd_lookup()` unterscheidet jetzt explizit
+und merkt sich den letzten Aufrufstatus (`"ok"`/`"quota"`/`"network_error"`/
+`"audd_error"` + Fehlercode) als reines In-Memory-Modulfeld, ANALOG zu
+`_audd_last_call_at` — bewusst NICHT in `settings.json` persistiert: das ist
+Live-Betriebszustand, kein Setting, und ein Neustart braucht dafür keine
+Sonderbehandlung, der nächste tatsächliche Aufruf (spätestens nach
+`AUDD_MIN_INTERVAL_SECONDS`) setzt ihn ohnehin sofort neu. AudD meldet
+eigene Fehler laut Doku IMMER mit HTTP 200, der Fehler steckt im JSON-Body
+(`{"status":"error","error":{"error_code":...}}`) — nur `#900`/`#901`
+("invalid token" bzw. "no api_token passed, and the limit was reached")
+sind offiziell dokumentiert, dazu kommt `#902` (live beobachtet bei
+aufgebrauchtem Kontingent MIT gültigem Token, Fehlertext "authorization
+failed: the limit was reached" — passt exakt ins Namensschema der beiden
+dokumentierten Codes, ist aber selbst nicht offiziell dokumentiert). Alle
+drei zählen als Kontingent-Fall (`"quota"`); jeder andere `error_code`
+bleibt ein generischer `"audd_error"` mit sichtbarem Code statt geraten zu
+werden — bei nur 7 von AudDs ~40 Fehlercodes öffentlich dokumentiert lässt
+sich der Rest nicht zuverlässig kategorisieren.
+
+`_build_status()` zeigt `"quota"`/`"network_error"`/`"audd_error"` anstelle
+des neutralen `pending`-Platzhalters an (drei neue `now_playing_tags`-Felder
+`audd_problem`/`audd_error_code`, drei neue i18n-Keys) — ABER NUR, wenn
+Cloud-Lookup gerade aktiv ist UND weder ein Titel erkannt noch das
+Hörer-Gate aktiv ist. `"not_configured"` (fehlender Token/Cloud-Lookup aus)
+wird hier bewusst NICHT angezeigt: sonst sähe das für jeden, der Cloud-
+Lookup nie aktiviert hat, dauerhaft nach einem Fehler aus, statt einer
+bewussten Konfigurationsentscheidung.
 
 **Hörer-Gate (`ListenerGate`, Nutzer-Wunsch)**: Song-Erkennung (lokales
 Fingerprinting UND Cloud-Lookup) läuft nur, solange
@@ -1128,7 +1164,7 @@ ausschließlich über die Config-Seite steuerbar).
 
 ```mermaid
 flowchart LR
-    Thread["UpdateChecker._run()<br/>Daemon-Thread, Poll alle 5 Min."] -->|"enabled + fällig?"| Check["check_now()"]
+    Thread["UpdateChecker._run()<br/>Daemon-Thread, Poll alle 5 Min."] -->|"enabled + (24h fällig ODER<br/>Cache widerspricht lokaler Version)"| Check["check_now()"]
     Check -->|GET| GitHub["raw.githubusercontent.com/…/main/VERSION"]
     GitHub -->|Erfolg| Cmp{"Remote-SemVer ><br/>lokale SemVer?"}
     GitHub -->|Fehler: kein Internet/<br/>404/Timeout/Parse| Silent["log.debug, kein State-Update,<br/>nächster Versuch regulär in 24h"]
@@ -1158,6 +1194,26 @@ wird beim Thread-Start aus der persistierten `settings.json` gelesen
 (nicht bei jedem Container-Neustart auf `None` zurückgesetzt), damit
 häufige `docker compose up -d --build`-Zyklen während der Entwicklung
 nicht bei jedem Neustart einen frischen GitHub-Request auslösen.
+
+**`UpdateChecker._due()`: zweiter Fällig-Grund neben den 24h (Bugfix,
+Nutzer-Wunsch, siehe SESSION.md)**: genau das eben beschriebene
+"last_checked_at übersteht einen Neustart" hatte einen Nebeneffekt, live
+beobachtet: ein Check lief noch auf einer ÄLTEREN Container-Instanz (fand
+z.B. "v1.2.35 verfügbar" gegenüber lokal v1.2.34), kurz danach folgte ein
+Rebuild GENAU auf die gefundene Version — `_VERSION_STRING` sprang sofort
+auf v1.2.35, aber `update_available: true` blieb in `settings.json` bis zu
+24h lang unverändert stehen, weil der nächste reguläre Check gar nicht
+fällig war. Für den Betreiber sah das aus wie "identische Version wird als
+eigenes Update angezeigt" — der Vergleich selbst (SemVer-Tupel, nicht
+String) war dabei nie falsch, nur der GECACHTE Zustand veraltet. `_due()`
+löst deshalb zusätzlich sofort aus, wenn das gecachte `update_available`
+nicht mehr zur AKTUELL laufenden `get_local_version()` passt (geparste
+SemVer-Tupel, `remote <= local`) — bewusst weiterhin OHNE
+`last_checked_at` selbst anzufassen, wenn kein Check nötig war: ein
+Rebuild, das die 24h-Kadenz nicht betrifft, soll auch weiterhin keinen
+zusätzlichen GitHub-Request bei jedem Neustart auslösen (siehe Absatz
+oben) — nur der EINE Stale-Fall (gecachtes Ergebnis widerspricht der
+aktuellen Version) ist ein Sonderfall.
 
 **Default AN, bewusste Ausnahme von der sonstigen "Default AUS"-
 Konvention** (siehe README für den Nutzer-seitigen Hinweis): anders als
@@ -1294,7 +1350,10 @@ hat vollen Zugriff.
   Vorhaben, siehe README-Roadmap-Notiz), und der feste 60s-Cooldown
   (`AUDD_MIN_INTERVAL_SECONDS`) ist eine grobe
   Sicherheitsleitplanke, kein echtes Kontingent-Tracking (kein Tages-
-  Limit-Zähler o.ä.). Das Hörer-Gate (`ListenerGate`) pollt ebenfalls nur
+  Limit-Zähler o.ä.) — `get_audd_status()`/die Live-Anzeige (siehe
+  "Song-Erkennung" oben) machen ein bereits AUFGEBRAUCHTES Kontingent nur
+  sichtbar (reaktiv, anhand von AudDs Fehlercode), sagen aber nicht
+  proaktiv voraus, wann es so weit ist. Das Hörer-Gate (`ListenerGate`) pollt ebenfalls nur
   alle 60s (`LISTENER_CHECK_INTERVAL_SECONDS`) — nach einem frischen
   Hörer-Zulauf kann es dadurch bis zu 60s dauern, bis Song-Erkennung
   überhaupt wieder anspringt, PLUS danach `snippet_seconds`, bis der beim

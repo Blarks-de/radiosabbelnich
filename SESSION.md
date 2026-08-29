@@ -9735,3 +9735,96 @@ geprüft, kein Browser-Automatisierungstool in dieser Session verfügbar) --
 Risiko gering, reine String-Formatierung aus bereits verifizierten Daten.
 Android-Portierung siehe `android-app/SESSION.md`. Kein `VERSION`-Bump/
 Commit (Nutzer hat noch keinen angefordert).
+
+## 2026-08-29 — Update-Check-Staleness-Bug behoben, AudD-Statusanzeige ergänzt
+
+**Auslöser**: Nutzer meldete, die WebUI zeige "Update verfügbar (v1.2.35
+build 2026-08-28 16:51 Uhr)", obwohl direkt darüber exakt dieselbe Version
+als installiert angezeigt wurde. Zusätzlich: keine Rückmeldung in der
+WebUI, wenn AudD-Cloud-Lookup nicht funktioniert — real aufgetreten, das
+kostenlose 300-Requests-Kontingent war nach einer Nacht Dauerbetrieb
+aufgebraucht, ohne dass das irgendwo sichtbar war.
+
+**Root-Cause-Analyse (vor jeder Änderung, wie vom Nutzer verlangt)**: der
+SemVer-Tupel-Vergleich in `update_check.check_now()`/`parse_version()`
+selbst war nie falsch (kein String- statt Zahlenvergleich, keine
+Build-Timestamp-Verwechslung). Anhand der laufenden Instanz nachvollzogen:
+`settings.json` enthielt `last_checked_at` von VOR dem letzten Rebuild
+(persistiert, übersteht Neustarts absichtlich, siehe
+`ARCHITECTURE.md`/"Automatische Update-Prüfung") — ein Check auf einer
+ÄLTEREN Container-Instanz hatte "v1.2.35 verfügbar" korrekt gefunden, kurz
+danach folgte ein Rebuild GENAU auf diese Version, aber `update_available:
+true` blieb bis zu 24h lang gecacht stehen, weil kein neuer Check fällig
+war. Reiner Staleness-Bug im gecachten Ergebnis, kein Logikfehler im
+Vergleich selbst.
+
+**Umsetzung Update-Check**: `UpdateChecker._due()` (`update_check.py`)
+löst jetzt zusätzlich zu den üblichen 24h sofort aus, wenn das gecachte
+`update_available` nicht mehr zur aktuell laufenden `get_local_version()`
+passt — ohne `last_checked_at` selbst anzufassen, wenn kein Check nötig
+war (kein zusätzlicher GitHub-Request bei jedem Rebuild, siehe
+`ARCHITECTURE.md`).
+
+**Umsetzung AudD-Statusanzeige**: `audd_lookup()` (`song_fingerprint.py`)
+unterscheidet jetzt Erfolg / "nicht erkannt" (kein AudD-Fehler) / AudD-
+eigene Fehlerantwort (`status: "error"` im JSON-Body, HTTP bleibt laut
+AudD-Doku immer 200) / Netzwerkfehler, und merkt sich den letzten Status
+als reines In-Memory-Modulfeld (`get_audd_status()`/
+`_record_audd_status()`, bewusst nicht in `settings.json` persistiert).
+`_build_status()` (`webui.py`) ersetzt den neutralen "🔍 noch nicht
+erkannt"-Platzhalter durch die konkrete Ursache ("⚠️ AudD-Kontingent
+aufgebraucht"/"⚠️ AudD nicht erreichbar"/"⚠️ AudD-Fehler (Code X)"), aber
+nur wenn Cloud-Lookup aktiv UND nicht pausiert ist — "nicht konfiguriert"
+wird bewusst NICHT angezeigt, sonst sähe das für jeden ohne Cloud-Lookup
+dauerhaft nach einem Fehler aus. `webui.py` importierte `song_fingerprint`
+bisher gar nicht direkt (nur über die durchgereichte `song_recognizer`-
+Instanz) — beim Einbau ergänzt, sonst `NameError`.
+
+Nur `#900`/`#901` sind als Kontingent-Codes offiziell dokumentiert (von
+AudDs ~40 Codes sind nur 7 öffentlich beschrieben). Direkt nach dem ersten
+Deploy zeigte die Live-Instanz tatsächlich `#902` ("authorization failed:
+the limit was reached") — passt exakt ins Namensschema (900=Token
+ungültig, 901=Limit ohne Token, 902=Limit MIT Token) und wurde auf
+Nutzer-Wunsch in `_AUDD_QUOTA_ERROR_CODES` mit aufgenommen.
+
+**Verifiziert**: isoliert — vier `_due()`-Szenarien (genau der live
+beobachtete Stale-Fall, offenes echtes Update, kein Update, regulärer
+24h-Tick), fünf `audd_lookup()`-Szenarien (Quota/generischer AudD-Fehler/
+Netzwerkfehler/kein Treffer/echter Treffer) gegen eine gestubbte
+`urllib.request.urlopen()`, voller `webui.py`-Modul-Import inkl.
+`_check_i18n_coverage()` (Dummy-Module für `numpy`/`psutil`/`mutagen`/
+`aubio`, gleiches Muster wie schon zuvor in dieser Datei dokumentiert) und
+ein End-to-End-Test von `_build_status()` mit simuliertem Fake-State (Fall
+mit `audd_problem: quota` UND Regressionsfall ohne AudD-Problem). UND
+live: zwei Deploys (`docker compose up -d --build radiosabbelnich`,
+zuerst Haupt-Fix, dann #902-Ergänzung) — nach dem ersten Deploy lief
+sofort ein frischer Update-Check (`update_available: false`, Remote =
+lokal = v1.2.36, bestätigt in `settings.json`), die echten Produktions-
+Logs zeigten wiederholt `Code 902: authorization failed: the limit was
+reached` genau wie erwartet, und der Nutzer hat den zweiten Deploy live
+selbst als funktionierend bestätigt.
+
+Nebenbei beim Beantworten der Nutzerfrage "warum nur 20 Songs in der DB
+bei 300 verbrauchten Requests" recherchiert (kein Code geändert, nur
+Log-/DB-Analyse): `song_fingerprints.db` hat 96 Zeilen seit dem DB-Reset
+vom 28.08. (20 mit Titel, 76 ohne). In den Logs stehen dem 25×
+"AudD-Identifikation" (echter Treffer) sowie 78× "AudD kennt den Song
+nicht" gegenüber — Letzteres war VOR diesem Fix die gemeinsame Senke für
+echte Nicht-Treffer UND unerkannte AudD-Fehler (inkl. Kontingent), da der
+alte Code beides nicht unterschied. Jeder Cache-Miss verbraucht ein
+Request unabhängig vom Ergebnis, dazu kommen Requests aus der Zeit vor dem
+DB-Reset (AudDs 300er-Kontingent zählt kontoweit, nicht pro lokaler DB) —
+die 20 DB-Titel sind deshalb nur ein Bruchteil der tatsächlich verbrauchten
+Anfragen, nicht deren Obergrenze.
+
+**Bewusst NICHT gemacht**: keine neue Config-Seiten-Sektion für den
+AudD-Status (es gab vorher überhaupt keine Config-UI für
+`song_recognition`/`cloud_lookup_enabled` — Status landet stattdessen im
+bestehenden Live-Anzeige-Slot der Player-Seite, kleinerer Eingriff, matcht
+die Nutzer-Anfrage). Kein proaktives Kontingent-Tracking (Tages-Limit-
+Zähler o.ä., siehe `ARCHITECTURE.md`/"Offene Punkte") — nur reaktive
+Anzeige anhand von AudDs Fehlercode bei einem bereits aufgebrauchten
+Kontingent. `README.md`/`ARCHITECTURE.md`/`CHANGELOG.md` in diesem Commit
+mitgezogen (Update-Prüfung- und Song-Erkennung-Abschnitte DE+EN,
+Mermaid-Diagramme, "Offene Punkte"-Eintrag zum Kontingent-Tracking
+präzisiert).

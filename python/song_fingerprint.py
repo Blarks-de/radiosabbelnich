@@ -82,6 +82,49 @@ AUDD_MIN_INTERVAL_SECONDS = 60.0
 _audd_lock = threading.Lock()
 _audd_last_call_at = 0.0
 
+# Nur ~7 von AudDs ~40 Fehlercodes sind öffentlich dokumentiert (siehe
+# docs.audd.io) -- #900/#901 sind die einzigen zwei DOKUMENTIERTEN, die auf
+# ein Token-/Kontingent-Problem hindeuten ("invalid token" bzw. "no
+# api_token passed, and the limit was reached"). #902 ist NICHT
+# dokumentiert, aber live beobachtet (siehe SESSION.md) genau in dem
+# Moment, als das reale Kontingent mit einem GÜLTIGEN Token aufgebraucht
+# war -- passt exakt ins Namensschema von #900/#901 (900=Token ungültig,
+# 901=Limit ohne Token, 902=Limit MIT Token) und wird deshalb ebenfalls als
+# Kontingent-Fall behandelt. Alles andere landet als generischer
+# "audd_error" (Code sichtbar in get_audd_status()) statt geraten zu
+# werden.
+_AUDD_QUOTA_ERROR_CODES = {900, 901, 902}
+
+# Letzter AudD-Aufrufstatus für die Live-Anzeige (webui.py, now_playing_tags
+# im "pending"-Fall) -- siehe get_audd_status()/_record_audd_status(). Reines
+# In-Memory-Live-Signal wie _audd_last_call_at, bewusst NICHT in
+# settings.json persistiert: ein Neustart braucht dafür keine besondere
+# Behandlung, der nächste tatsächliche AudD-Aufruf (spätestens nach
+# AUDD_MIN_INTERVAL_SECONDS) setzt den Status ohnehin sofort neu.
+_audd_last_status: dict = {"state": None, "error_code": None, "error_message": None, "checked_at": None}
+
+
+def _record_audd_status(state: str, error_code: Optional[int] = None, error_message: Optional[str] = None):
+    with _audd_lock:
+        _audd_last_status.update({
+            "state": state, "error_code": error_code,
+            "error_message": error_message, "checked_at": time.time(),
+        })
+
+
+def get_audd_status() -> Optional[dict]:
+    """Letzter AudD-Aufrufstatus ({"state", "error_code", "error_message",
+    "checked_at"}) -- state ist "ok"/"quota"/"network_error"/"audd_error",
+    oder None, solange noch kein AudD-Aufruf versucht wurde (z.B. Cloud-
+    Lookup deaktiviert, oder seit dem Start noch kein Cache-Miss). Wird
+    NUR von audd_lookup() gesetzt, nicht vom "cloud_lookup_enabled=false"-
+    Fall in on_unknown_fingerprint() -- sonst würde die Live-Anzeige für
+    jeden, der Cloud-Lookup bewusst aus gelassen hat, dauerhaft einen
+    "nicht konfiguriert"-Hinweis zeigen statt des neutralen Pending-Texts."""
+    with _audd_lock:
+        return dict(_audd_last_status) if _audd_last_status["state"] is not None else None
+
+
 # Hörer-Gate (Nutzer-Wunsch, siehe SESSION.md): Song-Erkennung -- lokales
 # Fingerprinting UND Cloud-Lookup -- kostet CPU/AudD-Kontingent, ist aber
 # wertlos, solange niemand den Restream hört (die Live-Anzeige, für die
@@ -307,7 +350,16 @@ def audd_lookup(pcm_int16: np.ndarray, sample_rate: int, api_token: str) -> Opti
     compute_fingerprint(): ein Cloud-Lookup darf den Analyse-Thread nie
     mitreißen). Respektiert AUDD_MIN_INTERVAL_SECONDS als Sicherheitsnetz
     gegen Kontingent-Verbrauch (siehe Modul-Kommentar oben) -- bei aktivem
-    Cooldown wird gar nicht erst eine Verbindung aufgebaut.
+    Cooldown wird gar nicht erst eine Verbindung aufgebaut (und
+    get_audd_status() unverändert gelassen, siehe dort).
+
+    Setzt bei jedem tatsächlich versuchten Aufruf den Live-Status für
+    get_audd_status(): "ok" bei einer normalen AudD-Antwort (auch wenn der
+    Song darin nicht erkannt wurde -- das ist kein AudD-Fehler), "quota"/
+    "audd_error" bei einer AudD-eigenen Fehlerantwort (HTTP bleibt dabei
+    laut AudD-Doku immer 200, der Fehler steckt im JSON-Body als
+    {"status":"error","error":{"error_code":...}}), "network_error" bei
+    Verbindungs-/Timeout-/Parse-Problemen.
 
     WAV wird in-memory gebaut (io.BytesIO), kein Temp-File wie bei
     compute_fingerprint() -- fpcalc braucht zwingend einen Dateipfad,
@@ -343,26 +395,43 @@ def audd_lookup(pcm_int16: np.ndarray, sample_rate: int, api_token: str) -> Opti
         )
         with urllib.request.urlopen(req, timeout=AUDD_TIMEOUT) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-
-        if data.get("status") != "success" or not data.get("result"):
-            return None  # AudD hat den Song nicht erkannt -- kein Fehler
-        result = data["result"]
-        title, artist = result.get("title"), result.get("artist")
-        if not title or not artist:
-            return None
-        return {
-            "title": title, "artist": artist,
-            "album": result.get("album") or None,
-            "year": _parse_release_year(result.get("release_date")),
-            "duration_seconds": _parse_duration_seconds(result),
-        }
     except Exception as e:
         # Breiter Fang wie bei compute_fingerprint() -- ein Cloud-Lookup
         # (Netzwerk, Timeout, kaputtes JSON, unerwartete Antwortstruktur)
         # darf den Analyse-Thread nie mitreißen, egal welcher Fehler genau
         # auftritt.
-        log.warning("⚠ AudD-Lookup fehlgeschlagen: %s", e)
+        log.warning("⚠ AudD-Lookup fehlgeschlagen (Netzwerk/Zeitüberschreitung/Parsing): %s", e)
+        _record_audd_status("network_error", error_message=str(e))
         return None
+
+    if data.get("status") == "error":
+        # AudD meldet den Fehler im JSON-Body, nicht per HTTP-Status (siehe
+        # Docstring) -- #900/#901 sind die einzigen zwei dokumentierten
+        # Codes für ein Token-/Kontingent-Problem, alles andere bleibt ein
+        # generischer "audd_error" mit sichtbarem Code statt geraten zu
+        # werden (siehe _AUDD_QUOTA_ERROR_CODES oben).
+        err = data.get("error") or {}
+        code, msg = err.get("error_code"), err.get("error_message")
+        log.warning("⚠ AudD meldet einen API-Fehler (Code %s): %s", code, msg)
+        _record_audd_status(
+            "quota" if code in _AUDD_QUOTA_ERROR_CODES else "audd_error",
+            error_code=code, error_message=msg,
+        )
+        return None
+
+    _record_audd_status("ok")
+    if not data.get("result"):
+        return None  # AudD hat den Song nicht erkannt -- kein Fehler
+    result = data["result"]
+    title, artist = result.get("title"), result.get("artist")
+    if not title or not artist:
+        return None
+    return {
+        "title": title, "artist": artist,
+        "album": result.get("album") or None,
+        "year": _parse_release_year(result.get("release_date")),
+        "duration_seconds": _parse_duration_seconds(result),
+    }
 
 
 def similarity(fp_a: list[int], fp_b: list[int]) -> float:

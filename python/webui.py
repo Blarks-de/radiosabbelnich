@@ -40,6 +40,7 @@ import music_query
 import music_scan
 import resource_monitor
 import settings_store
+import song_fingerprint
 import station_import
 import stations_store
 import stt_filter
@@ -1241,6 +1242,18 @@ def _build_status(state: SwitcherState, icecast_cfg: dict, host_paths: dict = No
                 else:
                     now_playing_tags = {"title": None, "artist": None, "album": None, "year": None,
                                          "pending": True, "paused_no_listeners": False}
+                    # Statt des neutralen "🔍 noch nicht erkannt"-Platzhalters
+                    # zeigt die Player-Seite hier den konkreten AudD-Grund an,
+                    # falls Cloud-Lookup aktiv ist, aber gerade nicht
+                    # funktioniert (Kontingent/Netzwerk/AudD-Fehler) -- sonst
+                    # sähe das für den Betreiber ununterscheidbar von "läuft,
+                    # hat den Song nur noch nicht gefunden" aus (Nutzer-Wunsch,
+                    # siehe SESSION.md). "not_configured" wird hier bewusst
+                    # NICHT angezeigt, siehe get_audd_status()-Docstring.
+                    audd_status = song_fingerprint.get_audd_status()
+                    if audd_status and audd_status["state"] in ("quota", "network_error", "audd_error"):
+                        now_playing_tags["audd_problem"] = audd_status["state"]
+                        now_playing_tags["audd_error_code"] = audd_status.get("error_code")
     return {
         "current_id": current["id"] if current else None,
         "current_name": current["name"] if current else None,
@@ -1707,6 +1720,12 @@ function applyStatus(data) {
     npTitleText = npTags.artist ? `${npTags.artist} – ${npTags.title}` : npTags.title;
   } else if (npTags && npTags.paused_no_listeners) {
     npTitleText = t('idx_song_paused_no_listeners');
+  } else if (npTags && npTags.audd_problem === 'quota') {
+    npTitleText = t('idx_song_audd_quota');
+  } else if (npTags && npTags.audd_problem === 'network_error') {
+    npTitleText = t('idx_song_audd_network');
+  } else if (npTags && npTags.audd_problem === 'audd_error') {
+    npTitleText = t('idx_song_audd_error', {code: npTags.audd_error_code ?? '?'});
   } else if (npTags && npTags.pending) {
     npTitleText = t('idx_song_pending');
   }

@@ -112,13 +112,30 @@ class UpdateChecker:
         while True:
             cfg = self._get_settings()
             if cfg.get("enabled", True):
-                last_checked_at = cfg.get("last_checked_at")
-                due = last_checked_at is None or (
-                    time.time() - last_checked_at >= CHECK_INTERVAL_SECONDS
-                )
-                if due:
+                if self._due(cfg):
                     self._check_once()
             time.sleep(_POLL_INTERVAL_SECONDS)
+
+    def _due(self, cfg: dict) -> bool:
+        """Fällig entweder nach den üblichen 24h ODER sofort, wenn das
+        gecachte 'update_available' nicht mehr zur AKTUELL laufenden
+        lokalen Version passt -- last_checked_at wird von einem
+        Rebuild/Neustart NICHT zurückgesetzt (settings.json ist
+        bind-gemountet, überlebt einen Container-Rebuild), während
+        get_local_version() danach sofort den neuen Stand liefert. Ohne
+        diesen zweiten Trigger würde ein bereits installiertes Update
+        bis zu 24h lang fälschlich weiter als 'verfügbar' angezeigt
+        (live beobachtet: Check lief auf einer älteren Instanz, kurz
+        danach Rebuild auf genau die gefundene Version, siehe
+        SESSION.md)."""
+        last_checked_at = cfg.get("last_checked_at")
+        if last_checked_at is None or time.time() - last_checked_at >= CHECK_INTERVAL_SECONDS:
+            return True
+        if not cfg.get("update_available"):
+            return False
+        remote = parse_version(cfg.get("last_known_remote_version") or "")
+        local = parse_version(self._get_local_version()) or (0, 0, 0)
+        return remote is not None and remote <= local
 
     def _check_once(self):
         try:
