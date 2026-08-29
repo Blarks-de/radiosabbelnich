@@ -9828,3 +9828,76 @@ Kontingent. `README.md`/`ARCHITECTURE.md`/`CHANGELOG.md` in diesem Commit
 mitgezogen (Update-Prüfung- und Song-Erkennung-Abschnitte DE+EN,
 Mermaid-Diagramme, "Offene Punkte"-Eintrag zum Kontingent-Tracking
 präzisiert).
+
+## 2026-08-29 (Fortsetzung) — Statistik-Sektion für Song-Erkennung auf der Config-Seite
+
+**Auslöser**: Nutzer wollte eine "🎵 Song-Erkennung – Statistik"-Sektion
+auf der Config-Seite, die möglichst viel aus den bestehenden Tabellen
+zieht (DB-Größe, Hit-Rate, Similarity-Verteilung, AudD-Requests/Kosten
+etc.) — erst als Plan angefragt (wie üblich), nach Rückfrage zur
+fehlenden AudD-Request-Zählung sofort zur Umsetzung freigegeben.
+
+**Datenlage vorab geprüft (kein Code, nur Queries gegen die echte Produktiv-
+DB)**: `song_fingerprints`/`song_match_log` liefern DB-Größe/Hit-Rate/
+Similarity-Perzentile direkt (Percentil-/Histogramm-/Lücken-Logik
+existierte schon fertig in `check_song_calibration.py`, nur portiert
+statt neu erfunden). AudD-Requests gesamt/heute/diese-Woche gab es in
+KEINER Tabelle, nur als Textzeile im rotierenden DEBUG-Log (~1-2 Tage
+Retention bei aktuellem Verkehrsaufkommen — `log.2`-`log.5` hatten schon
+keine AudD-Zeile mehr). AudDs eigene API liefert laut Doku weder ein
+Kontingent-Feld in der Antwort noch einen separaten Abfrage-Endpoint
+(erneut per WebFetch gegen docs.audd.io geprüft) — eine Kostenschätzung
+kann sich deshalb NUR auf eigene Zählung stützen, nie auf eine AudD-eigene
+Quelle, und kennt nicht den Beginn des echten Abrechnungszeitraums.
+
+**Umsetzung**:
+- Neue Tabelle `audd_request_log` (`ts`, `station_id`, `outcome`) in
+  `song_fingerprint.py`s `_init_schema()`, additiv wie `song_match_log`.
+- Neue Methode `SongFingerprintDB.log_audd_request()`.
+- `audd_lookup()` bekommt zwei neue optionale Parameter (`station_id`,
+  `log_request`-Callback) und ruft `log_request(station_id, outcome)` an
+  GENAU denselben vier Stellen wie `_record_audd_status()` auf, nur mit
+  feinerem `outcome` ("hit"/"no_match" statt beide unter "ok") — Cooldown-
+  Skip loggt bewusst NICHT (kein tatsächlicher Request). Callback-Muster
+  statt direktem `SongFingerprintDB`-Import, exakt wie
+  `update_check.UpdateChecker.on_result` — hält `audd_lookup()` weiter
+  isoliert testbar.
+- `on_unknown_fingerprint()` reicht `station_id=station_id,
+  log_request=db.log_audd_request` durch.
+- Neue Funktion `build_recognition_stats(db_path, threshold)` in
+  `song_fingerprint.py`: aggregiert alles per SQL on-demand (kein Caching
+  nötig), Percentil-/Histogramm-/Lücken-Logik 1:1 aus
+  `check_song_calibration.py` portiert (`_percentiles()`/`_histogram()`/
+  `_separation_gap()`, bewusst dupliziert statt importiert, da jenes
+  Skript ein eigenständiges CLI-Tool bleibt).
+- `webui.py`: neue Funktion `_build_song_recognition_stats()` (DB-Pfad aus
+  `state.song_recognizer.db.db_path`, kein neues Durchreichen nötig), neuer
+  Endpoint `GET /api/song-recognition/stats`, neue Config-Seiten-Sektion
+  "🎵 Song-Erkennung – Statistik" (Tabellen + Balken-Histogramm per
+  simplen `<div>`s, kein Chart-Framework) direkt nach "🗑
+  Fingerprint-Datenbank", 38 neue i18n-Keys (EN + Deutsch.lng).
+
+**Verifiziert**: isoliert — `build_recognition_stats()` gegen eine KOPIE
+der echten Produktiv-DB (nicht das Original, siehe Sicherheitsregel für
+`rm`/Schreibzugriffe) mit 4 manuell eingefügten Test-Requests lieferte
+korrekt aggregierte Zahlen (u.a. Hit-Rate 70.9% über 5183 protokollierte
+Vergleiche, Lücken-Analyse fand die erwartete tautologische Trennung genau
+am Threshold 0.65); `audd_lookup()`-zu-`log_request()`-Verkabelung gegen
+gestubbtes `urllib.request.urlopen()` für alle 5 Ausgänge (hit/no_match/
+quota/audd_error/network_error) UND den Cooldown-Fall (korrekt NICHT
+geloggt); `_build_song_recognition_stats()` für enabled (echte Kopie-DB)
+UND disabled (`song_recognizer=None`) Zustand; voller `webui.py`-Import
+inkl. `_check_i18n_coverage()` (bestand mit allen 38 neuen Keys, per
+Diff-Abgleich verifiziert: exakt dieselben Keys in Code UND i18n.py
+definiert, keine übersehenen/vertippten).
+
+**Bewusst NICHT gemacht**: keine proaktive Tages-Limit-Warnung ("noch X
+von 300 übrig", siehe `ARCHITECTURE.md`/"Offene Punkte") — nur die reine
+Zählung. Keine automatisierte Nutzung der jetzt sichtbaren AudD-
+Identifikationen zur automatischen `similarity_threshold`-Kalibrierung
+(bleibt manuelle Beobachtung, wie zuvor). Kein Live-Polling der neuen
+Statistik-Sektion (lädt einmalig beim Seitenaufruf, wie die Kalibrierungs-
+Sektion es NICHT tut, anders als die alle-5s-aktualisierte
+Ressourcen-Tabelle) — die zugrundeliegenden DB-Werte ändern sich zu
+langsam, um ein Polling zu rechtfertigen. Noch kein Deploy/Commit (Nutzer
+hat noch keinen angefordert, `python/` ist nicht bind-gemountet).

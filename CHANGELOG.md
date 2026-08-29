@@ -40,6 +40,14 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 
 ## 2026-08-29
 
+- Neu: Statistik-Sektion auf der Config-Seite ("🎵 Song-Erkennung –
+  Statistik") — DB-Größe, Sammelzeitraum, Hit-Rate, Similarity-Perzentile/
+  Histogramm (Hits vs. Misses), Trennschärfe-Analyse, Top-Sender und
+  meistgespielte erkannte Songs für das lokale Fingerprinting; für den
+  AudD-Cloud-Fallback zusätzlich Requests heute/letzte 7 Tage/gesamt,
+  Erfolgsquote und eine grobe Kostenschätzung. Neue Tabelle
+  `audd_request_log` protokolliert dafür jeden tatsächlich versuchten
+  AudD-Aufruf.
 - Fix: Update-Prüfung zeigte nach einem Rebuild kurz nach einem gefundenen
   Update bis zu 24h lang fälschlich "Update verfügbar" für eine bereits
   installierte Version — der gecachte Zustand korrigiert sich jetzt sofort

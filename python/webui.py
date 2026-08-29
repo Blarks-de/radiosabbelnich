@@ -1156,6 +1156,23 @@ def _build_calibration_status(state: SwitcherState) -> dict:
     return result
 
 
+def _build_song_recognition_stats(state: SwitcherState) -> dict:
+    """Snapshot für die Config-Seite ("🎵 Song-Erkennung – Statistik",
+    Nutzer-Wunsch, siehe SESSION.md) -- {"enabled": False}, solange die
+    Song-Erkennung komplett aus ist (kein song_recognizer registriert,
+    siehe radiosabbelnich.py main(), `args.no_song_recognition`), sonst
+    song_fingerprint.build_recognition_stats() gegen dieselbe DB-Datei,
+    die der laufende SongRecognizer ohnehin schon offen hält
+    (`song_recognizer.db.db_path`) -- kein zusätzliches Durchreichen des
+    Pfads über host_paths/args nötig."""
+    song_recognizer = getattr(state, "song_recognizer", None)
+    if song_recognizer is None:
+        return {"enabled": False}
+    threshold = state.song_recognition_cfg.get("similarity_threshold", 0.65)
+    stats = song_fingerprint.build_recognition_stats(song_recognizer.db.db_path, threshold)
+    return {"enabled": True, **stats}
+
+
 def _music_library_host_path(container_path: str, host_root: str) -> str:
     """Übersetzt den (evtl. verschachtelten) Container-Pfad des aktuell
     gewählten Musiksammlung-Unterordners in den entsprechenden Host-Pfad,
@@ -2867,6 +2884,22 @@ _CONFIG_PAGE_HTML = """<!doctype html>
   table#resource-table td { padding: .3rem 0; border-bottom: 1px solid #8882; }
   table#resource-table td.label { color: #888; }
   table#resource-table td.value { text-align: right; font-variant-numeric: tabular-nums; }
+  section#song-stats-section {
+    margin-top: 1.5rem; padding: 1rem; border: 1px solid #8884; border-radius: .5rem;
+  }
+  section#song-stats-section h3 { font-size: 1rem; margin: 1.2rem 0 .3rem; }
+  table.stats-table { width: 100%; border-collapse: collapse; font-size: .9rem; margin-top: .5rem; }
+  table.stats-table td { padding: .3rem 0; border-bottom: 1px solid #8882; }
+  table.stats-table td.label { color: #888; }
+  table.stats-table td.value { text-align: right; font-variant-numeric: tabular-nums; }
+  table.stats-table.small td { padding: .15rem .4rem; font-size: .85rem; }
+  section#song-stats-section details { margin-top: .8rem; }
+  section#song-stats-section summary { cursor: pointer; font-size: .9rem; color: #888; }
+  .hist-row { display: grid; grid-template-columns: 5rem 1fr 1fr; gap: .4rem; align-items: center;
+    font-size: .8rem; margin: .15rem 0; }
+  .hist-bar-track { position: relative; height: .9rem; background: #8882; border-radius: .2rem; }
+  .hist-bar-hit { position: absolute; left: 0; top: 0; height: 100%; background: #2a7a4a; border-radius: .2rem; }
+  .hist-bar-miss { position: absolute; left: 0; top: 0; height: 100%; background: #c33; border-radius: .2rem; }
   #msg { margin-top: 1rem; font-size: .9rem; min-height: 1.2em; }
   #msg.error { color: #d33; }
   #msg.ok { color: #2a7a4a; }
@@ -3179,6 +3212,68 @@ _CONFIG_PAGE_HTML = """<!doctype html>
   <p class="hint" data-i18n-html="cfg_fingerprint_hint">Löscht alle gelernten Jingle-/Werbespot-Clips (nicht
     die Senderliste). Danach lernt die Erkennung wieder bei Null.</p>
   <button type="button" id="btn-clear-fingerprints" data-i18n="cfg_fingerprint_clear_btn">Clip-DB leeren</button>
+</section>
+
+<section id="song-stats-section">
+  <h2 style="margin-top:0" data-i18n="cfg_songstats_heading">🎵 Song-Erkennung – Statistik</h2>
+  <p class="hint" data-i18n="cfg_songstats_hint">Kennzahlen aus den bestehenden Song-Erkennungs-Tabellen, zum
+    Beobachten/Kalibrieren -- rein informativ, keine Einstellungen hier.</p>
+
+  <p id="song-stats-disabled" data-i18n="cfg_songstats_disabled" hidden>Song-Erkennung ist deaktiviert -- keine
+    Statistik verfügbar.</p>
+
+  <div id="song-stats-content" hidden>
+    <h3 data-i18n="cfg_songstats_local_heading">Lokales Fingerprinting (Phase 1)</h3>
+    <table class="stats-table">
+      <tr><td class="label" data-i18n="cfg_songstats_entries">Einträge in DB</td><td class="value" id="song-stats-entries">–</td></tr>
+      <tr><td class="label" data-i18n="cfg_songstats_matchlog">Protokollierte Vergleiche</td><td class="value" id="song-stats-matchlog">–</td></tr>
+      <tr><td class="label" data-i18n="cfg_songstats_period">Sammelzeitraum</td><td class="value" id="song-stats-period">–</td></tr>
+      <tr><td class="label" data-i18n="cfg_songstats_hitrate">Hit-Rate <span class="hint" style="font-size:.75em">(*)</span></td><td class="value" id="song-stats-hitrate">–</td></tr>
+      <tr><td class="label" data-i18n="cfg_songstats_threshold">Aktueller Threshold</td><td class="value" id="song-stats-threshold">–</td></tr>
+      <tr><td class="label" data-i18n="cfg_songstats_gap">Trennschärfe Hit/Miss</td><td class="value" id="song-stats-gap">–</td></tr>
+    </table>
+    <p class="hint" data-i18n="cfg_songstats_hitrate_hint">(*) Tautologisch -- Hit/Miss wird direkt aus dem
+      Vergleich mit dem aktuellen Threshold abgeleitet, keine unabhängige Ground Truth.</p>
+
+    <details id="song-stats-percentiles-details">
+      <summary data-i18n="cfg_songstats_percentiles_summary">Similarity-Perzentile &amp; Histogramm</summary>
+      <table class="stats-table small">
+        <tr><td></td><td>p10</td><td>p25</td><td>p50</td><td>p75</td><td>p90</td></tr>
+        <tr><td data-i18n="cfg_songstats_hits">Hits</td>
+          <td id="pct-hit-10">–</td><td id="pct-hit-25">–</td><td id="pct-hit-50">–</td>
+          <td id="pct-hit-75">–</td><td id="pct-hit-90">–</td></tr>
+        <tr><td data-i18n="cfg_songstats_misses">Misses</td>
+          <td id="pct-miss-10">–</td><td id="pct-miss-25">–</td><td id="pct-miss-50">–</td>
+          <td id="pct-miss-75">–</td><td id="pct-miss-90">–</td></tr>
+      </table>
+      <div id="song-stats-histogram" style="margin-top:.6rem"></div>
+    </details>
+
+    <details id="song-stats-stations-details">
+      <summary data-i18n="cfg_songstats_stations_summary">Top-Sender</summary>
+      <table class="stats-table small" id="song-stats-stations-table"></table>
+    </details>
+
+    <details id="song-stats-songs-details">
+      <summary data-i18n="cfg_songstats_songs_summary">Meistgespielte erkannte Songs</summary>
+      <table class="stats-table small" id="song-stats-songs-table"></table>
+    </details>
+
+    <h3 data-i18n="cfg_songstats_audd_heading">AudD Cloud-Fallback (Phase 2)</h3>
+    <table class="stats-table">
+      <tr><td class="label" data-i18n="cfg_songstats_audd_token">API-Token konfiguriert</td><td class="value" id="song-stats-audd-token">–</td></tr>
+      <tr><td class="label" data-i18n="cfg_songstats_audd_laststatus">Letzter Status</td><td class="value" id="song-stats-audd-laststatus">–</td></tr>
+      <tr><td class="label" data-i18n="cfg_songstats_audd_today">Requests heute</td><td class="value" id="song-stats-audd-today">–</td></tr>
+      <tr><td class="label" data-i18n="cfg_songstats_audd_week">Requests letzte 7 Tage</td><td class="value" id="song-stats-audd-week">–</td></tr>
+      <tr><td class="label" data-i18n="cfg_songstats_audd_total">Requests gesamt</td><td class="value" id="song-stats-audd-total">–</td></tr>
+      <tr><td class="label" data-i18n="cfg_songstats_audd_outcomes">Ergebnisse (Treffer/kein Treffer/Kontingent/Fehler/Netzwerk)</td><td class="value" id="song-stats-audd-outcomes">–</td></tr>
+      <tr><td class="label" data-i18n="cfg_songstats_audd_successrate">Erfolgsquote</td><td class="value" id="song-stats-audd-successrate">–</td></tr>
+      <tr><td class="label" data-i18n="cfg_songstats_audd_cost">Geschätzte Kosten</td><td class="value" id="song-stats-audd-cost">–</td></tr>
+    </table>
+    <p class="hint" data-i18n="cfg_songstats_audd_cost_hint">Zählung erst seit Einführung dieser Statistik (siehe
+      "Requests gesamt") -- spiegelt NICHT den tatsächlichen AudD-Kontostand wider, falls das Kontingent schon
+      vorher (teilweise) verbraucht war. AudD liefert dafür weder ein Antwort-Feld noch einen Abfrage-Endpoint.</p>
+  </div>
 </section>
 
 <section id="resource-section">
@@ -3954,6 +4049,132 @@ async function loadResources() {
   }
 }
 
+function formatPct(x) {
+  return x == null ? '–' : (x * 100).toFixed(1) + ' %';
+}
+
+function auddStatusLabel(status) {
+  if (!status || !status.state) return t('cfg_songstats_audd_status_none');
+  const when = status.checked_at ? new Date(status.checked_at * 1000).toLocaleString() : '';
+  const labels = {
+    ok: t('cfg_songstats_audd_status_ok'),
+    quota: t('cfg_songstats_audd_status_quota'),
+    network_error: t('cfg_songstats_audd_status_network'),
+    audd_error: t('cfg_songstats_audd_status_error', {code: status.error_code ?? '?'}),
+  };
+  const label = labels[status.state] || status.state;
+  return when ? `${label} (${when})` : label;
+}
+
+function renderHistogram(buckets) {
+  const el = document.getElementById('song-stats-histogram');
+  el.innerHTML = '';
+  const maxCount = Math.max(1, ...buckets.map(b => Math.max(b.hits, b.misses)));
+  for (const b of buckets) {
+    if (b.hits === 0 && b.misses === 0) continue;
+    const row = document.createElement('div');
+    row.className = 'hist-row';
+    const rangeLabel = document.createElement('span');
+    rangeLabel.textContent = b.lo.toFixed(2) + '–' + b.hi.toFixed(2);
+    const hitTrack = document.createElement('div');
+    hitTrack.className = 'hist-bar-track';
+    hitTrack.title = `${b.hits} Hits`;
+    const hitBar = document.createElement('div');
+    hitBar.className = 'hist-bar-hit';
+    hitBar.style.width = (b.hits / maxCount * 100) + '%';
+    hitTrack.appendChild(hitBar);
+    const missTrack = document.createElement('div');
+    missTrack.className = 'hist-bar-track';
+    missTrack.title = `${b.misses} Misses`;
+    const missBar = document.createElement('div');
+    missBar.className = 'hist-bar-miss';
+    missBar.style.width = (b.misses / maxCount * 100) + '%';
+    missTrack.appendChild(missBar);
+    row.append(rangeLabel, hitTrack, missTrack);
+    el.appendChild(row);
+  }
+}
+
+function renderStatsTable(tableEl, rows, cols) {
+  tableEl.innerHTML = '';
+  for (const row of rows) {
+    const tr = document.createElement('tr');
+    for (const col of cols) {
+      const td = document.createElement('td');
+      td.textContent = row[col];
+      tr.appendChild(td);
+    }
+    tableEl.appendChild(tr);
+  }
+}
+
+async function loadSongRecognitionStats() {
+  try {
+    const s = await api('/api/song-recognition/stats');
+    document.getElementById('song-stats-disabled').hidden = s.enabled;
+    document.getElementById('song-stats-content').hidden = !s.enabled;
+    if (!s.enabled) return;
+
+    const loc = s.local, aud = s.audd, ml = loc.match_log;
+    document.getElementById('song-stats-entries').textContent =
+      `${loc.total_entries} (${loc.with_title} ${t('cfg_songstats_with_title')} / ${loc.without_title} ${t('cfg_songstats_without_title')})`;
+    document.getElementById('song-stats-matchlog').textContent = ml.total;
+    document.getElementById('song-stats-period').textContent =
+      ml.first_ts ? `${ml.first_ts} – ${ml.last_ts}` : '–';
+    document.getElementById('song-stats-hitrate').textContent =
+      ml.total ? `${formatPct(ml.hit_rate)} (${ml.hits}/${ml.misses})` : '–';
+    document.getElementById('song-stats-threshold').textContent = ml.current_threshold;
+    if (ml.separation) {
+      document.getElementById('song-stats-gap').textContent = ml.separation.clean_gap
+        ? t('cfg_songstats_gap_clean', {value: ml.separation.suggested_threshold.toFixed(4)})
+        : t('cfg_songstats_gap_overlap', {miss: ml.separation.miss_max.toFixed(4), hit: ml.separation.hit_min.toFixed(4)});
+    } else {
+      document.getElementById('song-stats-gap').textContent = t('cfg_songstats_gap_insufficient');
+    }
+
+    const hp = ml.hit_percentiles || {}, mp = ml.miss_percentiles || {};
+    for (const p of [10, 25, 50, 75, 90]) {
+      document.getElementById('pct-hit-' + p).textContent = hp[p] != null ? hp[p].toFixed(4) : '–';
+      document.getElementById('pct-miss-' + p).textContent = mp[p] != null ? mp[p].toFixed(4) : '–';
+    }
+    renderHistogram(ml.histogram || []);
+
+    renderStatsTable(
+      document.getElementById('song-stats-stations-table'),
+      loc.top_stations.map(row => ({
+        station: row.station_id || '–', entries: row.entries,
+        titled: row.with_title, plays: row.plays,
+      })),
+      ['station', 'entries', 'titled', 'plays'],
+    );
+    renderStatsTable(
+      document.getElementById('song-stats-songs-table'),
+      loc.top_songs.map(row => ({
+        song: `${row.artist} – ${row.title}`, plays: row.play_count, station: row.station_id || '–',
+      })),
+      ['song', 'plays', 'station'],
+    );
+
+    document.getElementById('song-stats-audd-token').textContent =
+      aud.token_configured ? t('cfg_songstats_yes') : t('cfg_songstats_no');
+    document.getElementById('song-stats-audd-laststatus').textContent = auddStatusLabel(aud.last_status);
+    document.getElementById('song-stats-audd-today').textContent = aud.requests_today;
+    document.getElementById('song-stats-audd-week').textContent = aud.requests_last_7_days;
+    document.getElementById('song-stats-audd-total').textContent =
+      aud.counting_since ? `${aud.requests_total} (${t('cfg_songstats_audd_since')} ${aud.counting_since})` : '0';
+    const o = aud.outcomes;
+    document.getElementById('song-stats-audd-outcomes').textContent =
+      `${o.hit} / ${o.no_match} / ${o.quota} / ${o.audd_error} / ${o.network_error}`;
+    document.getElementById('song-stats-audd-successrate').textContent = formatPct(aud.success_rate);
+    document.getElementById('song-stats-audd-cost').textContent =
+      aud.estimated_cost_usd > 0
+        ? `~$${aud.estimated_cost_usd.toFixed(2)}`
+        : t('cfg_songstats_audd_cost_free', {quota: aud.free_quota});
+  } catch (e) {
+    // Rein informatives Panel, gleiches Muster wie loadResources() oben.
+  }
+}
+
 let lastCalibSnapshot = null;
 
 function formatConfidenceSummary(samples) {
@@ -4076,6 +4297,7 @@ document.getElementById('btn-stt-calib-apply').addEventListener('click', async (
 loadStations();
 loadSettings();
 loadResources();
+loadSongRecognitionStats();
 pollCalibration();
 // Nur relevant, solange die Config-Seite offen ist -- kein Long-Poll nötig,
 // das ist kein zeitkritischer Wert (anders als der Bullshitometer auf der
@@ -4321,6 +4543,8 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                 self._handle_library_duplicates()
             elif self.path == "/api/config/stt-calibration/status":
                 self._send_json(_build_calibration_status(state))
+            elif self.path == "/api/song-recognition/stats":
+                self._send_json(_build_song_recognition_stats(state))
             elif self.path == "/api/resources":
                 self._send_json(res_mon.snapshot())
             elif self.path == "/api/update_check":

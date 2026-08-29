@@ -41,6 +41,7 @@ import json
 import logging
 import os
 import sqlite3
+import statistics
 import subprocess
 import tempfile
 import threading
@@ -340,7 +341,9 @@ def _parse_duration_seconds(result: dict) -> Optional[int]:
         return None
 
 
-def audd_lookup(pcm_int16: np.ndarray, sample_rate: int, api_token: str) -> Optional[dict]:
+def audd_lookup(pcm_int16: np.ndarray, sample_rate: int, api_token: str,
+                 station_id: str = None,
+                 log_request: Optional[Callable[[str, str], None]] = None) -> Optional[dict]:
     """Schickt `pcm_int16` als WAV an AudD (https://audd.io) und gibt bei
     einer erfolgreichen Identifikation {"title", "artist", "album", "year",
     "duration_seconds"} zurück (alle außer title/artist können None sein,
@@ -360,6 +363,17 @@ def audd_lookup(pcm_int16: np.ndarray, sample_rate: int, api_token: str) -> Opti
     laut AudD-Doku immer 200, der Fehler steckt im JSON-Body als
     {"status":"error","error":{"error_code":...}}), "network_error" bei
     Verbindungs-/Timeout-/Parse-Problemen.
+
+    `log_request(station_id, outcome)` (optional, Callback statt direktem
+    SongFingerprintDB-Import -- gleiches Muster wie
+    update_check.UpdateChecker.on_result, hält diese Funktion isoliert
+    testbar) wird bei GENAU demselben tatsächlich versuchten Aufruf
+    zusätzlich zu get_audd_status() aufgerufen, aber mit feinerem
+    `outcome`: "hit"/"no_match" statt beide unter "ok" (Statistik-Sektion
+    Config-Seite braucht die Erfolgsquote, get_audd_status() fürs Live-
+    Banner nur "läuft/läuft nicht"). Ein Cooldown-Skip ruft `log_request`
+    NICHT auf -- das war kein tatsächlicher AudD-Request, würde die
+    Request-Zählung sonst künstlich aufblähen.
 
     WAV wird in-memory gebaut (io.BytesIO), kein Temp-File wie bei
     compute_fingerprint() -- fpcalc braucht zwingend einen Dateipfad,
@@ -402,6 +416,8 @@ def audd_lookup(pcm_int16: np.ndarray, sample_rate: int, api_token: str) -> Opti
         # auftritt.
         log.warning("⚠ AudD-Lookup fehlgeschlagen (Netzwerk/Zeitüberschreitung/Parsing): %s", e)
         _record_audd_status("network_error", error_message=str(e))
+        if log_request:
+            log_request(station_id, "network_error")
         return None
 
     if data.get("status") == "error":
@@ -413,19 +429,25 @@ def audd_lookup(pcm_int16: np.ndarray, sample_rate: int, api_token: str) -> Opti
         err = data.get("error") or {}
         code, msg = err.get("error_code"), err.get("error_message")
         log.warning("⚠ AudD meldet einen API-Fehler (Code %s): %s", code, msg)
-        _record_audd_status(
-            "quota" if code in _AUDD_QUOTA_ERROR_CODES else "audd_error",
-            error_code=code, error_message=msg,
-        )
+        outcome = "quota" if code in _AUDD_QUOTA_ERROR_CODES else "audd_error"
+        _record_audd_status(outcome, error_code=code, error_message=msg)
+        if log_request:
+            log_request(station_id, outcome)
         return None
 
     _record_audd_status("ok")
     if not data.get("result"):
+        if log_request:
+            log_request(station_id, "no_match")
         return None  # AudD hat den Song nicht erkannt -- kein Fehler
     result = data["result"]
     title, artist = result.get("title"), result.get("artist")
     if not title or not artist:
+        if log_request:
+            log_request(station_id, "no_match")
         return None
+    if log_request:
+        log_request(station_id, "hit")
     return {
         "title": title, "artist": artist,
         "album": result.get("album") or None,
@@ -520,6 +542,23 @@ class SongFingerprintDB:
                     is_hit INTEGER NOT NULL,
                     matched_song_id INTEGER,
                     play_count INTEGER
+                )
+            """)
+            # AudD-Request-Log (Nutzer-Wunsch, Statistik-Sektion Config-
+            # Seite, siehe SESSION.md): EIN Zeile pro tatsächlich
+            # versuchtem audd_lookup()-Aufruf (Cooldown-Skips zählen NICHT
+            # mit, siehe dort) -- ohne das gab es für "Requests heute/diese
+            # Woche/gesamt" und eine echte Erfolgsquote keine Datenquelle,
+            # nur unzuverlässige, schnell rotierende Logfile-Zeilen
+            # (DEBUG-Level, ~1-2 Tage Retention). Gleiches Muster wie
+            # song_match_log oben: rein additiv, kein Einfluss auf
+            # Matching/Cloud-Lookup selbst.
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS audd_request_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts TEXT NOT NULL,
+                    station_id TEXT,
+                    outcome TEXT NOT NULL
                 )
             """)
             conn.commit()
@@ -621,6 +660,24 @@ class SongFingerprintDB:
         finally:
             conn.close()
 
+    def log_audd_request(self, station_id: str, outcome: str):
+        """Protokolliert EINEN tatsächlich versuchten `audd_lookup()`-Aufruf
+        in `audd_request_log` -- `outcome` ist eines von "hit"/"no_match"/
+        "quota"/"audd_error"/"network_error" (siehe audd_lookup()). Wird von
+        dort per `log_request`-Callback aufgerufen, nicht direkt importiert
+        -- gleiches Callback-Muster wie update_check.UpdateChecker.on_result,
+        damit audd_lookup() selbst von SongFingerprintDB/SQLite unwissend
+        und leicht isoliert testbar bleibt (siehe dortige Tests)."""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute(
+                "INSERT INTO audd_request_log (ts, station_id, outcome) VALUES (?, ?, ?)",
+                (time.strftime("%Y-%m-%d %H:%M:%S"), station_id, outcome),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
 
 def delete_fingerprint(db_path: str, song_id: int) -> bool:
     """Löscht einen Song-Fingerprint anhand der DB-Datei (eigene, kurze
@@ -652,6 +709,179 @@ def clear_all(db_path: str) -> int:
         conn.close()
 
 
+def _percentiles(values: list[float], ps=(10, 25, 50, 75, 90)) -> dict:
+    """Identische Perzentil-Logik wie check_song_calibration.py -- absichtlich
+    hier dupliziert statt von dort importiert (jenes Skript ist ein
+    eigenständiges CLI-Tool außerhalb von python/, siehe CLAUDE.md-
+    Dateitabelle), damit ein Skript-Refactoring diese Funktion hier nicht
+    versehentlich mitreißt. `statistics.quantiles()` braucht mindestens 2
+    Werte, sonst leeres Dict statt Exception."""
+    if len(values) < 2:
+        return {}
+    q = statistics.quantiles(values, n=100, method="inclusive")
+    return {p: q[p - 1] for p in ps}
+
+
+def _histogram(hits: list[float], misses: list[float], bucket_size: float = 0.05) -> list[dict]:
+    """20 Buckets à 0.05 über den vollen [0,1)-Wertebereich, ALLE
+    (auch leere) statt wie check_song_calibration.py nur die belegten --
+    eine feste Bucket-Zahl ergibt in der WebUI ein gleichbleibendes
+    Balkendiagramm-Layout statt eines pro Aufruf unterschiedlich langen."""
+    n_buckets = int(round(1.0 / bucket_size))
+    buckets = []
+    for i in range(n_buckets):
+        lo, hi = round(i * bucket_size, 2), round((i + 1) * bucket_size, 2)
+        h = sum(1 for v in hits if lo <= v < hi)
+        m = sum(1 for v in misses if lo <= v < hi)
+        buckets.append({"lo": lo, "hi": hi, "hits": h, "misses": m})
+    return buckets
+
+
+def _separation_gap(hits: list[float], misses: list[float]) -> Optional[dict]:
+    """Identische Lücken-Analyse wie check_song_calibration.py: gibt es
+    einen Schwellwert-Bereich, der ALLE bisherigen Hits von ALLEN Misses
+    trennt? None, falls einer der beiden Sätze leer ist (keine Aussage
+    möglich)."""
+    if not hits or not misses:
+        return None
+    gap_lo, gap_hi = max(misses), min(hits)
+    return {
+        "clean_gap": gap_lo < gap_hi,
+        "miss_max": gap_lo,
+        "hit_min": gap_hi,
+        "suggested_threshold": (gap_lo + gap_hi) / 2 if gap_lo < gap_hi else None,
+    }
+
+
+# AudDs kostenloses Startkontingent -- siehe README/AudD-Doku. Rein
+# informativ für die Kostenschätzung unten, KEINE echte Abrechnungsgrenze,
+# die dieses Programm irgendwo durchsetzt.
+_AUDD_FREE_QUOTA = 300
+_AUDD_COST_PER_1000_USD = 5.0
+
+
+def build_recognition_stats(db_path: str, current_threshold: float) -> dict:
+    """Aggregiert Kennzahlen aus song_fingerprints/song_match_log/
+    audd_request_log für die Config-Seite ("🎵 Song-Erkennung –
+    Statistik", Nutzer-Wunsch, siehe SESSION.md) -- reiner Lesezugriff,
+    alles per SQL on-demand berechnet, kein Caching nötig (bei den hier
+    üblichen Zeilenzahlen -- Größenordnung tausend -- für SQLite trivial
+    schnell). Portiert die Percentil-/Histogramm-/Lücken-Logik aus
+    check_song_calibration.py (siehe _percentiles()/_histogram()/
+    _separation_gap() oben).
+
+    Die AudD-"Requests"/"Kosten"-Werte zählen AUSSCHLIESSLICH ab Einführung
+    von audd_request_log (siehe dort) -- sie sind NICHT der tatsächliche
+    AudD-Kontostand: falls das Kontingent schon VOR diesem Logging
+    (teilweise) verbraucht war, wissen wir das nicht, AudD liefert dafür
+    weder ein Antwort-Feld noch einen Abfrage-Endpoint (siehe SESSION.md/
+    ARCHITECTURE.md). Der Aufrufer (webui.py) muss diese Einschränkung in
+    der Anzeige transparent machen, nicht nur die Zahl zeigen."""
+    conn = sqlite3.connect(db_path)
+    try:
+        c = conn.cursor()
+        total = c.execute("SELECT COUNT(*) FROM song_fingerprints").fetchone()[0]
+        with_title = c.execute(
+            "SELECT COUNT(*) FROM song_fingerprints WHERE title IS NOT NULL"
+        ).fetchone()[0]
+
+        top_stations = c.execute(
+            "SELECT station_id, COUNT(*), SUM(title IS NOT NULL), SUM(play_count) "
+            "FROM song_fingerprints GROUP BY station_id ORDER BY 2 DESC LIMIT 10"
+        ).fetchall()
+        top_songs = c.execute(
+            "SELECT title, artist, play_count, station_id FROM song_fingerprints "
+            "WHERE title IS NOT NULL ORDER BY play_count DESC LIMIT 10"
+        ).fetchall()
+
+        match_rows = c.execute(
+            "SELECT similarity, is_hit, ts FROM song_match_log ORDER BY ts"
+        ).fetchall()
+
+        today_start = time.strftime("%Y-%m-%d 00:00:00")
+        week_start = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 7 * 86400))
+        audd_total = c.execute("SELECT COUNT(*) FROM audd_request_log").fetchone()[0]
+        audd_today = c.execute(
+            "SELECT COUNT(*) FROM audd_request_log WHERE ts >= ?", (today_start,)
+        ).fetchone()[0]
+        audd_week = c.execute(
+            "SELECT COUNT(*) FROM audd_request_log WHERE ts >= ?", (week_start,)
+        ).fetchone()[0]
+        outcome_counts = dict(c.execute(
+            "SELECT outcome, COUNT(*) FROM audd_request_log GROUP BY outcome"
+        ).fetchall())
+        audd_first_ts = c.execute("SELECT MIN(ts) FROM audd_request_log").fetchone()[0]
+    finally:
+        conn.close()
+
+    hits = [r[0] for r in match_rows if r[1]]
+    misses = [r[0] for r in match_rows if not r[1]]
+
+    hit_count = outcome_counts.get("hit", 0)
+    no_match_count = outcome_counts.get("no_match", 0)
+    quota_count = outcome_counts.get("quota", 0)
+    audd_error_count = outcome_counts.get("audd_error", 0)
+    network_error_count = outcome_counts.get("network_error", 0)
+    # Erfolgsquote NUR über tatsächlich abgeschlossene Erkennungsversuche
+    # (hit/no_match) -- Requests, die an einem AudD-Fehler scheiterten,
+    # sagen nichts über "erkennt AudD den Song" aus, würden die Quote sonst
+    # künstlich verwässern.
+    completed = hit_count + no_match_count
+    success_rate = (hit_count / completed) if completed else None
+    # Für die Kostenschätzung zählen alle Requests, die AudD tatsächlich
+    # erreicht haben (auch ein abgelehnter Kontingent-/Fehler-Request lief
+    # über die Leitung) -- NUR network_error ausgenommen, da dort nie eine
+    # AudD-Antwort ankam, sich also nicht sagen lässt, ob AudD ihn überhaupt
+    # verarbeitet/gezählt hat.
+    billable_requests = hit_count + no_match_count + quota_count + audd_error_count
+    billable_overage = max(0, billable_requests - _AUDD_FREE_QUOTA)
+    estimated_cost_usd = round(billable_overage / 1000 * _AUDD_COST_PER_1000_USD, 2)
+
+    return {
+        "local": {
+            "total_entries": total,
+            "with_title": with_title,
+            "without_title": total - with_title,
+            "top_stations": [
+                {"station_id": s, "entries": n, "with_title": wt or 0, "plays": p or 0}
+                for s, n, wt, p in top_stations
+            ],
+            "top_songs": [
+                {"title": t, "artist": a, "play_count": pc, "station_id": s}
+                for t, a, pc, s in top_songs
+            ],
+            "match_log": {
+                "total": len(match_rows),
+                "first_ts": match_rows[0][2] if match_rows else None,
+                "last_ts": match_rows[-1][2] if match_rows else None,
+                "hits": len(hits),
+                "misses": len(misses),
+                "hit_rate": (len(hits) / len(match_rows)) if match_rows else None,
+                "current_threshold": current_threshold,
+                "hit_percentiles": _percentiles(hits),
+                "miss_percentiles": _percentiles(misses),
+                "histogram": _histogram(hits, misses),
+                "separation": _separation_gap(hits, misses),
+            },
+        },
+        "audd": {
+            "token_configured": AUDD_API_TOKEN is not None,
+            "last_status": get_audd_status(),
+            "requests_today": audd_today,
+            "requests_last_7_days": audd_week,
+            "requests_total": audd_total,
+            "counting_since": audd_first_ts,
+            "outcomes": {
+                "hit": hit_count, "no_match": no_match_count, "quota": quota_count,
+                "audd_error": audd_error_count, "network_error": network_error_count,
+            },
+            "success_rate": success_rate,
+            "estimated_cost_usd": estimated_cost_usd,
+            "free_quota": _AUDD_FREE_QUOTA,
+        },
+    }
+
+
 def on_unknown_fingerprint(db: "SongFingerprintDB", pcm_int16: np.ndarray, fingerprint: list[int],
                             sample_rate: int, station_id: str, cloud_lookup_enabled: bool) -> Optional[dict]:
     """Bei Cache-Miss (Phase 1): identifiziert den Song per AudD, wenn
@@ -670,7 +900,8 @@ def on_unknown_fingerprint(db: "SongFingerprintDB", pcm_int16: np.ndarray, finge
                  else "kein AUDD_API_TOKEN gesetzt (.env)")
         return None
 
-    result = audd_lookup(pcm_int16, sample_rate, AUDD_API_TOKEN)
+    result = audd_lookup(pcm_int16, sample_rate, AUDD_API_TOKEN,
+                          station_id=station_id, log_request=db.log_audd_request)
     if result is None:
         log.info("🎵 AudD kennt den Song auf Sender '%s' nicht (oder Anfrage fehlgeschlagen/im Cooldown).",
                  station_id)

@@ -637,6 +637,21 @@ nicht gesondert dokumentierte AudD-Fehlercode). Fehlt nur der API-Token
 oder ist `cloud_lookup_enabled` aus, bleibt es beim neutralen "🔍
 noch nicht erkannt" — das ist kein Fehlerzustand.
 
+**Statistik-Sektion auf der Config-Seite** ("🎵 Song-Erkennung –
+Statistik", direkt unterhalb von "🗑 Fingerprint-Datenbank"): zeigt Kennzahlen
+aus den bestehenden Tabellen, rein informativ zum Beobachten/Kalibrieren —
+Einträge in der lokalen DB, Sammelzeitraum, Hit-Rate samt Similarity-
+Perzentilen/Histogramm für Hits vs. Misses (dieselbe Auswertung wie
+`check_song_calibration.py`, jetzt zusätzlich hier), Top-Sender und
+meistgespielte erkannte Songs. Für den AudD-Cloud-Fallback zusätzlich:
+Token konfiguriert ja/nein, letzter Status (siehe oben), sowie Requests
+heute/letzte 7 Tage/gesamt samt Erfolgsquote und einer groben
+Kostenschätzung ($5 pro 1.000 Requests nach dem 300er-Freikontingent) —
+letztere zählt AUSSCHLIESSLICH ab Einführung dieser Statistik-Sektion,
+nicht den tatsächlichen AudD-Kontostand (AudD liefert dafür weder ein
+Antwort-Feld noch einen Abfrage-Endpoint). Erscheint nur, solange
+`song_recognition.enabled` an ist.
+
 ## Sprache des Web-Interfaces
 
 Player- und Config-Seite gibt es auf Englisch (im Code eingebaute
@@ -1786,6 +1801,20 @@ yet": "⚠️ AudD quota exhausted" (AudD error codes #900/#901/#902, see
 error (code X)" (any other, not specifically documented AudD error code).
 If only the API token is missing or `cloud_lookup_enabled` is off, it stays
 at the neutral "🔍 not recognized yet" — that's not an error state.
+
+**Statistics section on the config page** ("🎵 Song recognition –
+statistics", right below "🗑 Fingerprint database"): shows metrics from
+the existing tables, purely informational for observing/calibrating —
+entries in the local DB, collection period, hit rate with similarity
+percentiles/histogram for hits vs. misses (the same analysis as
+`check_song_calibration.py`, now also here), top stations, and most-played
+recognized songs. For the AudD cloud fallback, additionally: token
+configured yes/no, last status (see above), and requests today/last 7
+days/total with a success rate and a rough cost estimate ($5 per 1,000
+requests after the 300-request free tier) — the latter counts ONLY since
+this statistics section was introduced, not the actual AudD account
+balance (AudD provides neither a response field nor a lookup endpoint for
+that). Only shown while `song_recognition.enabled` is on.
 
 ## Web interface language
 

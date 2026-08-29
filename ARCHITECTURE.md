@@ -512,6 +512,50 @@ wird hier bewusst NICHT angezeigt: sonst sähe das für jeden, der Cloud-
 Lookup nie aktiviert hat, dauerhaft nach einem Fehler aus, statt einer
 bewussten Konfigurationsentscheidung.
 
+**Statistik-Sektion Config-Seite (`audd_request_log`,
+`build_recognition_stats()`, Nutzer-Wunsch, siehe SESSION.md)**: bis
+hierhin gab es für "wie viele AudD-Requests heute/gesamt", eine echte
+Erfolgsquote (Treffer vs. kein Treffer, getrennt von Kontingent-/sonstigen
+Fehlern) und eine Kostenschätzung KEINE Datenquelle — nur unzuverlässige,
+schnell rotierende Logfile-Zeilen (DEBUG-Level, bei aktuellem
+Verkehrsaufkommen ~1-2 Tage Retention, siehe SESSION.md). Neue Tabelle
+`audd_request_log` (gleiches additives Muster wie `song_match_log`): EINE
+Zeile pro tatsächlich versuchtem `audd_lookup()`-Aufruf mit `outcome`
+(`"hit"`/`"no_match"`/`"quota"`/`"audd_error"`/`"network_error"`) —
+Cooldown-Skips zählen bewusst NICHT mit (kein tatsächlicher Request, würde
+die Zählung sonst künstlich aufblähen). `audd_lookup()` bekommt dafür einen
+`log_request(station_id, outcome)`-Callback (Parameter, kein Import von
+`SongFingerprintDB` in der Funktion selbst) — GENAU dasselbe
+Callback-Muster wie `update_check.UpdateChecker.on_result`, damit
+`audd_lookup()` weiterhin isoliert mit einem simplen Stub statt einer
+echten DB testbar bleibt (siehe SESSION.md-Tests). `outcome` ist dabei
+feiner als `get_audd_status()`s `state`: "hit"/"no_match" statt beide unter
+"ok" -- das Live-Banner oben braucht nur "läuft/läuft nicht", die
+Statistik-Sektion explizit die Erfolgsquote.
+
+`build_recognition_stats()` (`song_fingerprint.py`) berechnet ALLES on-
+demand per SQL (kein Caching -- bei Zeilenzahlen im Tausenderbereich für
+SQLite trivial schnell) und portiert die Perzentil-/Histogramm-/
+Lücken-Analyse aus `check_song_calibration.py` 1:1 (`_percentiles()`/
+`_histogram()`/`_separation_gap()`) -- BEWUSST dupliziert statt von dort
+importiert, da jenes Skript ein eigenständiges CLI-Tool außerhalb von
+`python/` ist (siehe `CLAUDE.md`-Dateitabelle) und ein Refactoring dort
+diese Funktion sonst versehentlich mitreißen könnte. Der DB-Pfad kommt aus
+`state.song_recognizer.db.db_path` -- kein neues Durchreichen über
+`host_paths`/`args` nötig, der laufende `SongRecognizer` hält die
+`SongFingerprintDB`-Instanz ohnehin schon.
+
+**Kostenschätzung ist explizit KEIN echter Kontostand**: `requests_total`
+zählt ausschließlich ab Einführung von `audd_request_log` -- ein zuvor
+(auch schon vor diesem Feature) verbrauchtes Kontingent bleibt unsichtbar,
+weil AudDs API laut Doku weder ein Kontingent-Feld in der Antwort noch
+einen separaten Abfrage-Endpoint liefert (siehe SESSION.md). Die Anzeige
+macht das explizit ("Requests gesamt (seit Zählbeginn X)"), rundet
+`network_error`-Anfragen bewusst NICHT in die Kostenschätzung ein (dort kam
+nie eine AudD-Antwort an, unklar ob AudD den Request selbst verarbeitet/
+gezählt hat), zählt `quota`/`audd_error`-Antworten aber mit (das war ein
+echter, beantworteter Request an AudD, auch wenn abgelehnt).
+
 **Hörer-Gate (`ListenerGate`, Nutzer-Wunsch)**: Song-Erkennung (lokales
 Fingerprinting UND Cloud-Lookup) läuft nur, solange
 `ListenerGate.has_listeners()` `True` liefert — ohne Publikum auf dem
@@ -1349,11 +1393,15 @@ hat vollen Zugriff.
   Vorbefüllung der Referenz-DB aus eigenen ID3-Tags (separates, größeres
   Vorhaben, siehe README-Roadmap-Notiz), und der feste 60s-Cooldown
   (`AUDD_MIN_INTERVAL_SECONDS`) ist eine grobe
-  Sicherheitsleitplanke, kein echtes Kontingent-Tracking (kein Tages-
-  Limit-Zähler o.ä.) — `get_audd_status()`/die Live-Anzeige (siehe
-  "Song-Erkennung" oben) machen ein bereits AUFGEBRAUCHTES Kontingent nur
-  sichtbar (reaktiv, anhand von AudDs Fehlercode), sagen aber nicht
-  proaktiv voraus, wann es so weit ist. Das Hörer-Gate (`ListenerGate`) pollt ebenfalls nur
+  Sicherheitsleitplanke, kein echtes Kontingent-Limit-Durchsetzen. Seit der
+  Statistik-Sektion (Config-Seite, `audd_request_log`) gibt es zwar eine
+  Requests-heute/-Woche/-gesamt-Zählung UND `get_audd_status()`/die
+  Live-Anzeige machen ein bereits AUFGEBRAUCHTES Kontingent sichtbar
+  (reaktiv, anhand von AudDs Fehlercode) — was weiterhin fehlt: eine
+  PROAKTIVE Warnung ("noch X von 300 übrig, bei diesem Tempo in Y Tagen
+  aufgebraucht") VOR dem tatsächlichen Ausfall, und die Zählung kennt nur
+  den eigenen Start, nicht den echten AudD-Kontostand (siehe
+  "Song-Erkennung" oben, Kostenschätzungs-Absatz). Das Hörer-Gate (`ListenerGate`) pollt ebenfalls nur
   alle 60s (`LISTENER_CHECK_INTERVAL_SECONDS`) — nach einem frischen
   Hörer-Zulauf kann es dadurch bis zu 60s dauern, bis Song-Erkennung
   überhaupt wieder anspringt, PLUS danach `snippet_seconds`, bis der beim
