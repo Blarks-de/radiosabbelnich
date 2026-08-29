@@ -151,6 +151,7 @@ services:
       # eigentlichen Bind-Mount-Logik.
       - NEWS_MP3_FOLDER_HOST=${NEWS_MP3_FOLDER:-./data/news_mp3}
       - VOSK_MODEL_FOLDER_HOST=${VOSK_MODEL_FOLDER:-./data/vosk-model-de}
+      - VOSK_MODELS_FOLDER_HOST=${VOSK_MODELS_FOLDER:-./data/vosk-models}
       - MUSIC_LIBRARY_FOLDER_HOST=${MUSIC_LIBRARY_FOLDER:-./data/music_library}
       # Song-Erkennung Phase 2 (song_fingerprint.py, AudD-Cloud-Lookup) --
       # leer/nicht gesetzt lässt Phase 2 inaktiv, kein Absturz, siehe
@@ -222,6 +223,19 @@ services:
       # mounten"). Der Container-Pfad rechts vom Doppelpunkt landet als
       # vosk_model_path bei der Sprache "en" in settings.json.
       - ${VOSK_MODEL_FOLDER_EN:-./data/vosk-model-en}:/app/vosk-model-en:ro
+      # Sammel-Ordner für per WebUI heruntergeladene Vosk-Modelle
+      # (vosk_download.py, "🌐 STT-Sprachen" -> "Sprache herunterladen"),
+      # siehe SESSION.md/ARCHITECTURE.md. Bewusst BESCHREIBBAR (kein :ro,
+      # anders als VOSK_MODEL_FOLDER/_EN oben) und EIN gemeinsamer Mount
+      # für ALLE künftigen Sprachen -- der Container legt darunter selbst
+      # /app/vosk-models/<code>/ an, eine neue Sprache braucht dadurch NIE
+      # wieder eine zusätzliche docker-compose.yml-Zeile + Neustart (das
+      # war der ganze Punkt des Features). Gleiches Muster wie
+      # whisper_cache direkt unten (dort lädt faster-whisper selbst
+      # nach). Die alten VOSK_MODEL_FOLDER/_EN-Mounts oben bleiben
+      # unangetastet -- rein additiv, kein Migrationszwang für
+      # bestehende Installationen.
+      - ${VOSK_MODELS_FOLDER:-./data/vosk-models}:/app/vosk-models
       # faster-whisper lädt Modelle beim ersten Gebrauch selbst von
       # HuggingFace nach -- beschreibbar (kein :ro) und dauerhaft, damit
       # der Download nicht bei jedem Container-Neustart wiederholt wird.

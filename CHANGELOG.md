@@ -18,6 +18,10 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 ## Aktueller Stand
 
 **Zuletzt umgesetzt** (siehe Datumsabschnitte unten für Details):
+- Nächtlicher Sender-Scan (Whisper-Sprach-ID, WebUI-integriert, Vorschlag statt Automatik)
+- Automatische Sender-Sprach-Erkennung (`vosk_language_check.py`)
+- Vosk-Sprachmodelle per WebUI herunterladen (kein Konsolenzugriff mehr nötig)
+- STT-Sprache pro Sender überschreibbar (statt nur pro Kategorie)
 - Song-Erkennung Phase 2: AudD-Cloud-Lookup für unbekannte Songs
   (`song_recognition.cloud_lookup_enabled` + `AUDD_API_TOKEN`), Live-Anzeige
   von Titel/Interpret im Radio-Modus
@@ -40,6 +44,40 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 
 ## 2026-08-29
 
+- Neu: **Nächtlicher Sender-Scan** ("🌙"-Sektion auf der Config-Seite,
+  `night_scan.py`) — erkennt automatisch per Whisper (kein
+  sprachspezifisches Modell nötig) die gesprochene Sprache je Sender via
+  VAD-gesteuertem Sammeln von Sprach-Fenstern, schlägt sie als
+  Ergänzung zur manuellen Sprach-Zuordnung vor (Übernehmen/Verwerfen-
+  Tabelle) — NIE automatisch scharf geschaltet. Konfigurierbares
+  Nacht-Zeitfenster (Default 02–05 Uhr, max. 1 automatischer Lauf/Tag)
+  + jederzeit nutzbarer manueller "Jetzt scannen"-Knopf. Default AUS.
+  Deckt seit demselben Tag die komplette Senderliste ab (nicht nur
+  aktive Sender) — aktive Sender werden dabei immer zuerst geprüft, erst
+  danach deaktivierte; eine Fortschrittszeile zeigt den Stand getrennt
+  nach aktiv/deaktiviert, ein erster Durchlauf über alle 350+ Sender darf
+  sich über mehrere Nächte ziehen.
+- Neu: `vosk_language_check.py` (eigenständiges CLI-Skript, `docker exec`)
+  erkennt automatisch die gesprochene Sprache je Sender per Vosk-STT und
+  taggt `stations.json` entsprechend — Alternative zum manuellen Setzen
+  in der Senderliste. Standardmäßig nur ein Report, `--apply` übernimmt
+  eindeutige Treffer und stößt danach automatisch einen Reload im
+  laufenden Hauptloop an, `--include-disabled` bezieht auch deaktivierte
+  Sender mit ein. Reagiert bewusst konservativ (lieber "unklar" als ein
+  falscher Tag).
+- Neu: Vosk-Sprachmodelle lassen sich jetzt direkt über die "🌐
+  STT-Sprachen"-Tabelle **herunterladen** (Dropdown mit kuratiertem
+  Modell-Katalog + Fortschrittsbalken) — kein manuelles Herunterladen/
+  Entpacken/Mounten über die Konsole mehr nötig. Neuer beschreibbarer
+  Sammel-Mount `VOSK_MODELS_FOLDER` in `docker-compose.yml` (einmalig
+  einzurichten, danach für jede weitere Sprache ausreichend). Löschen
+  bietet zusätzlich "+ Dateien löschen", um Plattenplatz wirklich
+  freizugeben (nur für so heruntergeladene Sprachen, alte manuell
+  gemountete Pfade bleiben unangetastet).
+- Neu: STT-Sprache jetzt zusätzlich **pro Sender** überschreibbar
+  (Sprache-Dropdown/Badge in der Sender-Liste) — greift vor der
+  bisherigen Kategorie-Zuordnung, die als Fallback für Sender ohne
+  eigenen Override erhalten bleibt.
 - Neu: Statistik-Sektion auf der Config-Seite ("🎵 Song-Erkennung –
   Statistik") — DB-Größe, Sammelzeitraum, Hit-Rate, Similarity-Perzentile/
   Histogramm (Hits vs. Misses), Trennschärfe-Analyse, Top-Sender und

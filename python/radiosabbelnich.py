@@ -598,6 +598,12 @@ def main():
     parser.add_argument("--vosk-model-folder-host", default=None,
                          help="Host-Pfad von VOSK_MODEL_FOLDER (.env), analog zu "
                               "--news-mp3-folder-host.")
+    parser.add_argument("--vosk-models-folder-host", default=None,
+                         help="Host-Pfad von VOSK_MODELS_FOLDER (.env) -- der beschreibbare "
+                              "Sammel-Ordner für per WebUI heruntergeladene Vosk-Modelle "
+                              "(vosk_download.py), analog zu --news-mp3-folder-host. Nicht zu "
+                              "verwechseln mit --vosk-model-folder-host (Singular, alter "
+                              "read-only Einzelsprachen-Mount).")
     parser.add_argument("--music-library-folder-host", default=None,
                          help="Host-Pfad von MUSIC_LIBRARY_FOLDER (.env), analog zu "
                               "--news-mp3-folder-host.")
@@ -647,8 +653,8 @@ def main():
         # alle drei sollen exakt denselben Befund sehen, nicht mehrere
         # zeitlich leicht versetzte last_verdict()-Aufrufe. stt_lang kommt
         # vom Aufrufer (siehe unten) -- dieselbe Sprache, mit der auch
-        # gerade gesampelt wird (settings_store.resolve_stt_language() der
-        # AKTUELLEN Sender-Kategorie).
+        # gerade gesampelt wird (settings_store.resolve_stt_language() des
+        # AKTUELLEN Senders).
         verdict = stt.last_verdict()
         state.set_stt_probability(stt_filter.live_confidence(verdict, state.stt_filter_cfg, stt_lang))
         state.set_stt_language(stt_filter.live_language(verdict, state.stt_filter_cfg, stt_lang))
@@ -747,6 +753,7 @@ def main():
         host_paths = {
             "news_mp3_folder": args.news_mp3_folder_host,
             "vosk_model_folder": args.vosk_model_folder_host,
+            "vosk_models_folder": args.vosk_models_folder_host,
             "music_library_folder": args.music_library_folder_host,
         }
         httpd = webui.start_server(args.webui_port, state, icecast_cfg, args.fingerprint_db,
@@ -1247,7 +1254,7 @@ def main():
                               candidate["name"])
                 else:
                     candidate_stt_lang = settings_store.resolve_stt_language(
-                        candidate["category"], state.stt_filter_cfg)
+                        candidate, state.stt_filter_cfg)
                     # tail gehört zu candidate, nicht zu current -- ohne Reset
                     # würde der VAD-Zustand/Resample-Rest des aktuellen
                     # Senders (oder eines zuvor abgelehnten Kandidaten) in
@@ -1290,7 +1297,7 @@ def main():
             if probe_mono.size:
                 write_audio(probe_stereo)
                 candidate_stt_lang = settings_store.resolve_stt_language(
-                    current["category"], state.stt_filter_cfg)
+                    current, state.stt_filter_cfg)
                 if classify(probe_mono, candidate_stt_lang) == "music":
                     break
             else:
@@ -1808,16 +1815,17 @@ def main():
             # gegriffen haben -- sonst wäre es verschwendete Rechenzeit.
             stt_ring.append(pcm)
             now_stt = time.monotonic()
-            # Sprache der AKTUELLEN Sender-Kategorie -- einmal pro Durchlauf
-            # aufgelöst, gilt sowohl fürs Sampling-Ziel unten als auch für
-            # classify() (Verdict-Interpretation), siehe deren Docstrings.
-            # Läuft gerade eine Kalibrierungs-Session (Teil 1b, siehe
-            # webui.py/SwitcherState), erzwingt sie ihre Zielsprache statt
-            # der Kategorie-Auflösung -- der Nutzer schaltet dafür manuell
-            # auf einen Test-Sender dieser Sprache.
+            # Sprache des AKTUELLEN Senders (eigener Override oder
+            # Kategorie-Fallback, siehe resolve_stt_language()) -- einmal
+            # pro Durchlauf aufgelöst, gilt sowohl fürs Sampling-Ziel unten
+            # als auch für classify() (Verdict-Interpretation), siehe
+            # deren Docstrings. Läuft gerade eine Kalibrierungs-Session
+            # (Teil 1b, siehe webui.py/SwitcherState), erzwingt sie ihre
+            # Zielsprache statt der Auflösung -- der Nutzer schaltet dafür
+            # manuell auf einen Test-Sender dieser Sprache.
             calibration_lang = state.calibration_language
             stt_lang = (calibration_lang if calibration_lang is not None
-                        else settings_store.resolve_stt_language(current["category"], state.stt_filter_cfg))
+                        else settings_store.resolve_stt_language(current, state.stt_filter_cfg))
             if now_stt - last_stt_sample_at >= state.stt_filter_cfg["sample_interval_seconds"]:
                 last_stt_sample_at = now_stt
                 stt.sample_async(np.concatenate(stt_ring), SAMPLE_RATE, stt_lang, state.stt_filter_cfg)

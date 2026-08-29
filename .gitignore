@@ -13,4 +13,5 @@ data/music_library.db
 data/music_library_covers/
 data/song_fingerprints.db
 data/vosk-model-*/
+data/vosk-models/
 data/whisper_cache/

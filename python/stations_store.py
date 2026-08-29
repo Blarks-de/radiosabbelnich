@@ -14,11 +14,19 @@ ankommen (radiosabbelnich.py pollt state.pop_reload_request() und liest bei
 Bedarf per load_all()/load_active() neu ein).
 
 Schema pro Sender: {"id": str, "name": str, "url": str, "category": str,
-"enabled": bool}. "id" ist stabil (wird einmal beim Anlegen/Migrieren
-vergeben) und überlebt Umbenennungen — Playback-Rotation und manuelles
-Umschalten referenzieren Sender über "id", nicht über Listen-Position,
-damit Hinzufügen/Löschen/Deaktivieren die laufende Wiedergabe nicht
-durcheinanderbringt.
+"enabled": bool, "language": str}. "id" ist stabil (wird einmal beim
+Anlegen/Migrieren vergeben) und überlebt Umbenennungen — Playback-Rotation
+und manuelles Umschalten referenzieren Sender über "id", nicht über
+Listen-Position, damit Hinzufügen/Löschen/Deaktivieren die laufende
+Wiedergabe nicht durcheinanderbringt.
+
+"language" ist ein optionaler STT-Sprachcode-Override (leerer String =
+kein Override, siehe settings_store.resolve_stt_language()): fehlt er,
+greift weiterhin die Kategorie-Sprache (stt_filter.category_languages)
+bzw. am Ende DEFAULT_STT_LANGUAGE. Bewusst KEINE feste Codeliste hier
+(analog settings_store.set_stt_language()) — welche Codes sinnvoll sind,
+hängt davon ab, welche Vosk-Modelle gemountet sind, das kennt dieses
+Modul nicht.
 """
 
 import json
@@ -69,7 +77,7 @@ def _unique_id(base: str, existing_ids: set) -> str:
 
 
 def _ensure_ids_and_defaults(stations: list) -> bool:
-    """Füllt fehlende id/category/enabled auf (Migration alter
+    """Füllt fehlende id/category/enabled/language auf (Migration alter
     stations.json-Dateien ohne diese Felder). Gibt True zurück, wenn etwas
     geändert wurde -> Datei muss neu geschrieben werden."""
     changed = False
@@ -80,6 +88,9 @@ def _ensure_ids_and_defaults(stations: list) -> bool:
             changed = True
         if s.get("category") not in CATEGORIES:
             s["category"] = DEFAULT_CATEGORY
+            changed = True
+        if "language" not in s:
+            s["language"] = ""
             changed = True
         if not s.get("id"):
             s["id"] = _unique_id(_slugify(s.get("name", "sender")), seen_ids)
@@ -138,13 +149,14 @@ def load_active() -> list:
     return active
 
 
-def add(name: str, url: str, category: str, enabled: bool = True) -> dict:
+def add(name: str, url: str, category: str, enabled: bool = True, language: str = "") -> dict:
     name = (name or "").strip()
     url = (url or "").strip()
     if not name or not url:
         raise ValueError("Name und URL dürfen nicht leer sein.")
     if category not in CATEGORIES:
         category = DEFAULT_CATEGORY
+    language = (language or "").strip().lower()
     with _lock:
         stations = _read_raw()
         existing_ids = {s["id"] for s in stations}
@@ -154,11 +166,13 @@ def add(name: str, url: str, category: str, enabled: bool = True) -> dict:
             "url": url,
             "category": category,
             "enabled": bool(enabled),
+            "language": language,
         }
         stations.append(station)
         _write(stations)
-        log.info("➕ Sender angelegt: '%s' (%s, %s, %s)", station["name"], station["id"],
-                 station["category"], "aktiv" if station["enabled"] else "inaktiv")
+        log.info("➕ Sender angelegt: '%s' (%s, %s, %s, Sprache: %s)", station["name"], station["id"],
+                 station["category"], "aktiv" if station["enabled"] else "inaktiv",
+                 station["language"] or "Standard")
         return station
 
 
@@ -193,6 +207,7 @@ def bulk_add(entries: list, category: str = DEFAULT_CATEGORY, enabled: bool = Tr
                 "url": url,
                 "category": category,
                 "enabled": bool(enabled),
+                "language": "",
             }
             existing_ids.add(station["id"])
             stations.append(station)
@@ -204,13 +219,14 @@ def bulk_add(entries: list, category: str = DEFAULT_CATEGORY, enabled: bool = Tr
         return added
 
 
-def update(station_id: str, name: str, url: str, category: str, enabled: bool) -> dict:
+def update(station_id: str, name: str, url: str, category: str, enabled: bool, language: str = "") -> dict:
     name = (name or "").strip()
     url = (url or "").strip()
     if not name or not url:
         raise ValueError("Name und URL dürfen nicht leer sein.")
     if category not in CATEGORIES:
         category = DEFAULT_CATEGORY
+    language = (language or "").strip().lower()
     with _lock:
         stations = _read_raw()
         for s in stations:
@@ -219,9 +235,11 @@ def update(station_id: str, name: str, url: str, category: str, enabled: bool) -
                 s["url"] = url
                 s["category"] = category
                 s["enabled"] = bool(enabled)
+                s["language"] = language
                 _write(stations)
-                log.info("✏ Sender geändert: '%s' (%s, %s, %s)", s["name"], s["id"],
-                         s["category"], "aktiv" if s["enabled"] else "inaktiv")
+                log.info("✏ Sender geändert: '%s' (%s, %s, %s, Sprache: %s)", s["name"], s["id"],
+                         s["category"], "aktiv" if s["enabled"] else "inaktiv",
+                         s["language"] or "Standard")
                 return s
         raise KeyError(station_id)
 
@@ -235,6 +253,25 @@ def set_enabled(station_id: str, enabled: bool) -> dict:
                 _write(stations)
                 log.info("%s Sender '%s' %s.", "☑" if s["enabled"] else "☐", s["name"],
                          "aktiviert" if s["enabled"] else "deaktiviert")
+                return s
+        raise KeyError(station_id)
+
+
+def set_language(station_id: str, language: str) -> dict:
+    """Setzt NUR das language-Feld (leer = kein Override, siehe
+    Moduldocstring) -- eigene Funktion statt über update(), damit ein
+    Aufrufer (z.B. vosk_language_check.py) nicht Name/URL/Kategorie/
+    enabled ungenutzt mit durchschleifen und dabei versehentlich
+    überschreiben muss, nur um die Sprache zu setzen. Gleiches
+    Partial-Update-Muster wie set_enabled() direkt darüber."""
+    language = (language or "").strip().lower()
+    with _lock:
+        stations = _read_raw()
+        for s in stations:
+            if s["id"] == station_id:
+                s["language"] = language
+                _write(stations)
+                log.info("🌐 Sender-Sprache gesetzt: '%s' -> '%s'", s["name"], language or "(Standard)")
                 return s
         raise KeyError(station_id)
 

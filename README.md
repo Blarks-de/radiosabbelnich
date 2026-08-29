@@ -13,7 +13,9 @@
 - [Nachrichten-Pause](#nachrichten-pause)
 - [Player-Modus (Grundgerüst)](#player-modus-grundgerüst)
 - [STT-Sprachfilter](#stt-sprachfilter)
-  - [Mehrsprachigkeit: Sprache pro Sender-Kategorie](#mehrsprachigkeit-sprache-pro-sender-kategorie)
+  - [Mehrsprachigkeit: Sprache pro Sender](#mehrsprachigkeit-sprache-pro-sender)
+  - [Automatische Sender-Sprach-Erkennung (`vosk_language_check.py`)](#automatische-sender-sprach-erkennung-vosk_language_checkpy)
+  - [Nächtlicher Sender-Scan (WebUI-Feature)](#nächtlicher-sender-scan-webui-feature)
   - [Kalibrierungs-Wizard](#kalibrierungs-wizard)
   - [Konfiguration im Detail](#konfiguration-im-detail)
 - [Song-Erkennung](#song-erkennung)
@@ -42,7 +44,9 @@
 - [News break](#news-break)
 - [Player mode (foundation)](#player-mode-foundation)
 - [STT speech filter](#stt-speech-filter)
-  - [Multi-language: language per station category](#multi-language-language-per-station-category)
+  - [Multi-language: language per station](#multi-language-language-per-station)
+  - [Automatic station language detection (`vosk_language_check.py`)](#automatic-station-language-detection-vosk_language_checkpy)
+  - [Nightly station scan (WebUI feature)](#nightly-station-scan-webui-feature)
   - [Calibration wizard](#calibration-wizard)
   - [Configuration in detail](#configuration-in-detail)
 - [Song recognition](#song-recognition)
@@ -378,13 +382,17 @@ Zwei austauschbare Engines, nie gleichzeitig geladen:
   Analyse mitgegeben) — bei Whisper kostet eine zusätzliche Sprache also
   kein zusätzliches RAM.
 
-### Mehrsprachigkeit: Sprache pro Sender-Kategorie
+### Mehrsprachigkeit: Sprache pro Sender
 
-Welche Sprache für einen Sender geprüft wird, richtet sich nach seiner
-**Kategorie** (Lokal/Regional/National/International/…, siehe
-"Web-Interface" oben) — nicht nach dem einzelnen Sender. Auf der
-Config-Seite gibt es dafür zwei neue Abschnitte unterhalb von
-"🗣 STT-Sprachfilter":
+Welche Sprache für einen Sender geprüft wird, lässt sich **direkt am
+Sender** in der Senderliste auf der Config-Seite festlegen (Dropdown
+"Sprache" beim Bearbeiten/Anlegen, Sprach-Badge in der normalen
+Sender-Zeile) — seit 2026-08-29, davor ging das nur über die Sender-
+**Kategorie**. Ohne eigene Auswahl ("Standard") fällt ein Sender weiter
+auf die Kategorie-Zuordnung zurück (siehe "🏷 Kategorie-Sprachen" unten)
+und danach auf Deutsch — bestehende, rein über Kategorien konfigurierte
+Installationen laufen dadurch unverändert weiter. Auf der Config-Seite
+gibt es dafür zwei Abschnitte unterhalb von "🗣 STT-Sprachfilter":
 
 - **🌐 STT-Sprachen** — legt an, welche Sprachen überhaupt zur Verfügung
   stehen: Sprachcode (Freitext, z.B. `en`, `fr` — keine feste Liste, da
@@ -394,20 +402,41 @@ Config-Seite gibt es dafür zwei neue Abschnitte unterhalb von
   erneuten Eintragen aktualisiert statt doppelt angelegt. Jede Zeile
   zeigt zusätzlich den Ladezustand (✅ geladen / ⚠ Fehlermeldung / noch
   nicht geladen) — bei Vosk wird jedes Sprachmodell erst **lazy** beim
-  ersten tatsächlichen Sample geladen, nicht schon beim Speichern.
+  ersten tatsächlichen Sample geladen, nicht schon beim Speichern. Nur
+  hier angelegte Sprachcodes stehen im Sender-Dropdown und in der
+  Kategorie-Sprachen-Tabelle zur Auswahl.
 - **🏷 Kategorie-Sprachen** — ordnet jeder der festen Kategorien eine der
-  oben angelegten Sprachen zu. Kategorien ohne Auswahl gelten als
-  Deutsch (`de`).
+  oben angelegten Sprachen zu, als Fallback für Sender ohne eigene
+  Sprachauswahl. Kategorien ohne Auswahl gelten als Deutsch (`de`).
 
 Bei Vosk sind aus RAM-Gründen (siehe schwache Hardware/Pi) nie mehr als
 **2 Sprachmodelle gleichzeitig** geladen — bei mehr konfigurierten
 Sprachen wird das am längsten ungenutzte automatisch verdrängt (LRU) und
 beim nächsten Bedarf neu geladen. Wechselt ein Sender die erwartete
-Sprache (z.B. durch einen Kategoriewechsel), wird ein noch nicht
+Sprache (z.B. durch einen Senderwechsel), wird ein noch nicht
 abgelaufener STT-Befund der VORHERIGEN Sprache verworfen statt
 fälschlich weiterverwendet.
 
-**Zusätzliche Vosk-Modelle mounten**: der mitgelieferte
+**Neue Sprachen per Knopfdruck herunterladen (seit 2026-08-29)**: unter
+"🌐 STT-Sprachen" gibt es einen Dropdown mit bekannten Vosk-Modellen
+(kuratierte Liste in `python/vosk_catalog.py`, klein/groß pro Sprache,
+Original-Quelle [alphacephei.com/vosk/models](https://alphacephei.com/vosk/models))
+plus einen "⬇️ Herunterladen"-Knopf — Download, Entpacken und Eintragen
+laufen komplett automatisch, **kein Konsolenzugriff nötig**. Ein
+Fortschrittsbalken zeigt MB/Prozent während des Downloads. Die
+Konfidenz-Schwelle wird dabei zunächst mit einem Platzhalter (0.6)
+angelegt — siehe Kalibrierungs-Wizard unten, um sie wie bei de/en
+empirisch einzumessen. Landet unter dem beschreibbaren Sammel-Mount
+`VOSK_MODELS_FOLDER` (Default `./data/vosk-models`, siehe
+`docker-compose.yml`) — anders als bei `VOSK_MODEL_FOLDER`/`_EN` unten
+braucht eine weitere Sprache hier **keine** zusätzliche
+`docker-compose.yml`-Zeile oder einen Neustart mehr. Beim Löschen einer
+so heruntergeladenen Sprache steht zusätzlich zu "Nur Eintrag entfernen"
+die Option "+ Dateien löschen" zur Verfügung, um den Plattenplatz
+wirklich freizugeben.
+
+**Manuell mounten** (Fallback für Modelle außerhalb des Katalogs, oder
+für den ursprünglichen, weiterhin unterstützten Weg): der mitgelieferte
 `VOSK_MODEL_FOLDER`-Mount in `docker-compose.yml` deckt genau EIN Modell
 ab (Default: Deutsch, `/app/vosk-model-de`). Für eine weitere Sprache
 selbst eine zusätzliche Zeile in `docker-compose.yml` ergänzen, z.B.:
@@ -418,7 +447,109 @@ selbst eine zusätzliche Zeile in `docker-compose.yml` ergänzen, z.B.:
 
 und den resultierenden Container-Pfad (`/app/vosk-model-en`) als
 Modellpfad bei "🌐 STT-Sprachen" eintragen — danach `docker compose up -d
---build radiosabbelnich`, damit der neue Mount aktiv wird.
+--build radiosabbelnich`, damit der neue Mount aktiv wird. Diese Route
+mountet read-only, ein "Dateien löschen"-Knopf gibt es für so eingetragene
+Sprachen deshalb bewusst nicht (siehe oben).
+
+### Automatische Sender-Sprach-Erkennung (`vosk_language_check.py`)
+
+Statt jeden Sender von Hand in der Senderliste zu taggen (siehe
+"Mehrsprachigkeit: Sprache pro Sender" oben), lässt sich das per Skript
+automatisch ermitteln: `vosk_language_check.py` hört bei jedem Sender kurz
+mit (Standard 30s, per ffmpeg wie beim Sender-Import) und prüft die
+Aufnahme gegen alle unter "🌐 STT-Sprachen" konfigurierten Sprachen. Nur
+bei einem klaren Sieger (deutlich mehr Treffer als jede andere Sprache)
+wird der Sender getaggt — bei zu wenig Sprachanteil im Zeitfenster oder
+knappem Ergebnis bleibt er unangetastet ("unklar"), statt falsch zu raten.
+
+```bash
+docker exec radiosabbelnich python3 vosk_language_check.py              # nur Report, ändert nichts
+docker exec radiosabbelnich python3 vosk_language_check.py --apply      # übernimmt eindeutige Treffer
+```
+
+Wichtigste Optionen: `--apply` schreibt tatsächlich (ohne dieses Flag nur
+ein JSON-Report unter `/app/logs/vosk_language_check_report.json`, landet
+über den `logs/`-Mount unter `data/logs/` auf dem Host); `--all` prüft
+auch bereits getaggte Sender erneut (ohne zusätzliches `--force` werden
+bestehende Tags dabei trotzdem nie überschrieben — eine manuelle
+Zuordnung gilt als bewusste Entscheidung); `--include-disabled` bezieht
+auch deaktivierte Sender mit ein (Default: nur die, die gerade in der
+Rotation sind — bei vielen unsortiert importierten Sendern kann das die
+Laufzeit deutlich verlängern); `--category`/`--limit`/`--languages`
+grenzen weiter ein; `--capture-seconds`/`--concurrency` steuern
+Aufnahmedauer bzw. wie viele Sender gleichzeitig geprüft werden (niedriger
+als beim Sender-Import, weil hier zusätzlich STT-Rechenlast anfällt, die
+sich den Container mit dem laufenden Hauptloop teilt).
+
+**Reload nach `--apply`**: das Skript schreibt direkt in `stations.json`,
+läuft aber als SEPARATER Prozess ohne Zugriff auf den In-Memory-Zustand
+des Hauptloops (`SwitcherState`) — nach erfolgreich übernommenen Sprachen
+stößt es deshalb automatisch einen Reload über die lokale Config-API an
+(intern, `localhost:5000`, funktioniert unabhängig davon, ob HTTPS aktiv
+ist). Best-Effort: ist die WebUI gerade nicht erreichbar (z.B.
+`--webui-port 0` oder mitten in einem Neustart), bleiben die bereits
+geschriebenen Änderungen bis zum nächsten ohnehin fälligen Reload liegen —
+kein Datenverlust, nur verzögerte Wirkung, das Skript meldet das am Ende
+deutlich.
+
+### Nächtlicher Sender-Scan (WebUI-Feature)
+
+Alternative zu `vosk_language_check.py` oben, direkt in die WebUI
+integriert statt per `docker exec`: der Abschnitt "🌙 Nächtlicher
+Sender-Scan" auf der Config-Seite erkennt automatisch die gesprochene
+Sprache je Sender per **Whisper** (`faster-whisper`, bereits im Image
+enthalten) — im Unterschied zu Vosk braucht das **kein
+sprachspezifisches Modell**, jede Sprache, die Whisper kennt, wird ohne
+zusätzlichen Download erkannt. Standardmäßig **deaktiviert** wie jedes
+neue Feature hier.
+
+Ablauf pro Sender: per ffmpeg verbinden, mit dem bestehenden Silero-VAD
+(`speech_detector.py`, dasselbe wie im Live-Betrieb) nur die tatsächlich
+sprachhaltigen Fenster sammeln, bis genug zusammenhängende Sprache
+zusammengekommen ist (Default 25s) oder eine Kappungszeit erreicht wird
+(Default 150s) — danach schätzt Whisper die Sprache samt Konfidenz. Drei
+mögliche Ergebnisse, keines davon ein Fehlschlag:
+
+- **Sprache erkannt** (z.B. "Englisch (87%)")
+- **Vorwiegend Musik, keine Sprache erkannt** — der Sender liefert Audio,
+  aber im Zeitfenster kam nicht genug zusammenhängende Sprache zusammen
+  (typisch für musiklastige Sender)
+- **Nicht erreichbar** — der Stream lieferte in der gesamten Wartezeit
+  überhaupt kein Audio
+
+**Nichts wird automatisch scharf geschaltet.** Jeder Fund landet als
+Vorschlag in einer eigenen Tabelle unterhalb der Einstellungen ("Sender",
+"Ergebnis", Übernehmen/Verwerfen) — erst ein bewusster Klick auf
+"Übernehmen" setzt das `language`-Feld des Senders (siehe
+"Mehrsprachigkeit: Sprache pro Sender" oben) und löst denselben
+Reload-Mechanismus wie beim manuellen Setzen aus.
+
+**Konfiguration**: Zeitfenster (Default 02–05 Uhr — ein automatischer
+Lauf startet höchstens einmal pro Kalendertag, sobald das Fenster
+erreicht ist), Whisper-Modellgröße, Kappungszeit/Mindest-Sprachanteil pro
+Sender, Anzahl gleichzeitig geprüfter Sender (Default **1**, bewusst
+strikt sequenziell — dieser Job läuft unbeaufsichtigt und teilt sich den
+Host mit dem laufenden Hauptloop, siehe ARCHITECTURE.md für die
+Ressourcen-Abwägung). Der "🌙 Jetzt scannen"-Knopf funktioniert jederzeit,
+unabhängig vom Zeitfenster.
+
+**Deckt seit 2026-08-29 die komplette Senderliste ab** (vorher nur
+aktive Sender) — geprüft werden alle Sender ohne eigenes `language`-Feld,
+**aktive immer zuerst**, erst danach deaktivierte (die meisten davon nie
+bewusst deaktiviert, sondern nur nie geprüft, z.B. nach einem
+Sender-Import). Innerhalb dieser beiden Gruppen gilt weiterhin "am
+längsten nicht/nie gescannt zuerst". Bei mehreren hundert Sendern zieht
+sich ein erster kompletter Durchlauf über mehrere Nächte — der
+Fortschritt (`night_scan.scanned_at`) übersteht das problemlos, ein
+Nacht-Fenster macht beim nächsten Mal einfach dort weiter, wo das
+vorherige aufgehört hat. Eine Fortschrittszeile über der
+Vorschlags-Tabelle zeigt "X von Y aktiven, Z von W deaktivierten Sendern
+bisher erfasst". Bereits zugeordnete Sender werden nie erneut geprüft.
+Vorschläge für deaktivierte Sender erscheinen in derselben Tabelle wie
+die für aktive (mit Status-Spalte "aktiv"/"deaktiviert") — Übernehmen
+setzt dabei **nur** die Sprache, das Freischalten eines Senders bleibt
+eine bewusst getrennte, manuelle Entscheidung über die normale
+Sender-Liste.
 
 ### Kalibrierungs-Wizard
 
@@ -516,7 +647,9 @@ verwaltet, nicht direkt im Block editieren):
   bekannten Musik-Sender dieser Sprache mithören, erkannte
   Texte/Konfidenzwerte landen dafür in `logs/radiosabbelnich.log`.
 - **`category_languages`** — Kategorie → Sprachcode (siehe oben), über
-  die Tabelle "🏷 Kategorie-Sprachen" gepflegt.
+  die Tabelle "🏷 Kategorie-Sprachen" gepflegt. Nur Fallback für Sender
+  ohne eigene Sprache — siehe `language`-Feld pro Sender in
+  `stations.json`, gepflegt über das Sprache-Dropdown in der Senderliste.
 - **`combine_mode`** — wie das STT-Ergebnis mit VAD/Heuristik verknüpft
   wird: `"and"` (Default) verlangt, dass beide "Sprache" sagen — das
   lässt einen Großteil in dieser Sprache gesungener Musik (VAD ja, STT
@@ -880,6 +1013,10 @@ Grafische Gesamtübersicht mit Diagrammen pro Subsystem: `ARCHITECTURE.md`.
 | `python/music_scan.py` | Musik-Library-Scan (Phase 1): rekursiver ID3-Scan in eigene SQLite-DB |
 | `python/folder_browse.py` | Gemeinsame Breadcrumb-Ordnerauswahl (News-Break-Pfad + Musiksammlung-Root) |
 | `python/stt_filter.py` | STT-Sprachfilter: Vosk/Whisper-Engines, austauschbar, Zusatzsignal für die Switch-Entscheidung |
+| `python/vosk_catalog.py` | Kuratierte Liste bekannter Vosk-Modelle (Sprachcode/URL/Größe) fürs Download-Dropdown |
+| `python/vosk_download.py` | Download/Entpacken/atomare Installation eines Vosk-Modells aus dem Katalog, ohne Konsolenzugriff |
+| `python/vosk_language_check.py` | Eigenständiges Skript: erkennt per Vosk-STT automatisch die gesprochene Sprache je Sender, taggt `stations.json` (`docker exec`, siehe eigener Abschnitt) |
+| `python/night_scan.py` | Kernlogik des nächtlichen Sender-Scans: VAD-gesteuertes Sammeln von Sprach-Fenstern + Whisper-Sprach-ID (WebUI-Feature, siehe eigener Abschnitt) |
 | `python/i18n.py` | Basissprache Englisch fürs Web-Interface + Lader für `language/*.lng`-Sprachpakete (siehe "Sprache des Web-Interfaces") |
 | `language/*.lng` | Externe Sprachpakete (z.B. `Deutsch.lng`), Key=Value-Format |
 | `python/resource_monitor.py` | Ressourcen-Verbrauch (RAM/CPU/DB-Größe) fürs "💾 Ressourcen-Verbrauch" auf der Config-Seite |
@@ -890,13 +1027,13 @@ Grafische Gesamtübersicht mit Diagrammen pro Subsystem: `ARCHITECTURE.md`.
 | `pics/icon-192.png`, `pics/icon-512.png` | PWA-Icons fürs Installieren als App (aktuell Platzhalter) |
 | `pics/favicon.ico` | Browser-Tab-Icon, quadratische Miniatur von `radiosabbelnich.webp` |
 | `pics/radiosabbelnich.webp` | Banner-Grafik auf Player-/Config-Seite und in diesem README |
-| `data/stations.json` | Senderliste (Name, URL, Kategorie, aktiv/inaktiv) |
+| `data/stations.json` | Senderliste (Name, URL, Kategorie, aktiv/inaktiv, optionale STT-Sprache) |
 | `data/settings.json` | Laufzeit-Einstellungen, siehe `settings_store.py` |
 | `data/fingerprints.db`, `data/fingerprint_clips/` | Fingerprint-Datenbank + gelernte Clip-Mitschnitte |
 | `data/song_fingerprints.db` | Song-Erkennung Phase 1: lokaler Chromaprint-Fingerprint-Cache (siehe `python/song_fingerprint.py`) |
 | `check_song_calibration.py` | Wertet `song_match_log` aus `data/song_fingerprints.db` aus, für die `similarity_threshold`-Kalibrierung (siehe "Song-Erkennung") |
 | `data/logs/` | Rotierende Logdatei (siehe "Logging" unten) |
-| `data/news_mp3/`, `data/vosk-model-de/`, `data/whisper_cache/` | Standard-Mountziele für `NEWS_MP3_FOLDER`/`VOSK_MODEL_FOLDER`/faster-whisper-Cache (überschreibbar in `.env`) |
+| `data/news_mp3/`, `data/vosk-model-de/`, `data/vosk-models/`, `data/whisper_cache/` | Standard-Mountziele für `NEWS_MP3_FOLDER`/`VOSK_MODEL_FOLDER`/`VOSK_MODELS_FOLDER`/faster-whisper-Cache (überschreibbar in `.env`) |
 | `data/music_library/` | Standard-Mountziel für `MUSIC_LIBRARY_FOLDER` (überschreibbar in `.env`) |
 | `docker-compose.yml` | Icecast + RadioSabbelNich als zwei Services |
 | `radiosabbelnich.sh` | Alles-in-einem-Wrapper: `check`/`start`/`stop`/`restart`/`status` (Default) |
@@ -977,6 +1114,7 @@ Trefferzahl (schlankere Variante desselben Checks aus `check`).
 | `TLS_CERT_FILE`/`TLS_KEY_FILE` | Host-Pfade zu PEM-Dateien für HTTPS (optional, siehe unten) |
 | `ICECAST_SSL_PORT` | Host-Port für den Icecast-Stream per HTTPS (Default 8443) |
 | `VOSK_MODEL_FOLDER` | Host-Ordner mit einem entpackten deutschen Vosk-Modell für den STT-Sprachfilter (optional, siehe eigener Abschnitt) |
+| `VOSK_MODELS_FOLDER` | Beschreibbarer Sammel-Ordner für per WebUI heruntergeladene Vosk-Modelle (optional, Default `./data/vosk-models`, siehe "STT-Sprachfilter") |
 | `UI_LANGUAGE` | Startsprache des Web-Interfaces: `en` (Basissprache) oder der Code eines Sprachpakets unter `language/` wie `de` (optional, Default `en` — siehe "Sprache des Web-Interfaces") |
 | `AUDD_API_TOKEN` | API-Token für AudD, aktiviert Song-Erkennung Phase 2 (optional, kostenloses Kontingent unter [audd.io](https://audd.io) — siehe "Song-Erkennung") |
 
@@ -1557,12 +1695,17 @@ Two interchangeable engines, never loaded at the same time:
   covers any number of languages (the language code is just passed per
   analysis) — with Whisper, an extra language costs no extra RAM.
 
-### Multi-language: language per station category
+### Multi-language: language per station
 
-Which language is checked for a station depends on its **category**
-(Local/Regional/National/International/…, see "Web interface" above) —
-not the individual station. The config page has two new sections for
-this below "🗣 STT-Sprachfilter":
+Which language is checked for a station can be set **directly on the
+station** in the station list on the config page (a "Language" dropdown
+when editing/adding, a language badge in the normal station row) — since
+2026-08-29, before that it only worked via the station **category**.
+Without its own selection ("default"), a station still falls back to the
+category assignment (see "🏷 Kategorie-Sprachen" below) and then to
+German — existing installations that only used the category mapping keep
+working unchanged. The config page has two sections for this below
+"🗣 STT-Sprachfilter":
 
 - **🌐 STT-Sprachen** — sets up which languages are available at all:
   language code (free text, e.g. `en`, `fr` — no fixed list, since Vosk
@@ -1572,21 +1715,41 @@ this below "🗣 STT-Sprachfilter":
   of duplicating it. Each row also shows the load state (✅ loaded / ⚠
   error message / not loaded yet) — with Vosk, each language model is
   loaded **lazily** on its first actual sample, not already when saved.
+  Only language codes set up here appear in the station dropdown and in
+  the category-language table.
 - **🏷 Kategorie-Sprachen** — assigns one of the languages configured
-  above to each of the fixed categories. Categories without a selection
+  above to each of the fixed categories, as a fallback for stations
+  without their own language selection. Categories without a selection
   default to German (`de`).
 
 With Vosk, never more than **2 language models are loaded at once** (for
 RAM reasons, see weak hardware/Pi) — with more configured languages, the
 least recently used one is evicted automatically (LRU) and reloaded on
 next demand. If a station's expected language changes (e.g. through a
-category change), a not-yet-expired STT reading from the PREVIOUS
+station switch), a not-yet-expired STT reading from the PREVIOUS
 language is discarded instead of being reused incorrectly.
 
-**Mounting additional Vosk models**: the bundled `VOSK_MODEL_FOLDER`
-mount in `docker-compose.yml` covers exactly ONE model (default:
-German, `/app/vosk-model-de`). For another language, add your own extra
-line to `docker-compose.yml`, e.g.:
+**Downloading new languages with one click (since 2026-08-29)**: under
+"🌐 STT-Sprachen" there's a dropdown of known Vosk models (curated list in
+`python/vosk_catalog.py`, small/large per language, original source
+[alphacephei.com/vosk/models](https://alphacephei.com/vosk/models)) plus
+a "⬇️ Download" button — download, unpacking and adding the entry all
+happen automatically, **no console access needed**. A progress bar shows
+MB/percent during the download. The confidence threshold is set to a
+placeholder (0.6) initially — use the calibration wizard below to measure
+it empirically, same as for de/en. Lands under the writable shared mount
+`VOSK_MODELS_FOLDER` (default `./data/vosk-models`, see
+`docker-compose.yml`) — unlike `VOSK_MODEL_FOLDER`/`_EN` below, adding
+another language here needs **no** extra `docker-compose.yml` line or
+restart. Deleting a language downloaded this way offers a "+ Delete
+files" option in addition to "Remove entry only", to actually free the
+disk space.
+
+**Mounting manually** (fallback for models outside the catalog, or the
+original, still-supported route): the bundled `VOSK_MODEL_FOLDER` mount
+in `docker-compose.yml` covers exactly ONE model (default: German,
+`/app/vosk-model-de`). For another language, add your own extra line to
+`docker-compose.yml`, e.g.:
 
 ```yaml
       - ${VOSK_MODEL_FOLDER_EN:-./data/vosk-model-en}:/app/vosk-model-en:ro
@@ -1594,7 +1757,103 @@ line to `docker-compose.yml`, e.g.:
 
 and enter the resulting container path (`/app/vosk-model-en`) as the
 model path under "🌐 STT-Sprachen" — then `docker compose up -d --build
-radiosabbelnich` so the new mount takes effect.
+radiosabbelnich` so the new mount takes effect. This route mounts
+read-only, so there's deliberately no "delete files" option for languages
+entered this way (see above).
+
+### Automatic station language detection (`vosk_language_check.py`)
+
+Instead of tagging every station by hand in the station list (see
+"Multi-language: language per station" above), a script can figure it out
+automatically: `vosk_language_check.py` listens in on each station briefly
+(30s by default, via ffmpeg like the station import) and checks the
+recording against every language configured under "🌐 STT-Sprachen". Only
+a clear winner (noticeably more hits than any other language) gets
+tagged — with too little speech in the window or a close result, the
+station is left alone ("unclear") instead of guessing wrong.
+
+```bash
+docker exec radiosabbelnich python3 vosk_language_check.py              # report only, changes nothing
+docker exec radiosabbelnich python3 vosk_language_check.py --apply      # applies clear hits
+```
+
+Key options: `--apply` actually writes (without it, only a JSON report
+under `/app/logs/vosk_language_check_report.json`, lands under
+`data/logs/` on the host via the `logs/` mount); `--all` re-checks
+already-tagged stations too (existing tags are still never overwritten
+without an additional `--force` — a manual assignment counts as a
+deliberate decision); `--include-disabled` also covers disabled stations
+(default: only ones currently in rotation — with many unsorted imported
+stations this can noticeably extend the runtime); `--category`/`--limit`/
+`--languages` narrow things down further; `--capture-seconds`/
+`--concurrency` control the recording length and how many stations are
+checked at once (lower than for station import, since this additionally
+carries STT compute load that shares the container with the running main
+loop).
+
+**Reload after `--apply`**: the script writes directly to `stations.json`,
+but runs as a SEPARATE process without access to the main loop's
+in-memory state (`SwitcherState`) — after successfully applying
+languages it therefore automatically triggers a reload via the local
+config API (internal, `localhost:5000`, works regardless of whether
+HTTPS is enabled). Best-effort: if the WebUI isn't reachable right then
+(e.g. `--webui-port 0`, or mid-restart), the already-written changes just
+wait for the next reload that happens anyway — no data loss, only a
+delayed effect, and the script reports this clearly at the end.
+
+### Nightly station scan (WebUI feature)
+
+An alternative to `vosk_language_check.py` above, built directly into the
+WebUI instead of running via `docker exec`: the "🌙 Nightly station scan"
+section on the config page automatically detects each station's spoken
+language using **Whisper** (`faster-whisper`, already bundled in the
+image) — unlike Vosk this needs **no language-specific model**, any
+language Whisper knows is detected without an extra download.
+**Disabled** by default like every new feature here.
+
+Per-station flow: connect via ffmpeg, use the existing Silero VAD
+(`speech_detector.py`, the same one used live) to collect only the
+windows that actually contain speech, until enough continuous speech has
+accumulated (default 25s) or a cutoff time is reached (default 150s) —
+then Whisper estimates the language plus confidence. Three possible
+outcomes, none of them a failure:
+
+- **Language detected** (e.g. "English (87%)")
+- **Mostly music, no speech detected** — the station delivers audio, but
+  not enough continuous speech showed up in the window (typical for
+  music-heavy stations)
+- **Not reachable** — the stream delivered no audio at all during the
+  entire wait time
+
+**Nothing gets applied automatically.** Every finding lands as a
+suggestion in its own table below the settings ("Station", "Result",
+Apply/Discard) — only a deliberate click on "Apply" sets the station's
+`language` field (see "Multi-language: language per station" above) and
+triggers the same reload mechanism as setting it manually.
+
+**Configuration**: time window (default 02–05, an automatic run starts
+at most once per calendar day once the window is reached), Whisper model
+size, cutoff time/minimum speech amount per station, number of stations
+checked at once (default **1**, deliberately strictly sequential — this
+job runs unattended and shares the host with the running main loop, see
+ARCHITECTURE.md for the resource trade-off). The "🌙 Scan now" button
+works anytime, regardless of the time window.
+
+**Covers the whole station list since 2026-08-29** (previously active
+stations only) — every station without its own `language` field is
+checked, **active ones always first**, disabled ones only afterwards
+(most of those were never deliberately disabled, just never checked yet,
+e.g. after a station import). Within each of these two groups, "longest
+since last scanned / never scanned" still applies. With several hundred
+stations, a first full pass spans multiple nights — the progress
+(`night_scan.scanned_at`) survives that without issue, a night window
+simply picks up where the previous one left off. A progress line above
+the suggestions table shows "X of Y active, Z of W disabled stations
+scanned so far". Stations that already have a language assigned are
+never re-checked. Suggestions for disabled stations show up in the same
+table as active ones (with a "active"/"disabled" status column) —
+applying one only sets the language, enabling the station stays a
+deliberately separate, manual decision on the regular station list.
 
 ### Calibration wizard
 
@@ -1688,7 +1947,10 @@ don't edit the block directly):
   that language; detected text/confidence values are logged to
   `logs/radiosabbelnich.log` for this.
 - **`category_languages`** — category → language code (see above),
-  managed via the "🏷 Kategorie-Sprachen" table.
+  managed via the "🏷 Kategorie-Sprachen" table. Only a fallback for
+  stations without their own language — see the per-station `language`
+  field in `stations.json`, managed via the language dropdown in the
+  station list.
 - **`combine_mode`** — how the STT result is combined with VAD/
   heuristic: `"and"` (default) requires both to say "speech" — this
   lets a large share of music sung in that language (VAD says yes, STT
@@ -2038,6 +2300,10 @@ beyond the debug signing (see above).
 | `python/music_scan.py` | Music library scan (phase 1): recursive ID3 scan into its own SQLite DB |
 | `python/folder_browse.py` | Shared breadcrumb folder picker (news break path + music library root) |
 | `python/stt_filter.py` | STT speech filter: interchangeable Vosk/Whisper engines, additional signal for the switch decision |
+| `python/vosk_catalog.py` | Curated list of known Vosk models (language code/URL/size) for the download dropdown |
+| `python/vosk_download.py` | Download/unpack/atomic install of a Vosk model from the catalog, no console access needed |
+| `python/vosk_language_check.py` | Standalone script: auto-detects each station's spoken language via Vosk STT, tags `stations.json` (`docker exec`, see its own section) |
+| `python/night_scan.py` | Core logic of the nightly station scan: VAD-gated collection of speech windows + Whisper language ID (WebUI feature, see its own section) |
 | `python/i18n.py` | English base language for the web interface + loader for `language/*.lng` language packs (see "Web interface language") |
 | `language/*.lng` | External language packs (e.g. `Deutsch.lng`), Key=Value format |
 | `python/resource_monitor.py` | Resource usage (RAM/CPU/DB size) for the "💾 Resource usage" section on the config page |
@@ -2048,13 +2314,13 @@ beyond the debug signing (see above).
 | `pics/icon-192.png`, `pics/icon-512.png` | PWA icons for installing as an app (currently placeholders) |
 | `pics/favicon.ico` | Browser tab icon, a square thumbnail of `radiosabbelnich.webp` |
 | `pics/radiosabbelnich.webp` | Banner graphic on the player/config page and in this README |
-| `data/stations.json` | Station list (name, URL, category, active/inactive) |
+| `data/stations.json` | Station list (name, URL, category, active/inactive, optional STT language) |
 | `data/settings.json` | Runtime settings, see `settings_store.py` |
 | `data/fingerprints.db`, `data/fingerprint_clips/` | Fingerprint database + learned clip recordings |
 | `data/song_fingerprints.db` | Song recognition phase 1: local Chromaprint fingerprint cache (see `python/song_fingerprint.py`) |
 | `check_song_calibration.py` | Analyzes `song_match_log` from `data/song_fingerprints.db`, for `similarity_threshold` calibration (see "Song recognition") |
 | `data/logs/` | Rotating log file (see "Logging" below) |
-| `data/news_mp3/`, `data/vosk-model-de/`, `data/whisper_cache/` | Default mount targets for `NEWS_MP3_FOLDER`/`VOSK_MODEL_FOLDER`/the faster-whisper cache (overridable in `.env`) |
+| `data/news_mp3/`, `data/vosk-model-de/`, `data/vosk-models/`, `data/whisper_cache/` | Default mount targets for `NEWS_MP3_FOLDER`/`VOSK_MODEL_FOLDER`/`VOSK_MODELS_FOLDER`/the faster-whisper cache (overridable in `.env`) |
 | `data/music_library/` | Default mount target for `MUSIC_LIBRARY_FOLDER` (overridable in `.env`) |
 | `docker-compose.yml` | Icecast + RadioSabbelNich as two services |
 | `radiosabbelnich.sh` | All-in-one wrapper: `check`/`start`/`stop`/`restart`/`status` (default) |
@@ -2131,6 +2397,7 @@ leaner version of the same check from `check`).
 | `TLS_CERT_FILE`/`TLS_KEY_FILE` | Host paths to PEM files for HTTPS (optional, see below) |
 | `ICECAST_SSL_PORT` | Host port for the Icecast stream over HTTPS (default 8443) |
 | `VOSK_MODEL_FOLDER` | Host folder with an unpacked German Vosk model for the STT speech filter (optional, see its own section) |
+| `VOSK_MODELS_FOLDER` | Writable shared folder for Vosk models downloaded via the WebUI (optional, default `./data/vosk-models`, see "STT speech filter") |
 | `UI_LANGUAGE` | Starting language of the web interface: `en` (base language) or the code of a language pack under `language/` such as `de` (optional, default `en` — see "Web interface language") |
 | `AUDD_API_TOKEN` | API token for AudD, enables song recognition phase 2 (optional, free tier at [audd.io](https://audd.io) — see "Song recognition") |
 

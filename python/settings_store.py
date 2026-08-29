@@ -23,6 +23,7 @@ import json
 import logging
 import os
 import threading
+import time
 
 import i18n
 
@@ -152,6 +153,51 @@ DEFAULTS = {
         "last_known_remote_version": None,
         "update_available": False,
     },
+    # Nächtlicher Sender-Scan (siehe ARCHITECTURE.md, Abschnitt "Nächtlicher
+    # Sender-Scan", und python/night_scan.py): erkennt per faster-whisper
+    # automatisch die gesprochene Sprache je Sender (kein sprachspezifisches
+    # Modell nötig, anders als Vosk) und schlägt sie als Ergänzung/Alternative
+    # zur manuellen Sprach-Zuordnung (siehe stt_filter oben, "language"-Feld
+    # in stations.json) vor -- NIE automatisch scharf geschaltet, der Nutzer
+    # bestätigt jeden Vorschlag einzeln. Default AUS wie jedes neue Feature.
+    "night_scan": {
+        "enabled": False,
+        # [start, end) wie news_break.enabled_hours -- None würde "rund um
+        # die Uhr" bedeuten (technisch möglich, aber dem Sinn des Features
+        # zuwiderlaufend, siehe README). Default 02-05 Uhr.
+        "enabled_hours": [2, 5],
+        "whisper_model_size": "tiny",
+        # Wie lange maximal auf genug zusammenhängende Sprache gewartet
+        # wird, bevor ein Sender als "vorwiegend Musik" vermerkt wird (siehe
+        # night_scan.scan_station()) -- kein Fehlschlag, ein echtes Ergebnis.
+        "capture_timeout_seconds": 150.0,
+        # Wie viel gesammelte SPRACHE (nicht Gesamt-Audio) mindestens
+        # nötig ist, bevor Whisper die Sprache schätzt.
+        "min_speech_seconds": 25.0,
+        # Sender gleichzeitig prüfen -- bewusst konservativer Default (1 =
+        # strikt sequenziell) als bei vosk_language_check.py (Default 4):
+        # dieser Job läuft unbeaufsichtigt nachts, zusätzliche STT-Last
+        # teilt sich den Host mit dem laufenden Hauptloop (siehe
+        # ARCHITECTURE.md).
+        "concurrency": 1,
+        "last_run_date": None,        # "YYYY-MM-DD", verhindert einen zweiten Auto-Lauf am selben Kalendertag
+        "last_run_started_at": None,  # Unix-Timestamp
+        "last_run_finished_at": None,
+        # station_id -> {"label", "language", "confidence", "scanned_at"} --
+        # NUR Vorschläge, die noch nicht bestätigt/verworfen wurden (siehe
+        # confirm_night_scan_suggestion()/dismiss_night_scan_suggestion()
+        # unten). Bewusst NICHT im stations_store-Schema -- das bleibt
+        # ausschließlich für bestätigte Daten.
+        "suggestions": {},
+        # station_id -> Unix-Timestamp des letzten Scans, UNABHÄNGIG davon,
+        # ob der Vorschlag inzwischen bestätigt/verworfen wurde -- getrennt
+        # von "suggestions" gehalten, damit die Scan-Priorisierung (siehe
+        # night_scan-Abschnitt in webui.py: nie gescannt zuerst, dann
+        # längste Zeit her) nach einem Bestätigen/Verwerfen nicht auf
+        # "nie gescannt" zurückfällt und der Sender sofort wieder ganz
+        # vorne in der Warteschlange landet.
+        "scanned_at": {},
+    },
 }
 
 # Fallback-Sprache für Kategorien ohne explizite Zuordnung in
@@ -172,6 +218,9 @@ LIMITS = {
     "song_recognition_interval_seconds": (5.0, 300.0),
     "song_recognition_snippet_seconds": (3.0, 30.0),
     "song_recognition_similarity_threshold": (0.0, 1.0),
+    "night_scan_capture_timeout_seconds": (10.0, 600.0),
+    "night_scan_min_speech_seconds": (5.0, 120.0),
+    "night_scan_concurrency": (1, 8),
 }
 
 STT_ENGINES = {"vosk", "whisper"}
@@ -198,7 +247,8 @@ def _defaults_copy() -> dict:
             "music_library": dict(DEFAULTS["music_library"]),
             "stt_filter": copy.deepcopy(DEFAULTS["stt_filter"]),
             "song_recognition": dict(DEFAULTS["song_recognition"]),
-            "update_check": dict(DEFAULTS["update_check"])}
+            "update_check": dict(DEFAULTS["update_check"]),
+            "night_scan": copy.deepcopy(DEFAULTS["night_scan"])}
 
 
 def _migrate_stt_filter(v: dict) -> dict:
@@ -280,6 +330,13 @@ def _read_raw() -> dict:
             merged["update_check"].update(
                 {kk: vv for kk, vv in v.items() if kk in DEFAULTS["update_check"]}
             )
+        elif k == "night_scan" and isinstance(v, dict):
+            # Gleiches Muster wie "song_recognition"/"update_check" oben:
+            # ein settings.json von vor diesem Feature funktioniert dadurch
+            # unverändert weiter (Default "enabled": False greift dann).
+            merged["night_scan"].update(
+                {kk: vv for kk, vv in v.items() if kk in DEFAULTS["night_scan"]}
+            )
         else:
             merged[k] = v
     return merged
@@ -314,7 +371,12 @@ def update(prebuffer_seconds=None, prebuffer_count=None, import_url=None,
            song_recognition_snippet_seconds=None,
            song_recognition_similarity_threshold=None,
            song_recognition_cloud_lookup_enabled=None,
-           update_check_enabled=None) -> dict:
+           update_check_enabled=None,
+           night_scan_enabled=None, night_scan_enabled_hours=UNSET,
+           night_scan_whisper_model_size=None,
+           night_scan_capture_timeout_seconds=None,
+           night_scan_min_speech_seconds=None,
+           night_scan_concurrency=None) -> dict:
     """Aktualisiert nur die übergebenen Felder (None = unverändert lassen),
     validiert. Wirft ValueError bei ungültigen Werten.
 
@@ -330,7 +392,10 @@ def update(prebuffer_seconds=None, prebuffer_count=None, import_url=None,
     unverändert lassen". Ruft man diese Funktion mit dem üblichen
     News_break_enabled_hours=None, wird also aktiv zurückgesetzt, nicht
     ignoriert — Aufrufer, die das Feld unangetastet lassen wollen, lassen
-    das Argument einfach weg.
+    das Argument einfach weg. night_scan_enabled_hours folgt demselben
+    Muster (derselbe UNSET-Sentinel) -- "rund um die Uhr" ist dort zwar
+    dem Sinn des Features (nächtlicher, ressourcenschonender Scan)
+    zuwiderlaufend, aber technisch nicht verboten, siehe README.
 
     news_break_mp3_folder wird bewusst NICHT auf Existenz/Lesbarkeit
     geprüft — das ist typischerweise ein SMB-Mount, der beim Speichern der
@@ -521,13 +586,59 @@ def update(prebuffer_seconds=None, prebuffer_count=None, import_url=None,
         if update_check_enabled is not None:
             data["update_check"]["enabled"] = bool(update_check_enabled)
 
+        ns = data["night_scan"]
+        if night_scan_enabled is not None:
+            ns["enabled"] = bool(night_scan_enabled)
+        if night_scan_enabled_hours is not UNSET:
+            if night_scan_enabled_hours in (None, "", []):
+                ns["enabled_hours"] = None
+            else:
+                try:
+                    start, end = night_scan_enabled_hours
+                    start, end = int(start), int(end)
+                except (TypeError, ValueError):
+                    raise ValueError("night_scan_enabled_hours muss [start, end] sein, z.B. [2, 5].")
+                if not (0 <= start < end <= 24):
+                    raise ValueError("night_scan_enabled_hours muss 0 <= start < end <= 24 erfüllen "
+                                      "(Übernacht-Fenster wie 22-6 werden nicht unterstützt).")
+                ns["enabled_hours"] = [start, end]
+        if night_scan_whisper_model_size is not None:
+            ns["whisper_model_size"] = str(night_scan_whisper_model_size).strip()
+        if night_scan_capture_timeout_seconds is not None:
+            lo, hi = LIMITS["night_scan_capture_timeout_seconds"]
+            try:
+                night_scan_capture_timeout_seconds = float(night_scan_capture_timeout_seconds)
+            except (TypeError, ValueError):
+                raise ValueError("night_scan_capture_timeout_seconds muss eine Zahl sein.")
+            if not (lo <= night_scan_capture_timeout_seconds <= hi):
+                raise ValueError(f"night_scan_capture_timeout_seconds muss zwischen {lo} und {hi} liegen.")
+            ns["capture_timeout_seconds"] = night_scan_capture_timeout_seconds
+        if night_scan_min_speech_seconds is not None:
+            lo, hi = LIMITS["night_scan_min_speech_seconds"]
+            try:
+                night_scan_min_speech_seconds = float(night_scan_min_speech_seconds)
+            except (TypeError, ValueError):
+                raise ValueError("night_scan_min_speech_seconds muss eine Zahl sein.")
+            if not (lo <= night_scan_min_speech_seconds <= hi):
+                raise ValueError(f"night_scan_min_speech_seconds muss zwischen {lo} und {hi} liegen.")
+            ns["min_speech_seconds"] = night_scan_min_speech_seconds
+        if night_scan_concurrency is not None:
+            lo, hi = LIMITS["night_scan_concurrency"]
+            try:
+                night_scan_concurrency = int(night_scan_concurrency)
+            except (TypeError, ValueError):
+                raise ValueError("night_scan_concurrency muss eine Ganzzahl sein.")
+            if not (lo <= night_scan_concurrency <= hi):
+                raise ValueError(f"night_scan_concurrency muss zwischen {lo} und {hi} liegen.")
+            ns["concurrency"] = night_scan_concurrency
+
         _write(data)
         log.info("⚙ Einstellungen gespeichert: %s", data)
         return data
 
 
 def set_stt_language(lang_code: str, vosk_model_path: str = None,
-                      confidence_threshold: float = None) -> dict:
+                      confidence_threshold: float = None, source: str = None) -> dict:
     """Legt eine STT-Sprache an oder aktualisiert sie (gleiche None-
     Konvention wie update(): nur übergebene Felder ändern sich, ein
     bestehender Eintrag wird nicht überschrieben). Sprachcode wird NICHT
@@ -540,14 +651,25 @@ def set_stt_language(lang_code: str, vosk_model_path: str = None,
     geprüft — die eigentliche Prüfung passiert lazy beim ersten Sample
     dieser Sprache in stt_filter.py, das sich bei einem ungültigen Pfad
     für genau diese Sprache selbst deaktiviert statt hier schon einen
-    Fehler zu werfen."""
+    Fehler zu werfen.
+
+    `source` ("manual" | "downloaded", siehe vosk_download.py): woher der
+    Modellpfad kommt -- entscheidet in webui.py, ob beim Löschen zusätzlich
+    die Modell-DATEIEN mit entfernt werden dürfen. Nur der Download-Flow
+    setzt "downloaded" explizit; alte/manuell eingetragene Einträge ohne
+    dieses Feld gelten über den `.get("source", "manual")`-Default beim
+    Lesen als "manual" (keine eigene Migration nötig, siehe
+    `_migrate_stt_filter()` oben für das analoge Muster) -- korrekt, weil
+    ein manuell eingetragener Pfad (z.B. ein alter, read-only gemounteter
+    Ordner) nicht versehentlich per Datei-Löschung angefasst werden darf."""
     lang_code = (lang_code or "").strip().lower()
     if not lang_code:
         raise ValueError("Sprachcode darf nicht leer sein.")
     with _lock:
         data = _read_raw()
         langs = data["stt_filter"]["languages"]
-        entry = dict(langs.get(lang_code, {"vosk_model_path": "", "confidence_threshold": 0.6}))
+        entry = dict(langs.get(lang_code, {"vosk_model_path": "", "confidence_threshold": 0.6,
+                                            "source": "manual"}))
         if vosk_model_path is not None:
             entry["vosk_model_path"] = str(vosk_model_path).strip()
         if confidence_threshold is not None:
@@ -559,18 +681,25 @@ def set_stt_language(lang_code: str, vosk_model_path: str = None,
             if not (lo <= confidence_threshold <= hi):
                 raise ValueError(f"confidence_threshold muss zwischen {lo} und {hi} liegen.")
             entry["confidence_threshold"] = confidence_threshold
+        if source is not None:
+            entry["source"] = source
+        entry.setdefault("source", "manual")
         langs[lang_code] = entry
         _write(data)
         log.info("🌐 STT-Sprache gespeichert: '%s' (%s)", lang_code, entry)
         return entry
 
 
-def delete_stt_language(lang_code: str) -> None:
+def delete_stt_language(lang_code: str) -> dict:
     """Mindestens eine Sprache muss konfiguriert bleiben (sonst hat
     engine="vosk" gar kein Modell mehr, das es laden könnte). Kategorien,
     die auf die gelöschte Sprache zeigten, werden aus category_languages
     entfernt statt als verwaiste Zuordnung stehen zu bleiben -- sie fallen
-    danach auf DEFAULT_STT_LANGUAGE zurück, siehe resolve_stt_language()."""
+    danach auf DEFAULT_STT_LANGUAGE zurück, siehe resolve_stt_language().
+    Gibt den gelöschten Eintrag zurück (vosk_model_path/source), damit
+    webui.py entscheiden kann, ob zusätzlich die Modell-Dateien gelöscht
+    werden dürfen -- diese Funktion selbst fasst nie das Dateisystem an,
+    reine Konfigurationsänderung wie der Rest von settings_store.py."""
     with _lock:
         data = _read_raw()
         langs = data["stt_filter"]["languages"]
@@ -578,12 +707,13 @@ def delete_stt_language(lang_code: str) -> None:
             raise KeyError(lang_code)
         if len(langs) <= 1:
             raise ValueError("Mindestens eine Sprache muss konfiguriert bleiben.")
-        del langs[lang_code]
+        deleted = langs.pop(lang_code)
         cat_langs = data["stt_filter"]["category_languages"]
         for cat in [c for c, lang in cat_langs.items() if lang == lang_code]:
             del cat_langs[cat]
         _write(data)
         log.info("🗑 STT-Sprache gelöscht: '%s'", lang_code)
+        return deleted
 
 
 def set_category_language(category: str, lang_code: str) -> None:
@@ -605,13 +735,22 @@ def set_category_language(category: str, lang_code: str) -> None:
         log.info("🌐 Kategorie-Sprache gespeichert: '%s' -> '%s'", category, lang_code or "(Standard)")
 
 
-def resolve_stt_language(category: str, cfg: dict) -> str:
-    """Löst die für eine Sender-Kategorie zuständige STT-Sprache auf --
-    fehlt die Kategorie in cfg["category_languages"], gilt
-    DEFAULT_STT_LANGUAGE. cfg ist typischerweise state.stt_filter_cfg im
-    Hauptloop (siehe radiosabbelnich.py), damit nicht bei jedem Aufruf frisch
-    von der Platte gelesen wird."""
-    return cfg.get("category_languages", {}).get(category, DEFAULT_STT_LANGUAGE)
+def resolve_stt_language(station: dict, cfg: dict) -> str:
+    """Löst die für einen Sender zuständige STT-Sprache auf. Priorität:
+    1. station["language"] (Sender-eigener Override, siehe
+       stations_store.py-Moduldocstring) -- falls gesetzt (nicht leer).
+    2. cfg["category_languages"][station["category"]] -- Kategorie-weite
+       Zuordnung, unverändert seit Einführung des Features, dient jetzt als
+       Fallback für Sender ohne eigenen Override (z.B. frisch importierte,
+       noch nicht einzeln gepflegte Sender).
+    3. DEFAULT_STT_LANGUAGE.
+    cfg ist typischerweise state.stt_filter_cfg im Hauptloop (siehe
+    radiosabbelnich.py), damit nicht bei jedem Aufruf frisch von der
+    Platte gelesen wird."""
+    station_language = (station.get("language") or "").strip().lower()
+    if station_language:
+        return station_language
+    return cfg.get("category_languages", {}).get(station.get("category"), DEFAULT_STT_LANGUAGE)
 
 
 def record_update_check_result(remote_version: str, update_available: bool,
@@ -632,3 +771,50 @@ def record_update_check_result(remote_version: str, update_available: bool,
         _write(data)
         log.info("🔄 Update-Check-Ergebnis gespeichert: Remote-Version %s, verfügbar: %s",
                  remote_version, update_available)
+
+
+def set_night_scan_suggestion(station_id: str, label: str, language: str = None,
+                               confidence: float = None) -> dict:
+    """Speichert einen Scan-Vorschlag für `station_id` (label: "detected" |
+    "music" | "unreachable" | "error", siehe night_scan.scan_station()).
+    language/confidence nur bei label="detected" aussagekräftig, sonst
+    None. Aktualisiert IMMER auch `scanned_at` in night_scan.scanned_at --
+    getrennt von "suggestions" gehalten, siehe DEFAULTS-Kommentar dort
+    (überlebt ein späteres Bestätigen/Verwerfen, für die Scan-Priorisierung).
+    Bewusst ohne die Validierungskette von update() -- kommt aus dem
+    Scan-Hintergrund-Thread, nicht aus einem Nutzer-Request."""
+    with _lock:
+        data = _read_raw()
+        ns = data["night_scan"]
+        now = time.time()
+        ns["suggestions"][station_id] = {
+            "label": label, "language": language, "confidence": confidence, "scanned_at": now,
+        }
+        ns["scanned_at"][station_id] = now
+        _write(data)
+        return ns["suggestions"][station_id]
+
+
+def clear_night_scan_suggestion(station_id: str) -> None:
+    """Entfernt einen Vorschlag NACH Bestätigen/Verwerfen (siehe webui.py) --
+    `scanned_at` bleibt dabei bewusst erhalten, siehe DEFAULTS-Kommentar."""
+    with _lock:
+        data = _read_raw()
+        data["night_scan"]["suggestions"].pop(station_id, None)
+        _write(data)
+
+
+def record_night_scan_run(started_at: float = None, finished_at: float = None,
+                           date: str = None) -> None:
+    """Reines Bookkeeping für den Scheduler (siehe webui.NightScanScheduler) --
+    analog record_update_check_result() ohne update()s Validierungskette."""
+    with _lock:
+        data = _read_raw()
+        ns = data["night_scan"]
+        if started_at is not None:
+            ns["last_run_started_at"] = started_at
+        if finished_at is not None:
+            ns["last_run_finished_at"] = finished_at
+        if date is not None:
+            ns["last_run_date"] = date
+        _write(data)

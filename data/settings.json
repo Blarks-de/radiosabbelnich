@@ -44,13 +44,200 @@
     "enabled": true,
     "interval_seconds": 45.0,
     "snippet_seconds": 11.0,
-    "similarity_threshold": 0.65,
-    "cloud_lookup_enabled": true
+    "cloud_lookup_enabled": true,
+    "similarity_threshold": 0.65
   },
   "update_check": {
     "enabled": true,
-    "last_checked_at": 1787845680.8115737,
-    "last_known_remote_version": "v1.2.32 build 2026-08-24 17:45 Uhr",
+    "last_checked_at": 1787991172.3982317,
+    "last_known_remote_version": "v1.2.36 build 2026-08-28 18:16 Uhr",
     "update_available": false
+  },
+  "night_scan": {
+    "enabled": true,
+    "enabled_hours": [
+      1,
+      6
+    ],
+    "whisper_model_size": "tiny",
+    "capture_timeout_seconds": 150.0,
+    "min_speech_seconds": 25.0,
+    "concurrency": 1,
+    "last_run_date": null,
+    "last_run_started_at": 1788024097.9081562,
+    "last_run_finished_at": 1788024146.6519856,
+    "suggestions": {
+      "105-5-spreeradio-80er": {
+        "label": "detected",
+        "language": "en",
+        "confidence": 0.518,
+        "scanned_at": 1788024100.0789802
+      },
+      "105-5-spreeradio-rock": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.981,
+        "scanned_at": 1788024100.0793262
+      },
+      "80s80s": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.995,
+        "scanned_at": 1788024101.049203
+      },
+      "ffn": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.978,
+        "scanned_at": 1788024102.1673355
+      },
+      "hamburg-zwei": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.984,
+        "scanned_at": 1788024102.167765
+      },
+      "heart-london": {
+        "label": "detected",
+        "language": "en",
+        "confidence": 0.942,
+        "scanned_at": 1788024102.548697
+      },
+      "ndr-90-3-hamburg": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788024112.773785
+      },
+      "ndr1-welle-nord-schleswig-holstein": {
+        "label": "detected",
+        "language": "en",
+        "confidence": 0.588,
+        "scanned_at": 1788024112.774102
+      },
+      "radio-bob": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788024118.4545338
+      },
+      "radio-bob-best-of-rock": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788024118.4549809
+      },
+      "radio-bob-blues": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788024118.4572978
+      },
+      "swr3": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.945,
+        "scanned_at": 1788024100.078511
+      },
+      "90s90s": {
+        "label": "detected",
+        "language": "ko",
+        "confidence": 0.535,
+        "scanned_at": 1788024119.110913
+      },
+      "105-5-spreeradio": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788024126.960121
+      },
+      "1live-diggi": {
+        "label": "detected",
+        "language": "en",
+        "confidence": 0.723,
+        "scanned_at": 1788024126.9604716
+      },
+      "105-5-spreeradio-love": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788024140.54525
+      },
+      "89-0-rtl": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788024140.545608
+      },
+      "antenne-brandenburg": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788024140.5464737
+      },
+      "antenne-1": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788024141.080317
+      },
+      "absolut-radio": {
+        "label": "detected",
+        "language": "en",
+        "confidence": 0.828,
+        "scanned_at": 1788024141.7012887
+      },
+      "br24": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.993,
+        "scanned_at": 1788024141.9538014
+      },
+      "absolut-relax": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788024142.635024
+      },
+      "bayern-1-mittel-und-oberfranken": {
+        "label": "detected",
+        "language": "en",
+        "confidence": 0.881,
+        "scanned_at": 1788024146.64932
+      },
+      "bayern-1-schwaben": {
+        "label": "detected",
+        "language": "en",
+        "confidence": 0.916,
+        "scanned_at": 1788024146.64973
+      }
+    },
+    "scanned_at": {
+      "105-5-spreeradio-80er": 1788024100.0789802,
+      "105-5-spreeradio-rock": 1788024100.0793262,
+      "1live": 1788003511.4154139,
+      "80s80s": 1788024101.049203,
+      "ffn": 1788024102.1673355,
+      "hamburg-zwei": 1788024102.167765,
+      "heart-london": 1788024102.548697,
+      "ndr-90-3-hamburg": 1788024112.773785,
+      "ndr1-welle-nord-schleswig-holstein": 1788024112.774102,
+      "radio-bob": 1788024118.4545338,
+      "radio-bob-best-of-rock": 1788024118.4549809,
+      "radio-bob-blues": 1788024118.4572978,
+      "swr3": 1788024100.078511,
+      "90s90s": 1788024119.110913,
+      "105-5-spreeradio": 1788024126.960121,
+      "1live-diggi": 1788024126.9604716,
+      "105-5-spreeradio-love": 1788024140.54525,
+      "89-0-rtl": 1788024140.545608,
+      "antenne-brandenburg": 1788024140.5464737,
+      "antenne-1": 1788024141.080317,
+      "absolut-radio": 1788024141.7012887,
+      "br24": 1788024141.9538014,
+      "absolut-relax": 1788024142.635024,
+      "bayern-1-mittel-und-oberfranken": 1788024146.64932,
+      "bayern-1-schwaben": 1788024146.64973
+    }
   }
 }

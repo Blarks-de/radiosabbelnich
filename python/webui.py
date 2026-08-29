@@ -23,6 +23,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import ssl
 import threading
 import time
@@ -38,11 +39,14 @@ import i18n
 import music_library
 import music_query
 import music_scan
+import night_scan
 import resource_monitor
 import settings_store
 import song_fingerprint
 import station_import
 import stations_store
+import vosk_catalog
+import vosk_download
 import stt_filter
 import update_check
 
@@ -72,6 +76,23 @@ _BROWSE_ROOTS = {
 # sample_interval_seconds=8s (Default) entspricht das ~13 Minuten
 # Sampling pro Stufe, reichlich für eine Kalibrierung.
 MAX_CALIBRATION_SAMPLES = 100
+
+# Container-interner Pfad des beschreibbaren Sammel-Mounts für per WebUI
+# heruntergeladene Vosk-Modelle (siehe docker-compose.yml VOSK_MODELS_FOLDER,
+# vosk_download.py) -- fix wie _BROWSE_ROOTS oben, der Mount-Pfad selbst
+# ist über Docker fest verdrahtet, nur sein Inhalt ändert sich zur Laufzeit.
+VOSK_MODELS_DIR = "/app/vosk-models"
+
+# Platzhalter-Konfidenzschwelle für frisch heruntergeladene Sprachen --
+# NICHT empirisch kalibriert (kann es zum Download-Zeitpunkt gar nicht
+# sein, siehe README/ARCHITECTURE.md-Kalibrierungs-Wizard). Bewusst
+# konservativ (eher zu hoch als zu niedrig): eine zu hohe Schwelle
+# verpasst anfangs echte Moderation (kein Fehlverhalten, nur weniger
+# Bullshitometer-Treffer), eine zu niedrige würde Musik fälschlich als
+# Sprache werten und ungewollt umschalten. Der einzelne de-Erfahrungswert
+# (0.75) ist nicht automatisch auf jede Sprache übertragbar (andere
+# Modellgröße/-qualität), deshalb hier bewusst kein "geerbter" Default.
+DEFAULT_DOWNLOADED_CONFIDENCE_THRESHOLD = 0.6
 
 # Einmalig beim Modul-Import gelesen (statt bei jedem Request von der
 # Platte) — kleines statisches Asset, ändert sich nicht zur Laufzeit.
@@ -908,6 +929,282 @@ class ImportState:
                 "result": self._result,
                 "error": self._error,
             }
+
+
+class VoskDownloadState:
+    """Thread-sicherer Fortschritts-Tracker für den Vosk-Modell-Download
+    (vosk_download.py) — Kopie des ImportState-Musters oben (siehe dessen
+    Docstring für die Begründung: Hintergrund-Thread + Polling statt
+    SSE/WebSocket, weil der ThreadingHTTPServer hier synchron ist und alle
+    anderen Langläufer im Projekt bereits so gelöst sind). Zusätzlich zu
+    Phase/Fehler wird der Byte-Fortschritt gehalten (`downloaded`/`total`),
+    für die MB-Anzeige/Prozent-Balken in der WebUI — bei Sender-Import/
+    Musik-Scan zählt "total" Einträge, hier Bytes, deshalb eigene Klasse
+    statt Wiederverwendung von ImportState. Immer nur EIN Download
+    gleichzeitig (wie beim Import) -- vereinfacht Zustand/UI, ein zweiter
+    Download während eines laufenden wird abgelehnt (siehe start())."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._running = False
+        self._phase = "idle"  # idle | downloading | extracting | installing | done | error
+        self._catalog_key = None
+        self._downloaded = 0
+        self._total = 0
+        self._result = None
+        self._error = None
+
+    def start(self, catalog_key: str) -> bool:
+        with self._lock:
+            if self._running:
+                return False
+            self._running = True
+            self._phase = "downloading"
+            self._catalog_key = catalog_key
+            self._downloaded = 0
+            self._total = 0
+            self._result = None
+            self._error = None
+            return True
+
+    def set_phase(self, phase: str, total: int = None):
+        with self._lock:
+            self._phase = phase
+            if total is not None:
+                self._total = total
+
+    def set_downloaded(self, downloaded: int):
+        with self._lock:
+            self._downloaded = downloaded
+
+    def finish(self, result: dict):
+        with self._lock:
+            self._running = False
+            self._phase = "done"
+            self._result = result
+
+    def fail(self, error: str):
+        with self._lock:
+            self._running = False
+            self._phase = "error"
+            self._error = error
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            return {
+                "running": self._running,
+                "phase": self._phase,
+                "catalog_key": self._catalog_key,
+                "downloaded": self._downloaded,
+                "total": self._total,
+                "result": self._result,
+                "error": self._error,
+            }
+
+
+class NightScanState:
+    """Fortschritts-Tracker für den nächtlichen Sender-Scan (night_scan.py) —
+    Kopie des ImportState-Musters, siehe dort für die Begründung
+    (Hintergrund-Thread + Polling). Erfüllt zusätzlich das
+    progress-Duck-Typing von night_scan.run_scan()
+    (set_phase/set_current/record_result/increment_checked) UND das
+    should_stop-Duck-Typing (siehe NightScanScheduler unten) in
+    PERSONALUNION -- ein Objekt statt zwei, weil Scan-Fortschritt und
+    Stop-Wunsch ohnehin denselben Lock brauchen.
+
+    record_result() persistiert JEDEN einzelnen Sender-Befund SOFORT über
+    settings_store.set_night_scan_suggestion() -- die Config-Seite sieht
+    neue Vorschläge dadurch schon WÄHREND ein Scan noch läuft, nicht erst
+    nach dessen Ende (bei stundenlangen Läufen sonst eine lange Blackbox).
+    label="error" wird NICHT als Vorschlag gespeichert (kein Sprachvorschlag
+    daraus ableitbar), nur geloggt."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._running = False
+        self._phase = "idle"  # idle | scanning | done | error
+        self._current = None
+        self._checked = 0
+        self._total = 0
+        self._result = None
+        self._error = None
+        self._stop_requested = False
+
+    def start(self) -> bool:
+        with self._lock:
+            if self._running:
+                return False
+            self._running = True
+            self._phase = "scanning"
+            self._current = None
+            self._checked = 0
+            self._total = 0
+            self._result = None
+            self._error = None
+            self._stop_requested = False
+            return True
+
+    def set_phase(self, phase: str, total: int = None):
+        with self._lock:
+            self._phase = phase
+            if total is not None:
+                self._total = total
+
+    def set_current(self, name: str):
+        with self._lock:
+            self._current = name
+
+    def record_result(self, station_id: str, result: dict):
+        if result["label"] not in ("detected", "music", "unreachable"):
+            log.warning("⚠ Nacht-Scan: Sender %s übersprungen (%s: %s).",
+                        station_id, result["label"], result.get("error"))
+            return
+        settings_store.set_night_scan_suggestion(
+            station_id, result["label"], result.get("language"), result.get("confidence"))
+
+    def increment_checked(self):
+        with self._lock:
+            self._checked += 1
+
+    def request_stop(self):
+        with self._lock:
+            self._stop_requested = True
+
+    def should_stop(self) -> bool:
+        with self._lock:
+            return self._stop_requested
+
+    def finish(self, result: dict):
+        with self._lock:
+            self._running = False
+            self._phase = "done"
+            self._result = result
+
+    def fail(self, error: str):
+        with self._lock:
+            self._running = False
+            self._phase = "error"
+            self._error = error
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            return {
+                "running": self._running,
+                "phase": self._phase,
+                "current": self._current,
+                "checked": self._checked,
+                "total": self._total,
+                "result": self._result,
+                "error": self._error,
+            }
+
+
+class NightScanScheduler:
+    """Hintergrund-Thread nach dem Muster von update_check.UpdateChecker
+    (siehe dort): wacht alle _POLL_INTERVAL_SECONDS auf, prüft ob gerade im
+    konfigurierten Nacht-Fenster (night_scan.enabled_hours) UND noch kein
+    automatischer Lauf HEUTE stattgefunden hat (night_scan.last_run_date) --
+    startet dann automatisch einen Scan. Teilt sich `state` (NightScanState)
+    mit dem manuellen "🌙 Jetzt scannen"-Knopf (siehe
+    _handle_night_scan_start()) -- state.start() lehnt einen zweiten
+    gleichzeitigen Lauf ab, ein automatischer und ein manueller Lauf können
+    sich dadurch nie überschneiden.
+
+    Scannt nur AKTIVE Sender ohne eigenes language-Feld (wie
+    vosk_language_check.py per Default) -- Priorisierung nach
+    night_scan.scanned_at (nie gescannt zuerst, dann längste Zeit her,
+    siehe DEFAULTS-Kommentar in settings_store.py)."""
+
+    _POLL_INTERVAL_SECONDS = 60
+
+    def __init__(self, state: "NightScanState"):
+        self._state = state
+
+    def start(self):
+        threading.Thread(target=self._run, daemon=True, name="night-scan-scheduler").start()
+
+    def _run(self):
+        while True:
+            cfg = settings_store.load()["night_scan"]
+            if cfg.get("enabled") and self._due(cfg):
+                self._run_scan(cfg, auto=True)
+            time.sleep(self._POLL_INTERVAL_SECONDS)
+
+    @staticmethod
+    def _in_window(hours) -> bool:
+        if not hours:
+            return True  # enabled_hours=None -> rund um die Uhr, siehe settings_store.py
+        return hours[0] <= time.localtime().tm_hour < hours[1]
+
+    def _due(self, cfg: dict) -> bool:
+        if cfg.get("last_run_date") == time.strftime("%Y-%m-%d"):
+            return False
+        return self._in_window(cfg.get("enabled_hours"))
+
+    def start_now(self) -> bool:
+        """Manueller Trigger (Config-Seite) -- ignoriert enabled_hours/
+        last_run_date bewusst, siehe _handle_night_scan_start()."""
+        cfg = settings_store.load()["night_scan"]
+        return self._run_scan(cfg, auto=False)
+
+    def _run_scan(self, cfg: dict, auto: bool) -> bool:
+        if not self._state.start():
+            return False
+
+        def worker():
+            settings_store.record_night_scan_run(
+                started_at=time.time(), date=time.strftime("%Y-%m-%d") if auto else None)
+            try:
+                whisper_engine = night_scan.load_whisper_engine(cfg["whisper_model_size"])
+            except Exception as e:
+                log.exception("⚠ Nächtlicher Sender-Scan: Whisper-Modell nicht ladbar.")
+                self._state.fail(str(e))
+                return
+
+            # load_all() statt load_active(): deckt seit 2026-08-29 auch
+            # deaktivierte Sender ab (die meisten davon nie bewusst
+            # deaktiviert, sondern nur nie geprüft -- Sender-Import legt
+            # neue Sender standardmäßig deaktiviert an, siehe
+            # station_import.py). Zweistufige Sortierung: aktive Sender
+            # IMMER zuerst (`not s["enabled"]` ist False=0 für aktive,
+            # True=1 für deaktivierte -- sortiert aufsteigend landen
+            # aktive vorn), erst INNERHALB jeder der beiden Gruppen greift
+            # die bisherige "nie gescannt zuerst, dann am längsten her"-
+            # Logik. Bei 350+ Sendern zieht sich ein kompletter Durchlauf
+            # über mehrere Nächte -- kein Problem, siehe scanned_at-
+            # Persistenz-Kommentar in settings_store.py DEFAULTS.
+            stations = [s for s in stations_store.load_all() if not s.get("language")]
+            scanned_at = settings_store.load()["night_scan"]["scanned_at"]
+            stations.sort(key=lambda s: (not s.get("enabled", True), scanned_at.get(s["id"], 0)))
+
+            def should_stop():
+                if self._state.should_stop():
+                    return True
+                # Ein automatischer Lauf bricht sauber ab, sobald das
+                # Nacht-Fenster vorbei ist (z.B. Fenster 02-05 Uhr, Scan
+                # läuft noch um 05:01 Uhr) -- ein manueller Lauf (auto=False)
+                # ignoriert das Fenster komplett, der Nutzer hat ihn ja
+                # bewusst gestartet.
+                if auto:
+                    hours = settings_store.load()["night_scan"].get("enabled_hours")
+                    return not self._in_window(hours)
+                return False
+
+            try:
+                result = night_scan.run_scan(stations, whisper_engine, cfg,
+                                              progress=self._state, should_stop=should_stop)
+                self._state.finish(result)
+                log.info("🌙 Nächtlicher Sender-Scan fertig: %d von %d Sendern geprüft%s.",
+                         result["scanned"], result["total"],
+                         " (vorzeitig gestoppt)" if result["stopped_early"] else "")
+            except Exception as e:
+                log.exception("⚠ Nächtlicher Sender-Scan fehlgeschlagen.")
+                self._state.fail(str(e))
+            finally:
+                settings_store.record_night_scan_run(finished_at=time.time())
+
+        threading.Thread(target=worker, daemon=True, name="night-scan").start()
+        return True
 
 
 class LibraryScanState:
@@ -2728,6 +3025,11 @@ _CONFIG_PAGE_HTML = """<!doctype html>
     border-bottom: 1px solid #8882;
   }
   ul.stations li .name { flex: 1; min-width: 0; }
+  ul.stations li .name .lang-badge {
+    display: inline-block; margin-left: .5rem; font-size: .7rem; font-weight: 600;
+    padding: .05rem .35rem; border-radius: .3rem; background: #8882; color: #888;
+    vertical-align: middle; text-transform: uppercase;
+  }
   ul.stations li .name .url {
     display: block; font-size: .75rem; color: #888; word-break: break-all;
   }
@@ -2759,25 +3061,32 @@ _CONFIG_PAGE_HTML = """<!doctype html>
   }
   form#settings-form button { padding: .6rem; font-size: 1rem; cursor: pointer; }
   form#settings-form .hint { font-size: .8rem; color: #888; margin: 0; }
-  form#news-break-form, form#stt-form, form#music-library-form {
+  form#news-break-form, form#stt-form, form#music-library-form, form#night-scan-form {
     margin-top: 1.5rem; padding: 1rem; border: 1px solid #8884; border-radius: .5rem;
     display: grid; gap: .6rem;
   }
-  form#news-break-form label, form#stt-form label, form#music-library-form label {
+  form#news-break-form label, form#stt-form label, form#music-library-form label,
+  form#night-scan-form label {
     display: grid; gap: .25rem; font-size: .9rem;
   }
-  form#news-break-form label.checkbox, form#stt-form label.checkbox {
+  form#news-break-form label.checkbox, form#stt-form label.checkbox,
+  form#night-scan-form label.checkbox {
     display: flex; flex-direction: row; align-items: center; gap: .4rem;
   }
-  form#news-break-form input, form#stt-form input, form#stt-form select {
+  form#news-break-form input, form#stt-form input, form#stt-form select,
+  form#night-scan-form input {
     padding: .5rem; font-size: 1rem; width: 100%; box-sizing: border-box;
   }
-  form#news-break-form input[type=checkbox], form#stt-form input[type=checkbox] {
+  form#news-break-form input[type=checkbox], form#stt-form input[type=checkbox],
+  form#night-scan-form input[type=checkbox] {
     width: auto; padding: 0;
   }
-  form#news-break-form .hours-row { display: flex; gap: .6rem; align-items: flex-end; }
-  form#news-break-form .hours-row label { flex: 1; }
-  form#news-break-form button, form#stt-form button, form#music-library-form button {
+  form#news-break-form .hours-row, form#night-scan-form .hours-row {
+    display: flex; gap: .6rem; align-items: flex-end;
+  }
+  form#news-break-form .hours-row label, form#night-scan-form .hours-row label { flex: 1; }
+  form#news-break-form button, form#stt-form button, form#music-library-form button,
+  form#night-scan-form button {
     padding: .6rem; font-size: 1rem; cursor: pointer;
   }
   form#news-break-form .hint, form#stt-form .hint, form#music-library-form .hint {
@@ -2823,9 +3132,38 @@ _CONFIG_PAGE_HTML = """<!doctype html>
   form#stt-lang-add-form #stt-lang-vosk-path { flex: 1; min-width: 10rem; }
   form#stt-lang-add-form #stt-lang-threshold { width: 5rem; }
   form#stt-lang-add-form button { padding: .5rem 1rem; font-size: .9rem; cursor: pointer; }
-  section#stt-calib-section {
+  #stt-lang-download-fields {
+    margin-top: .8rem; padding-top: .8rem; border-top: 1px solid #8884;
+    display: flex; flex-wrap: wrap; gap: .5rem; align-items: center;
+  }
+  #stt-lang-download-fields select { flex: 1; min-width: 12rem; padding: .4rem; font-size: .9rem; }
+  #stt-lang-download-fields button { padding: .5rem 1rem; font-size: .9rem; cursor: pointer; }
+  #stt-lang-download-progress { margin-top: .6rem; }
+  #stt-lang-download-progress .bar-track {
+    width: 100%; height: .6rem; border-radius: .3rem; background: #8883; overflow: hidden;
+  }
+  #stt-lang-download-progress .bar-fill {
+    height: 100%; background: #2a7a4a; width: 0%; transition: width .3s ease;
+  }
+  #stt-lang-download-progress p { font-size: .85rem; color: #888; margin: .3rem 0 0; }
+  section#stt-calib-section, section#night-scan-section {
     margin-top: 1.5rem; padding: 1rem; border: 1px solid #8884; border-radius: .5rem;
   }
+  #night-scan-controls { display: flex; gap: .5rem; margin-top: .8rem; }
+  #night-scan-controls button { padding: .5rem 1rem; font-size: .9rem; cursor: pointer; }
+  #night-scan-progress-text:empty { display: none; }
+  table#night-scan-suggestions-table {
+    width: 100%; border-collapse: collapse; font-size: .9rem; margin-top: .8rem;
+  }
+  table#night-scan-suggestions-table th, table#night-scan-suggestions-table td {
+    text-align: left; padding: .3rem .4rem; border-bottom: 1px solid #8884;
+  }
+  table#night-scan-suggestions-table button {
+    font-size: .85rem; padding: .25rem .5rem; margin-right: .3rem;
+  }
+  table#night-scan-suggestions-table td.label-detected { color: #2a7a4a; }
+  table#night-scan-suggestions-table td.label-music { color: #888; }
+  table#night-scan-suggestions-table td.label-unreachable { color: #d33; }
   #stt-calib-idle .fields { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
   #stt-calib-idle input {
     width: 6rem; padding: .4rem; font-size: .9rem; box-sizing: border-box;
@@ -2997,6 +3335,7 @@ _CONFIG_PAGE_HTML = """<!doctype html>
   <input type="text" id="add-name" placeholder="Name" data-i18n-placeholder="cfg_add_name_placeholder" required>
   <input type="url" id="add-url" placeholder="Stream-URL (https://...)" data-i18n-placeholder="cfg_add_url_placeholder" required>
   <select id="add-category"></select>
+  <select id="add-language" title="STT-Sprache (Standard: Kategorie)" data-i18n-title="cfg_station_lang_label"></select>
   <label><input type="checkbox" id="add-enabled" checked> <span data-i18n="cfg_enabled_label">aktiviert</span></label>
   <button type="submit" data-i18n="cfg_add_btn">Hinzufügen</button>
 </form>
@@ -3155,6 +3494,18 @@ _CONFIG_PAGE_HTML = """<!doctype html>
     </div>
     <button type="submit" data-i18n="cfg_stt_lang_add_btn">+ Sprache hinzufügen/aktualisieren</button>
   </form>
+  <div id="stt-lang-download-fields">
+    <select id="stt-lang-download-select"></select>
+    <button type="button" id="btn-stt-lang-download" data-i18n="cfg_stt_lang_download_btn">⬇️ Herunterladen</button>
+  </div>
+  <p class="hint" data-i18n="cfg_stt_lang_download_hint">Lädt ein bekanntes Vosk-Modell automatisch
+    herunter, entpackt es und trägt es hier ein — kein Konsolenzugriff nötig. Die
+    Konfidenz-Schwelle wird mit einem Platzhalter angelegt und sollte danach über die
+    Kalibrierung unten eingemessen werden.</p>
+  <div id="stt-lang-download-progress" hidden>
+    <div class="bar-track"><div class="bar-fill" id="stt-lang-download-bar"></div></div>
+    <p id="stt-lang-download-status-text"></p>
+  </div>
 </section>
 
 <section id="stt-cat-lang-section">
@@ -3205,6 +3556,63 @@ _CONFIG_PAGE_HTML = """<!doctype html>
       <ul id="stt-calib-samples-list"></ul>
     </details>
   </div>
+</section>
+
+<section id="night-scan-section">
+  <h2 style="margin-top:0" data-i18n="cfg_night_scan_heading">🌙 Nächtlicher Sender-Scan</h2>
+  <p class="hint" data-i18n-html="cfg_night_scan_hint">Erkennt automatisch per Whisper (kein
+    sprachspezifisches Modell nötig, anders als Vosk oben) die gesprochene Sprache je Sender und
+    schlägt sie vor — NIE automatisch scharf geschaltet, jeder Vorschlag muss unten bestätigt
+    werden. Läuft am ressourcenschonendsten nachts, wenn das konfigurierte Zeitfenster erreicht
+    ist; der "Jetzt scannen"-Knopf funktioniert unabhängig davon jederzeit.</p>
+
+  <form id="night-scan-form">
+    <label class="checkbox">
+      <input type="checkbox" id="night-scan-enabled"> <span data-i18n="cfg_active_label">aktiv</span>
+    </label>
+    <label class="checkbox">
+      <input type="checkbox" id="night-scan-hours-enabled"> <span data-i18n="cfg_night_scan_hours_enabled_label">nur zu bestimmten Stunden aktiv (automatischer Lauf)</span>
+    </label>
+    <div class="hours-row">
+      <label><span data-i18n="cfg_nb_hour_start_label">von Stunde</span>
+        <input type="number" id="night-scan-hour-start" min="0" max="24" step="1">
+      </label>
+      <label><span data-i18n="cfg_nb_hour_end_label">bis Stunde</span>
+        <input type="number" id="night-scan-hour-end" min="0" max="24" step="1">
+      </label>
+    </div>
+    <label><span data-i18n="cfg_night_scan_whisper_size_label">Whisper-Modellgröße</span>
+      <input type="text" id="night-scan-whisper-size" placeholder="tiny">
+    </label>
+    <label><span data-i18n="cfg_night_scan_timeout_label">Max. Wartezeit pro Sender (Sekunden)</span>
+      <input type="number" id="night-scan-timeout" min="10" max="600" step="5" required>
+    </label>
+    <label><span data-i18n="cfg_night_scan_min_speech_label">Mindest-Sprachanteil (Sekunden)</span>
+      <input type="number" id="night-scan-min-speech" min="5" max="120" step="1" required>
+    </label>
+    <label><span data-i18n="cfg_night_scan_concurrency_label">Sender gleichzeitig</span>
+      <input type="number" id="night-scan-concurrency" min="1" max="8" step="1" required>
+    </label>
+    <button type="submit" data-i18n="common_save">Speichern</button>
+  </form>
+
+  <div id="night-scan-controls">
+    <button type="button" id="btn-night-scan-start" data-i18n="cfg_night_scan_start_btn">🌙 Jetzt scannen</button>
+    <button type="button" id="btn-night-scan-stop" hidden data-i18n="cfg_night_scan_stop_btn">Stoppen</button>
+  </div>
+  <p class="hint" id="night-scan-progress-text"></p>
+  <p class="hint" id="night-scan-coverage-text"></p>
+
+  <table id="night-scan-suggestions-table">
+    <thead><tr>
+      <th data-i18n="cfg_night_scan_col_station">Sender</th>
+      <th data-i18n="cfg_night_scan_col_status">Status</th>
+      <th data-i18n="cfg_night_scan_col_result">Ergebnis</th>
+      <th></th>
+    </tr></thead>
+    <tbody id="night-scan-suggestions-tbody"></tbody>
+  </table>
+  <p class="hint empty" id="night-scan-suggestions-empty" data-i18n="cfg_night_scan_no_suggestions">Keine offenen Vorschläge.</p>
 </section>
 
 <section id="fingerprint-section">
@@ -3318,6 +3726,12 @@ function esc(s) {
 }
 
 let categories = [];
+// Zuletzt geladene Senderliste (data.stations) -- gecacht, damit
+// renderStationsList() (Sprache-Dropdown braucht lastSttCfg.languages,
+// siehe dortiger Aufruf) auch dann neu rendern kann, wenn loadSettings()
+// NACH loadStations() fertig wird, ohne einen weiteren API-Request
+// auszulösen (gleicher Grund/gleiches Muster wie lastSttCfg unten).
+let lastStationsData = null;
 // "Unsortiert" landet nach einem Import oft mit hunderten Sendern (siehe
 // CLAUDE.md, "Config-Seite skaliert nicht auf mehrere hundert Sender") --
 // standardmäßig eingeklappt hinter einem <details>. loadStations() baut die
@@ -3358,13 +3772,34 @@ async function loadStations() {
     showMsg(t('cfg_load_stations_failed', {msg: e.message}), true);
     return;
   }
+  lastStationsData = data;
   categories = data.categories;
   renderSttCategoryLanguages();  // categories jetzt bekannt -- siehe dortiger Docstring
+  renderStationsList();
+}
+
+// Getrennt von loadStations() (Fetch), damit loadSettings() nach seinem
+// eigenen Laden neu rendern kann, sobald lastSttCfg.languages (fürs
+// Sprache-Dropdown pro Sender) bereitsteht -- gleiches Timing-Problem/
+// gleiche Lösung wie bei renderSttCategoryLanguages() oben.
+function renderStationsList() {
+  const data = lastStationsData;
+  if (!data) return;
+
+  renderNightScanSuggestions();  // braucht Sender-Namen aus lastStationsData, siehe dort
+  renderNightScanCoverage();     // ebenso, siehe dort
 
   const addCategorySelect = document.getElementById('add-category');
   const prevAddCategory = addCategorySelect.value;
   addCategorySelect.innerHTML = categories.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
   if (categories.includes(prevAddCategory)) addCategorySelect.value = prevAddCategory;
+
+  const addLangSelect = document.getElementById('add-language');
+  const prevAddLang = addLangSelect.value;
+  const addLangCodes = Object.keys((lastSttCfg && lastSttCfg.languages) || {}).sort();
+  addLangSelect.innerHTML = ['<option value="">' + esc(t('cfg_station_lang_default')) + '</option>']
+    .concat(addLangCodes.map(code => `<option value="${esc(code)}">${esc(code)}</option>`)).join('');
+  if (addLangCodes.includes(prevAddLang)) addLangSelect.value = prevAddLang;
 
   const container = document.getElementById('categories');
   container.innerHTML = '';
@@ -3459,9 +3894,21 @@ function renderStationRow(s) {
     catSelect.innerHTML = categories.map(c =>
       `<option value="${esc(c)}"${c === s.category ? ' selected' : ''}>${esc(c)}</option>`).join('');
 
+    // Sprache-Override pro Sender (siehe stations_store.py-Moduldocstring):
+    // Optionen kommen aus lastSttCfg.languages -- ggf. noch nicht geladen
+    // (siehe renderStationsList()-Docstring), dann bleibt nur "Standard".
+    const langCodes = Object.keys((lastSttCfg && lastSttCfg.languages) || {}).sort();
+    const langSelect = document.createElement('select');
+    langSelect.title = t('cfg_station_lang_label');
+    langSelect.innerHTML = ['<option value="">' + esc(t('cfg_station_lang_default')) + '</option>']
+      .concat(langCodes.map(code =>
+        `<option value="${esc(code)}"${code === (s.language || '') ? ' selected' : ''}>${esc(code)}</option>`))
+      .join('');
+
     fields.appendChild(nameInput);
     fields.appendChild(urlInput);
     fields.appendChild(catSelect);
+    fields.appendChild(langSelect);
     li.appendChild(fields);
 
     const saveBtn = document.createElement('button');
@@ -3474,6 +3921,7 @@ function renderStationRow(s) {
           body: JSON.stringify({
             name: nameInput.value, url: urlInput.value,
             category: catSelect.value, enabled: s.enabled,
+            language: langSelect.value,
           }),
         });
         editingId = null;
@@ -3515,7 +3963,10 @@ function renderStationRow(s) {
 
   const nameDiv = document.createElement('div');
   nameDiv.className = 'name';
-  nameDiv.innerHTML = `${esc(s.name)}<span class="url">${esc(s.url)}</span>`;
+  const langBadge = s.language
+    ? `<span class="lang-badge" title="${esc(t('cfg_station_lang_badge_title'))}">${esc(s.language)}</span>`
+    : '';
+  nameDiv.innerHTML = `${esc(s.name)}${langBadge}<span class="url">${esc(s.url)}</span>`;
   li.appendChild(nameDiv);
 
   const editBtn = document.createElement('button');
@@ -3545,12 +3996,13 @@ document.getElementById('add-form').addEventListener('submit', async (ev) => {
   const name = document.getElementById('add-name').value;
   const url = document.getElementById('add-url').value;
   const category = document.getElementById('add-category').value;
+  const language = document.getElementById('add-language').value;
   const enabled = document.getElementById('add-enabled').checked;
   try {
     await api('/api/config/stations', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({name, url, category, enabled}),
+      body: JSON.stringify({name, url, category, enabled, language}),
     });
     document.getElementById('add-form').reset();
     document.getElementById('add-enabled').checked = true;
@@ -3588,20 +4040,46 @@ function renderSttLanguages(hostPaths) {
     else if (err === null) { statusText = t('cfg_stt_lang_status_ok'); statusClass = 'status-ok'; }
     else { statusText = t('cfg_stt_lang_status_error', {error: err}); statusClass = 'status-error'; }
     const tr = document.createElement('tr');
+    const actionsTd = document.createElement('td');
     tr.innerHTML = `<td>${esc(code)}</td><td>${esc(entry.vosk_model_path || '')}</td>` +
-      `<td>${esc(entry.confidence_threshold)}</td><td class="${statusClass}">${esc(statusText)}</td>` +
-      `<td><button type="button" data-code="${esc(code)}">${esc(t('common_delete'))}</button></td>`;
+      `<td>${esc(entry.confidence_threshold)}</td><td class="${statusClass}">${esc(statusText)}</td>`;
+    tr.appendChild(actionsTd);
     tbody.appendChild(tr);
-    tr.querySelector('button').onclick = async () => {
-      if (!confirm(t('cfg_stt_lang_delete_confirm', {code}))) return;
+
+    async function doDelete(deleteFiles) {
+      const confirmMsg = deleteFiles
+        ? t('cfg_stt_lang_delete_files_confirm', {code})
+        : t('cfg_stt_lang_delete_confirm', {code});
+      if (!confirm(confirmMsg)) return;
       try {
-        await api('/api/config/stt-languages/' + encodeURIComponent(code) + '/delete', {method: 'POST'});
+        await api('/api/config/stt-languages/' + encodeURIComponent(code) + '/delete', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({delete_files: deleteFiles}),
+        });
         showMsg(t('cfg_stt_lang_deleted'), false);
         loadSettings();
       } catch (e) {
         showMsg(t('common_error', {msg: e.message}), true);
       }
-    };
+    }
+
+    const delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.textContent = entry.source === 'downloaded' ? t('cfg_stt_lang_delete_entry_only') : t('common_delete');
+    delBtn.onclick = () => doDelete(false);
+    actionsTd.appendChild(delBtn);
+
+    // Datei-Löschoption nur für per Download entstandene Modelle -- ein
+    // manuell eingetragener Pfad (z.B. der alte, read-only gemountete
+    // Ordner) kann/darf hier nicht angefasst werden, siehe
+    // webui._handle_stt_language_action()-Kommentar.
+    if (entry.source === 'downloaded') {
+      const delFilesBtn = document.createElement('button');
+      delFilesBtn.type = 'button';
+      delFilesBtn.textContent = t('cfg_stt_lang_delete_files_btn');
+      delFilesBtn.onclick = () => doDelete(true);
+      actionsTd.appendChild(delFilesBtn);
+    }
   }
 }
 
@@ -3647,6 +4125,290 @@ document.getElementById('stt-lang-add-form').addEventListener('submit', async (e
     document.getElementById('stt-lang-threshold').value = '0.6';
     showMsg(t('cfg_stt_lang_saved'), false);
     loadSettings();
+  } catch (e) {
+    showMsg(t('common_error', {msg: e.message}), true);
+  }
+});
+
+// Katalog bekannter Vosk-Modelle fürs Download-Dropdown (siehe
+// vosk_catalog.py) -- neu geladen bei jedem loadSettings()-Durchlauf
+// (Aufruf am Ende von renderSttLanguages() unten), weil sich die "schon
+// installiert"-Filterung mit jeder Sprachänderung verschiebt.
+async function loadVoskCatalog() {
+  const select = document.getElementById('stt-lang-download-select');
+  let data;
+  try {
+    data = await api('/api/config/stt-languages/catalog');
+  } catch (e) {
+    return; // still bleiben -- kein kritischer Pfad, Formular bleibt einfach leer
+  }
+  const prev = select.value;
+  select.innerHTML = data.catalog.map(e =>
+    `<option value="${esc(e.key)}">${esc(e.display_name)} (~${e.size_mb} MB)</option>`).join('');
+  if (data.catalog.some(e => e.key === prev)) select.value = prev;
+}
+
+let voskDownloadPolling = null;
+
+function formatMb(bytes) {
+  return (bytes / (1024 * 1024)).toFixed(0);
+}
+
+function setVoskDownloadUiRunning(running) {
+  document.getElementById('btn-stt-lang-download').disabled = running;
+  document.getElementById('stt-lang-download-select').disabled = running;
+  document.getElementById('stt-lang-download-progress').hidden = !running;
+}
+
+async function pollVoskDownloadStatus() {
+  let data;
+  try {
+    data = await api('/api/config/stt-languages/download/status');
+  } catch (e) {
+    return;
+  }
+
+  if (data.running) {
+    const bar = document.getElementById('stt-lang-download-bar');
+    const text = document.getElementById('stt-lang-download-status-text');
+    if (data.phase === 'downloading' && data.total > 0) {
+      const pct = Math.min(100, Math.round((data.downloaded / data.total) * 100));
+      bar.style.width = pct + '%';
+      text.textContent = t('cfg_stt_lang_download_progress_bytes',
+        {done: formatMb(data.downloaded), total: formatMb(data.total), pct});
+    } else if (data.phase === 'downloading') {
+      bar.style.width = '0%';
+      text.textContent = t('cfg_stt_lang_download_progress_unknown', {done: formatMb(data.downloaded)});
+    } else if (data.phase === 'extracting') {
+      bar.style.width = '100%';
+      text.textContent = t('cfg_stt_lang_download_extracting');
+    } else if (data.phase === 'installing') {
+      bar.style.width = '100%';
+      text.textContent = t('cfg_stt_lang_download_installing');
+    }
+    return;
+  }
+
+  if (voskDownloadPolling) {
+    clearInterval(voskDownloadPolling);
+    voskDownloadPolling = null;
+  }
+  setVoskDownloadUiRunning(false);
+  if (data.phase === 'error') {
+    showMsg(t('cfg_stt_lang_download_failed', {error: data.error}), true);
+  } else if (data.phase === 'done' && data.result) {
+    showMsg(t('cfg_stt_lang_download_done', {code: data.result.code}), false);
+  }
+  loadSettings();
+}
+
+document.getElementById('btn-stt-lang-download').addEventListener('click', async () => {
+  const select = document.getElementById('stt-lang-download-select');
+  const catalog_key = select.value;
+  if (!catalog_key) return;
+  try {
+    setVoskDownloadUiRunning(true);
+    document.getElementById('stt-lang-download-bar').style.width = '0%';
+    document.getElementById('stt-lang-download-status-text').textContent = '';
+    await api('/api/config/stt-languages/download', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({catalog_key}),
+    });
+    if (voskDownloadPolling) clearInterval(voskDownloadPolling);
+    voskDownloadPolling = setInterval(pollVoskDownloadStatus, 1000);
+    pollVoskDownloadStatus();
+  } catch (e) {
+    setVoskDownloadUiRunning(false);
+    showMsg(t('common_error', {msg: e.message}), true);
+  }
+});
+
+document.getElementById('night-scan-form').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const night_scan_enabled = document.getElementById('night-scan-enabled').checked;
+  const hoursEnabled = document.getElementById('night-scan-hours-enabled').checked;
+  let night_scan_enabled_hours = null;
+  if (hoursEnabled) {
+    const start = parseInt(document.getElementById('night-scan-hour-start').value, 10);
+    const end = parseInt(document.getElementById('night-scan-hour-end').value, 10);
+    night_scan_enabled_hours = [start, end];
+  }
+  const night_scan_whisper_model_size = document.getElementById('night-scan-whisper-size').value;
+  const night_scan_capture_timeout_seconds = parseFloat(document.getElementById('night-scan-timeout').value);
+  const night_scan_min_speech_seconds = parseFloat(document.getElementById('night-scan-min-speech').value);
+  const night_scan_concurrency = parseInt(document.getElementById('night-scan-concurrency').value, 10);
+  try {
+    await api('/api/config/settings', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        night_scan_enabled, night_scan_enabled_hours, night_scan_whisper_model_size,
+        night_scan_capture_timeout_seconds, night_scan_min_speech_seconds, night_scan_concurrency,
+      }),
+    });
+    showMsg(t('cfg_night_scan_saved'), false);
+  } catch (e) {
+    showMsg(t('common_error', {msg: e.message}), true);
+  }
+});
+
+// station_id -> {label, language, confidence, scanned_at}, zuletzt aus
+// settings.night_scan.suggestions geladen (siehe loadSettings()).
+let lastNightScanSuggestions = {};
+// station_id -> Unix-Timestamp, zuletzt aus settings.night_scan.scanned_at
+// geladen -- getrennt von lastNightScanSuggestions (siehe
+// settings_store.py-DEFAULTS-Kommentar: überlebt Bestätigen/Verwerfen),
+// hier nur für die Fortschrittsanzeige (renderNightScanCoverage()) gebraucht.
+let lastNightScanScannedAt = {};
+let nightScanPolling = null;
+
+function nightScanResultText(suggestion) {
+  if (suggestion.label === 'detected') {
+    const pct = Math.round((suggestion.confidence || 0) * 100);
+    return t('cfg_night_scan_result_detected', {language: suggestion.language, pct});
+  }
+  if (suggestion.label === 'music') return t('cfg_night_scan_result_music');
+  if (suggestion.label === 'unreachable') return t('cfg_night_scan_result_unreachable');
+  return suggestion.label;
+}
+
+// Reine Frontend-Berechnung (Daten sind über lastStationsData/
+// lastNightScanScannedAt schon da, kein eigener Endpoint nötig): wie viele
+// der noch offenen (kein eigenes language-Feld) Sender wurden schon
+// mindestens einmal gescannt -- getrennt nach aktiv/deaktiviert, weil das
+// genau die zwei Fragen beantwortet, die bei 350+ Sendern sonst schwer zu
+// überblicken sind: "ist der Aktiv-Durchlauf durch?" und "wie weit ist
+// der große Rest?".
+function renderNightScanCoverage() {
+  const el = document.getElementById('night-scan-coverage-text');
+  if (!lastStationsData) { el.textContent = ''; return; }
+  const eligible = lastStationsData.stations.filter(s => !s.language);
+  const active = eligible.filter(s => s.enabled);
+  const disabled = eligible.filter(s => !s.enabled);
+  const scannedCount = list => list.filter(s => lastNightScanScannedAt[s.id] !== undefined).length;
+  el.textContent = t('cfg_night_scan_coverage', {
+    activeScanned: scannedCount(active), activeTotal: active.length,
+    disabledScanned: scannedCount(disabled), disabledTotal: disabled.length,
+  });
+}
+
+function renderNightScanSuggestions() {
+  const tbody = document.getElementById('night-scan-suggestions-tbody');
+  const emptyHint = document.getElementById('night-scan-suggestions-empty');
+  tbody.innerHTML = '';
+  const ids = Object.keys(lastNightScanSuggestions);
+  document.getElementById('night-scan-suggestions-table').hidden = ids.length === 0;
+  emptyHint.hidden = ids.length !== 0;
+
+  const stationsById = {};
+  if (lastStationsData) {
+    for (const s of lastStationsData.stations) stationsById[s.id] = s;
+  }
+  // Aktive Sender zuerst (gleiche Priorität wie beim Scan selbst, siehe
+  // NightScanScheduler._run_scan()), sonst nach Namen -- bei 350+
+  // möglichen Zeilen sonst unübersichtlich in Zufallsreihenfolge (Objekt-
+  // Key-Reihenfolge folgt der Scan-Fertigstellung, nicht der Relevanz).
+  ids.sort((a, b) => {
+    const sa = stationsById[a], sb = stationsById[b];
+    const enabledDiff = (sb ? sb.enabled : true) - (sa ? sa.enabled : true);
+    if (enabledDiff !== 0) return enabledDiff;
+    return (sa ? sa.name : a).localeCompare(sb ? sb.name : b, LANG);
+  });
+
+  for (const id of ids) {
+    const suggestion = lastNightScanSuggestions[id];
+    const station = stationsById[id];
+    const name = station ? station.name : id;
+    const statusText = station && !station.enabled
+      ? t('cfg_night_scan_status_disabled') : t('cfg_night_scan_status_active');
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${esc(name)}</td>` +
+      `<td>${esc(statusText)}</td>` +
+      `<td class="label-${esc(suggestion.label)}">${esc(nightScanResultText(suggestion))}</td>`;
+    const actionsTd = document.createElement('td');
+    tr.appendChild(actionsTd);
+    tbody.appendChild(tr);
+
+    async function act(action) {
+      try {
+        await api('/api/config/night-scan/suggestions/' + encodeURIComponent(id) + '/' + action,
+          {method: 'POST'});
+        delete lastNightScanSuggestions[id];
+        renderNightScanSuggestions();
+        if (action === 'confirm') { showMsg(t('cfg_night_scan_confirmed'), false); loadStations(); }
+      } catch (e) {
+        showMsg(t('common_error', {msg: e.message}), true);
+      }
+    }
+
+    if (suggestion.label === 'detected') {
+      const confirmBtn = document.createElement('button');
+      confirmBtn.type = 'button';
+      confirmBtn.textContent = t('cfg_night_scan_confirm_btn');
+      confirmBtn.onclick = () => act('confirm');
+      actionsTd.appendChild(confirmBtn);
+    }
+    const dismissBtn = document.createElement('button');
+    dismissBtn.type = 'button';
+    dismissBtn.textContent = t('cfg_night_scan_dismiss_btn');
+    dismissBtn.onclick = () => act('dismiss');
+    actionsTd.appendChild(dismissBtn);
+  }
+}
+
+function setNightScanUiRunning(running) {
+  document.getElementById('btn-night-scan-start').disabled = running;
+  document.getElementById('btn-night-scan-stop').hidden = !running;
+}
+
+async function pollNightScanStatus() {
+  let data;
+  try {
+    data = await api('/api/config/night-scan/status');
+  } catch (e) {
+    return;
+  }
+
+  const text = document.getElementById('night-scan-progress-text');
+  if (data.running) {
+    text.textContent = data.total
+      ? t('cfg_night_scan_progress', {checked: data.checked, total: data.total, current: data.current || ''})
+      : t('cfg_night_scan_starting');
+    return;
+  }
+
+  if (nightScanPolling) {
+    clearInterval(nightScanPolling);
+    nightScanPolling = null;
+  }
+  setNightScanUiRunning(false);
+  if (data.phase === 'error') {
+    text.textContent = '';
+    showMsg(t('cfg_night_scan_failed', {error: data.error}), true);
+  } else if (data.phase === 'done' && data.result) {
+    text.textContent = '';
+    showMsg(t('cfg_night_scan_done', {scanned: data.result.scanned, total: data.result.total}), false);
+    loadSettings();  // neue Vorschläge sichtbar machen
+  }
+}
+
+document.getElementById('btn-night-scan-start').addEventListener('click', async () => {
+  try {
+    setNightScanUiRunning(true);
+    document.getElementById('night-scan-progress-text').textContent = t('cfg_night_scan_starting');
+    await api('/api/config/night-scan/start', {method: 'POST'});
+    if (nightScanPolling) clearInterval(nightScanPolling);
+    nightScanPolling = setInterval(pollNightScanStatus, 2000);
+    pollNightScanStatus();
+  } catch (e) {
+    setNightScanUiRunning(false);
+    showMsg(t('common_error', {msg: e.message}), true);
+  }
+});
+
+document.getElementById('btn-night-scan-stop').addEventListener('click', async () => {
+  try {
+    await api('/api/config/night-scan/stop', {method: 'POST'});
   } catch (e) {
     showMsg(t('common_error', {msg: e.message}), true);
   }
@@ -3707,6 +4469,23 @@ async function loadSettings() {
     lastSttLangStatus = settings._stt_language_status || {};
     renderSttLanguages(hostPaths);
     renderSttCategoryLanguages();  // siehe Docstring dort (categories ggf. noch nicht da)
+    renderStationsList();  // Sprache-Dropdown pro Sender braucht lastSttCfg.languages, siehe dort
+    if (!voskDownloadPolling) loadVoskCatalog();  // während eines laufenden Downloads nicht überschreiben
+
+    const nightScan = settings.night_scan || {};
+    document.getElementById('night-scan-enabled').checked = !!nightScan.enabled;
+    const nsHours = nightScan.enabled_hours;
+    document.getElementById('night-scan-hours-enabled').checked = !!nsHours;
+    document.getElementById('night-scan-hour-start').value = nsHours ? nsHours[0] : '';
+    document.getElementById('night-scan-hour-end').value = nsHours ? nsHours[1] : '';
+    document.getElementById('night-scan-whisper-size').value = nightScan.whisper_model_size || '';
+    document.getElementById('night-scan-timeout').value = nightScan.capture_timeout_seconds;
+    document.getElementById('night-scan-min-speech').value = nightScan.min_speech_seconds;
+    document.getElementById('night-scan-concurrency').value = nightScan.concurrency;
+    lastNightScanSuggestions = nightScan.suggestions || {};
+    lastNightScanScannedAt = nightScan.scanned_at || {};
+    renderNightScanSuggestions();
+    renderNightScanCoverage();
   } catch (e) {
     showMsg(t('cfg_load_settings_failed', {msg: e.message}), true);
   }
@@ -4316,6 +5095,29 @@ setInterval(pollCalibration, 2000);
   }
 })();
 
+// Gleiches Resume-Muster wie beim Import direkt oben, für einen noch
+// laufenden Vosk-Modell-Download.
+(async () => {
+  const data = await api('/api/config/stt-languages/download/status').catch(() => null);
+  if (data && data.running) {
+    setVoskDownloadUiRunning(true);
+    voskDownloadPolling = setInterval(pollVoskDownloadStatus, 1000);
+    pollVoskDownloadStatus();
+  }
+})();
+
+// Gleiches Resume-Muster wie beim Import/Vosk-Download oben, für einen noch
+// laufenden nächtlichen Sender-Scan (z.B. automatisch nachts gestartet,
+// Config-Seite wird morgens zum ersten Mal seither aufgerufen).
+(async () => {
+  const data = await api('/api/config/night-scan/status').catch(() => null);
+  if (data && data.running) {
+    setNightScanUiRunning(true);
+    nightScanPolling = setInterval(pollNightScanStatus, 2000);
+    pollNightScanStatus();
+  }
+})();
+
 // Einmaliger Abruf reicht -- update_check ändert sich höchstens 1x/Tag
 // (siehe update_check.py), kein Polling nötig.
 (async () => {
@@ -4407,6 +5209,18 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
 
     import_state = ImportState()
     library_scan_state = LibraryScanState()
+    vosk_download_state = VoskDownloadState()
+    night_scan_state = NightScanState()
+    # Anders als update_check.UpdateChecker (dort bewusst erst in
+    # start_server() gestartet, siehe dortiger Kommentar) hier direkt
+    # gestartet: make_handler() hat ohnehin KEINEN anderen Aufrufer als
+    # start_server() (siehe dessen Docstring-Verweis), der Effekt ist
+    # identisch ("--webui-port 0"-Testläufe rufen start_server() gar
+    # nicht erst auf) -- hier aber einfacher, weil night_scan_scheduler
+    # in denselben Closures wie die Handler-Endpunkte unten leben muss
+    # (_handle_night_scan_start() ruft start_now() auf).
+    night_scan_scheduler = NightScanScheduler(night_scan_state)
+    night_scan_scheduler.start()
     # Einmalig pro Server-Instanz statt pro Request, analog zu import_state:
     # ResourceMonitor hält psutil-Process-Handles über Requests hinweg am
     # Leben, damit cpu_percent() über die Zeit aussagekräftige Deltas liefert
@@ -4537,6 +5351,13 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                 self._send_json(data)
             elif self.path == "/api/config/import/status":
                 self._send_json(import_state.snapshot())
+            elif self.path == "/api/config/stt-languages/catalog":
+                installed = settings_store.load()["stt_filter"]["languages"].keys()
+                self._send_json({"catalog": vosk_catalog.available_entries(installed)})
+            elif self.path == "/api/config/stt-languages/download/status":
+                self._send_json(vosk_download_state.snapshot())
+            elif self.path == "/api/config/night-scan/status":
+                self._send_json(night_scan_state.snapshot())
             elif self.path == "/api/library/scan/status":
                 self._send_json(library_scan_state.snapshot())
             elif self.path == "/api/library/duplicates":
@@ -4591,6 +5412,8 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                 self._handle_update_settings()
             elif self.path == "/api/config/stt-languages":
                 self._handle_add_stt_language()
+            elif self.path == "/api/config/stt-languages/download":
+                self._handle_stt_language_download()
             elif self.path.startswith("/api/config/stt-languages/"):
                 self._handle_stt_language_action()
             elif self.path == "/api/config/stt-category-language":
@@ -4603,6 +5426,13 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                 self._handle_calibration_stop()
             elif self.path == "/api/config/import/start":
                 self._handle_import_start()
+            elif self.path == "/api/config/night-scan/start":
+                self._handle_night_scan_start()
+            elif self.path == "/api/config/night-scan/stop":
+                night_scan_state.request_stop()
+                self._send_json({"ok": True})
+            elif self.path.startswith("/api/config/night-scan/suggestions/"):
+                self._handle_night_scan_suggestion_action()
             elif self.path == "/api/library/scan":
                 self._handle_library_scan_start()
             elif self.path == "/api/mode":
@@ -4676,6 +5506,16 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                     stt_filter_sample_interval_seconds=payload.get("stt_filter_sample_interval_seconds"),
                     stt_filter_combine_mode=payload.get("stt_filter_combine_mode"),
                     update_check_enabled=payload.get("update_check_enabled"),
+                    night_scan_enabled=payload.get("night_scan_enabled"),
+                    night_scan_enabled_hours=(
+                        payload["night_scan_enabled_hours"]
+                        if "night_scan_enabled_hours" in payload
+                        else settings_store.UNSET
+                    ),
+                    night_scan_whisper_model_size=payload.get("night_scan_whisper_model_size"),
+                    night_scan_capture_timeout_seconds=payload.get("night_scan_capture_timeout_seconds"),
+                    night_scan_min_speech_seconds=payload.get("night_scan_min_speech_seconds"),
+                    night_scan_concurrency=payload.get("night_scan_concurrency"),
                 )
                 state.request_reload()
                 self._send_json({"ok": True, "settings": settings})
@@ -4725,6 +5565,14 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
             # keine eigene stabile ID neben ihrem Code braucht.
             payload = self._read_json_body()
             try:
+                # source bewusst NICHT explizit gesetzt: für einen neuen
+                # Sprachcode greift der "manual"-Default in
+                # settings_store.set_stt_language(); bearbeitet dieses
+                # Formular eine per Download entstandene Sprache weiter
+                # (z.B. nur die Konfidenz-Schwelle nachjustiert), bleibt
+                # deren "downloaded"-Herkunft erhalten -- sonst würde ein
+                # simples Nachjustieren die Datei-Löschoption unbemerkt
+                # wieder wegnehmen (siehe _handle_stt_language_action()).
                 entry = settings_store.set_stt_language(
                     payload.get("lang_code", ""),
                     vosk_model_path=payload.get("vosk_model_path"),
@@ -4743,14 +5591,76 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                 self.send_error(404)
                 return
             lang_code = urllib.parse.unquote(parts[0])
+            payload = self._read_json_body()
+            delete_files = bool(payload.get("delete_files", False))
             try:
-                settings_store.delete_stt_language(lang_code)
-                state.request_reload()
-                self._send_json({"ok": True})
+                deleted = settings_store.delete_stt_language(lang_code)
             except KeyError:
                 self._send_json({"ok": False, "error": "Sprache nicht gefunden"}, status=404)
+                return
             except ValueError as e:
                 self._send_json({"ok": False, "error": str(e)}, status=400)
+                return
+            state.request_reload()
+            files_deleted = False
+            if delete_files:
+                # Nur Modelle löschen, die über den Download-Flow entstanden
+                # UND nachweislich unter VOSK_MODELS_DIR liegen (Herkunfts-
+                # UND Pfad-Check, nicht nur einer von beiden -- siehe
+                # settings_store.set_stt_language()-Docstring und
+                # ARCHITECTURE.md: ein manuell eingetragener Pfad, auch
+                # wenn er zufällig "downloaded" markiert wäre, darf nie
+                # blind per rmtree() angefasst werden. Alte, read-only
+                # gemountete Sprachen (source="manual") sind dadurch
+                # automatisch ausgeschlossen -- rmtree() würde dort ohnehin
+                # an der fehlenden Schreibberechtigung scheitern.
+                path = deleted.get("vosk_model_path") or ""
+                real_path = os.path.realpath(path) if path else ""
+                real_root = os.path.realpath(VOSK_MODELS_DIR)
+                if (deleted.get("source") == "downloaded" and real_path
+                        and (real_path == real_root or real_path.startswith(real_root + os.sep))
+                        and os.path.isdir(real_path)):
+                    shutil.rmtree(real_path, ignore_errors=True)
+                    files_deleted = True
+                    log.info("🗑 Modell-Dateien von '%s' gelöscht (%s).", lang_code, real_path)
+                else:
+                    log.warning("⚠ Modell-Dateien von '%s' NICHT gelöscht (Pfad %r liegt nicht "
+                                "unter dem verwalteten Download-Ordner oder ist kein "
+                                "heruntergeladenes Modell) -- nur der Konfigurationseintrag "
+                                "wurde entfernt.", lang_code, path)
+            self._send_json({"ok": True, "files_deleted": files_deleted})
+
+        def _handle_stt_language_download(self):
+            payload = self._read_json_body()
+            catalog_key = payload.get("catalog_key", "")
+            entry = vosk_catalog.CATALOG_BY_KEY.get(catalog_key)
+            if entry is None:
+                self._send_json({"ok": False, "error": "Unbekannter Katalog-Eintrag."}, status=400)
+                return
+            if entry["code"] in settings_store.load()["stt_filter"]["languages"]:
+                self._send_json({"ok": False, "error": "Sprache ist bereits konfiguriert."}, status=409)
+                return
+            if not vosk_download_state.start(catalog_key):
+                self._send_json({"ok": False, "error": "Es läuft bereits ein Modell-Download."},
+                                 status=409)
+                return
+
+            def worker():
+                try:
+                    result = vosk_download.download_and_install(
+                        catalog_key, VOSK_MODELS_DIR, progress=vosk_download_state)
+                    settings_store.set_stt_language(
+                        result["code"], vosk_model_path=result["path"],
+                        confidence_threshold=DEFAULT_DOWNLOADED_CONFIDENCE_THRESHOLD,
+                        source="downloaded")
+                    vosk_download_state.finish(result)
+                    state.request_reload()
+                except Exception as e:
+                    log.exception("⚠ Vosk-Modell-Download fehlgeschlagen (%s).", catalog_key)
+                    vosk_download_state.fail(str(e))
+
+            threading.Thread(target=worker, daemon=True, name="vosk-download").start()
+            self._send_json({"ok": True})
 
         def _handle_set_category_language(self):
             payload = self._read_json_body()
@@ -4843,6 +5753,56 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                     import_state.fail(str(e))
 
             threading.Thread(target=worker, daemon=True, name="import").start()
+            self._send_json({"ok": True})
+
+        def _handle_night_scan_start(self):
+            # "🌙 Jetzt scannen"-Knopf: manueller Trigger, ignoriert
+            # enabled_hours/last_run_date (siehe
+            # NightScanScheduler.start_now()). night_scan.enabled selbst
+            # wird NICHT verlangt -- ein manueller Testlauf soll auch bei
+            # deaktiviertem Feature möglich sein, genau wie die
+            # STT-Kalibrierung unabhängig vom STT-Filter-Schalter lief.
+            if not night_scan_scheduler.start_now():
+                self._send_json({
+                    "ok": False,
+                    "error": "Es läuft bereits ein nächtlicher Sender-Scan.",
+                }, status=409)
+                return
+            self._send_json({"ok": True})
+
+        def _handle_night_scan_suggestion_action(self):
+            # Pfadschema: /api/config/night-scan/suggestions/<id>/confirm|dismiss
+            rest = self.path[len("/api/config/night-scan/suggestions/"):]
+            parts = [p for p in rest.split("/") if p]
+            if len(parts) != 2 or parts[1] not in ("confirm", "dismiss"):
+                self.send_error(404)
+                return
+            station_id = urllib.parse.unquote(parts[0])
+            action = parts[1]
+
+            suggestions = settings_store.load()["night_scan"]["suggestions"]
+            suggestion = suggestions.get(station_id)
+            if suggestion is None:
+                self._send_json({"ok": False, "error": "Kein Vorschlag für diesen Sender."}, status=404)
+                return
+
+            if action == "confirm":
+                if suggestion["label"] != "detected":
+                    # "Vorwiegend Musik"/"nicht erreichbar" haben keine
+                    # Sprache zum Übernehmen -- fürs Frontend zeigt genau
+                    # deshalb nur label="detected" einen "Übernehmen"-Knopf,
+                    # das hier ist nur die serverseitige Absicherung.
+                    self._send_json({"ok": False, "error": "Dieser Vorschlag hat keine Sprache "
+                                                             "zum Übernehmen."}, status=400)
+                    return
+                try:
+                    stations_store.set_language(station_id, suggestion["language"])
+                except KeyError:
+                    self._send_json({"ok": False, "error": "Sender nicht gefunden"}, status=404)
+                    return
+                state.request_reload()
+
+            settings_store.clear_night_scan_suggestion(station_id)
             self._send_json({"ok": True})
 
         def _handle_library_scan_start(self):
@@ -5063,6 +6023,7 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                 station = stations_store.add(
                     payload.get("name", ""), payload.get("url", ""),
                     payload.get("category", ""), payload.get("enabled", True),
+                    payload.get("language", ""),
                 )
                 state.request_reload()
                 self._send_json({"ok": True, "station": station})
@@ -5085,6 +6046,7 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                     station = stations_store.update(
                         station_id, payload.get("name", ""), payload.get("url", ""),
                         payload.get("category", ""), payload.get("enabled", True),
+                        payload.get("language", ""),
                     )
                     state.request_reload()
                     self._send_json({"ok": True, "station": station})

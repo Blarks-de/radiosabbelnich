@@ -76,6 +76,10 @@ COPY python/music_query.py .
 COPY python/music_scan.py .
 COPY python/folder_browse.py .
 COPY python/stt_filter.py .
+COPY python/vosk_catalog.py .
+COPY python/vosk_download.py .
+COPY python/vosk_language_check.py .
+COPY python/night_scan.py .
 COPY python/i18n.py .
 COPY python/resource_monitor.py .
 COPY python/update_check.py .
@@ -118,12 +122,12 @@ COPY language/ language/
 # auf DEBUG-Niveau (VAD-Werte, Fingerprint-Details, HTTP-Requests), da muss
 # `docker compose logs` nicht dieselbe Flut nochmal zeigen. Wer sie doch auf
 # der Konsole haben will, hängt --verbose hier an.
-# NEWS_MP3_FOLDER_HOST/VOSK_MODEL_FOLDER_HOST/MUSIC_LIBRARY_FOLDER_HOST sind
-# rein informativ (siehe
+# NEWS_MP3_FOLDER_HOST/VOSK_MODEL_FOLDER_HOST/VOSK_MODELS_FOLDER_HOST/
+# MUSIC_LIBRARY_FOLDER_HOST sind rein informativ (siehe
 # webui.py/make_handler()) -- dieselben .env-Werte, die docker-compose.yml
 # schon für die eigentlichen Bind-Mounts nutzt, hier zusätzlich als
 # Klartext-Umgebungsvariable durchgereicht, damit die Config-Seite den
 # echten Host-Pfad anzeigen kann. Der Container kann ihn sonst grundsätzlich
 # nicht kennen -- Docker übersetzt Host->Container-Pfad einmalig beim
 # Start, danach ist das für den laufenden Prozess unsichtbar.
-ENTRYPOINT ["sh", "-c", "python3 -u radiosabbelnich.py --icecast-url \"$ICECAST_URL\" --webui-port 5000 --icecast-admin-url \"$ICECAST_ADMIN_URL\" --icecast-admin-user \"$ICECAST_ADMIN_USER\" --icecast-admin-password \"$ICECAST_ADMIN_PASSWORD\" --icecast-mount \"${ICECAST_MOUNT:-/radiosabbelnich.mp3}\" --icecast-public-port \"${ICECAST_PUBLIC_PORT:-8000}\" --icecast-public-ssl-port \"${ICECAST_PUBLIC_SSL_PORT:-}\" --tls-cert-file \"${TLS_CERT_PATH:-}\" --tls-key-file \"${TLS_KEY_PATH:-}\" --news-mp3-folder-host \"${NEWS_MP3_FOLDER_HOST:-}\" --vosk-model-folder-host \"${VOSK_MODEL_FOLDER_HOST:-}\" --music-library-folder-host \"${MUSIC_LIBRARY_FOLDER_HOST:-}\""]
+ENTRYPOINT ["sh", "-c", "python3 -u radiosabbelnich.py --icecast-url \"$ICECAST_URL\" --webui-port 5000 --icecast-admin-url \"$ICECAST_ADMIN_URL\" --icecast-admin-user \"$ICECAST_ADMIN_USER\" --icecast-admin-password \"$ICECAST_ADMIN_PASSWORD\" --icecast-mount \"${ICECAST_MOUNT:-/radiosabbelnich.mp3}\" --icecast-public-port \"${ICECAST_PUBLIC_PORT:-8000}\" --icecast-public-ssl-port \"${ICECAST_PUBLIC_SSL_PORT:-}\" --tls-cert-file \"${TLS_CERT_PATH:-}\" --tls-key-file \"${TLS_KEY_PATH:-}\" --news-mp3-folder-host \"${NEWS_MP3_FOLDER_HOST:-}\" --vosk-model-folder-host \"${VOSK_MODEL_FOLDER_HOST:-}\" --vosk-models-folder-host \"${VOSK_MODELS_FOLDER_HOST:-}\" --music-library-folder-host \"${MUSIC_LIBRARY_FOLDER_HOST:-}\""]

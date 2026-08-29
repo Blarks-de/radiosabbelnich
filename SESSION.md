@@ -9901,3 +9901,563 @@ Sektion es NICHT tut, anders als die alle-5s-aktualisierte
 Ressourcen-Tabelle) — die zugrundeliegenden DB-Werte ändern sich zu
 langsam, um ein Polling zu rechtfertigen. Noch kein Deploy/Commit (Nutzer
 hat noch keinen angefordert, `python/` ist nicht bind-gemountet).
+
+## 2026-08-29 (Fortsetzung) — STT-Sprache pro Sender statt nur pro Kategorie
+
+**Auslöser**: Nutzer hört deutsche UND englischsprachige Sender und
+wollte das passende Vosk-Modell automatisch pro Sender statt manuell
+umschalten. Vor der Umsetzung erst recherchiert (siehe Plan-Anfrage) —
+Ergebnis: Mounting mehrerer Vosk-Modelle (`VOSK_MODEL_FOLDER_EN` in
+`docker-compose.yml`), RAM-schonendes Lazy-Load+LRU (`MAX_LOADED_VOSK_LANGUAGES=2`
+in `stt_filter.py`) und der automatische Modellwechsel beim
+Senderwechsel (`resolve_stt_language()` wird bei jedem Sample/Switch neu
+aufgerufen) waren SCHON vollständig vorhanden — nur eben pro Sender-
+**Kategorie** (`Lokal/Regional/National/…`) verdrahtet, nicht pro
+einzelnem Sender. Nutzer hat sich per Rückfrage explizit für ein neues,
+von der Kategorie unabhängiges `language`-Feld pro Sender entschieden
+(Alternative wäre gewesen, Kategorien zweckzuentfremden — hätte
+Reichweiten- und Sprachkonzept vermischt).
+
+**Umsetzung**:
+- `stations_store.py`: Sender-Schema um optionales `"language"` (Freitext-
+  Code, leer = kein Override) erweitert. `_ensure_ids_and_defaults()`
+  migriert fehlendes Feld auf `""`, analog zu `category`/`enabled`/`id`.
+  `add()`/`update()`/`bulk_add()` reichen `language` durch (neuer
+  Parameter am Ende, keine Positionsänderung bestehender Aufrufer).
+- `settings_store.resolve_stt_language()`: Signatur von
+  `(category, cfg)` auf `(station, cfg)` geändert. Neue Priorität:
+  `station["language"]` (falls gesetzt) → `cfg["category_languages"][station["category"]]`
+  → `DEFAULT_STT_LANGUAGE`. Der Kategorie-Mechanismus bleibt bewusst als
+  Fallback bestehen (nützlich für frisch importierte, noch nicht einzeln
+  gepflegte Sender) — additiv, kein Breaking Change, kein
+  Migrationshinweis für `.env`/`docker-compose.yml` nötig (Mounting
+  existierte schon).
+- `radiosabbelnich.py`: die drei Aufrufstellen (Puffer-Kandidat, frischer
+  Verbindungsversuch, laufender Hauptloop) übergeben jetzt das ganze
+  Sender-Dict statt `["category"]"`; zwei Kommentare, die "Sender-
+  Kategorie" sagten, auf "Sender" korrigiert (fachlich sonst irreführend).
+- `webui.py`: Sprache-Dropdown in der Sender-Edit-Zeile UND im "Neuer
+  Sender"-Formular (Optionen aus `lastSttCfg.languages`, "Standard" =
+  leer). `loadStations()` in Fetch (`loadStations()`) + Render
+  (`renderStationsList()`) aufgeteilt, weil das Dropdown Daten aus
+  `loadSettings()` braucht, das parallel und in beliebiger Reihenfolge
+  lädt — exakt dasselbe Timing-Muster wie das bestehende
+  `renderSttCategoryLanguages()` (No-Op bis beide Quellen da sind, von
+  beiden Ladefunktionen aufgerufen). Sprach-Badge in der normalen
+  (nicht editierten) Sender-Zeile. `_handle_add_station`/
+  `_handle_station_action` reichen `payload.get("language", "")` durch.
+- i18n: 3 neue Keys (`cfg_station_lang_label/_default/_badge_title`) in
+  `i18n.py` (EN-Basis) + `language/Deutsch.lng`; `cfg_stt_hint` und
+  `cfg_stt_cat_lang_hint` (beide Sprachen) textlich an die neue Priorität
+  angepasst.
+- Doku: README.md (DE+EN, Abschnitt umbenannt in "Sprache pro Sender",
+  Datei-Tabelle, `category_languages`-Beschreibung), ARCHITECTURE.md
+  (Abschnitt "STT-Sprachfilter", Mehrsprachigkeit-Absatz), CHANGELOG.md,
+  VERSION (v1.2.39).
+
+**Verifiziert**: `python3 -m py_compile` für alle fünf geänderten
+`.py`-Dateien fehlerfrei. Isolierter Test (Kopie von `python/*.py` in
+Scratch-Verzeichnis, wie im Testmuster oben beschrieben): drei Sender
+angelegt (`language="de"`, `language="en"`, `language=""`),
+`resolve_stt_language()` lieferte korrekt Sender-Override (`de`/`en`),
+Kategorie-Fallback (`fr` aus `category_languages`) für den Sender ohne
+eigene Sprache, und `DEFAULT_STT_LANGUAGE` (`de`) wenn auch kein
+Kategorie-Eintrag existiert; Migration eines alten Sender-Dicts ohne
+`language`-Schlüssel ergänzte korrekt `""`. i18n-Coverage separat
+verifiziert (Regex-Extraktion aller `data-i18n*`/`t('key'`-Vorkommen aus
+`webui.py` gegen `i18n.STRINGS` abgeglichen, inkl. echtem Laden von
+`language/Deutsch.lng` mit auf den Repo-Root korrigiertem
+`LANGUAGE_DIR` — im Container liegt `language/` neben dem geflachten
+`/app/i18n.py`, lokal aber eine Ebene höher als `python/i18n.py`): alle
+drei neuen Keys vollständig in EN und DE vorhanden, keine fehlenden/
+unbekannten Keys. Kein Live-Test im laufenden Container (kein Deploy in
+dieser Session angefordert, siehe unten).
+
+**Bewusst NICHT gemacht**: kein `docker compose up -d --build` (Nutzer
+hat nur die Umsetzung angefordert, kein Deploy). Keine feste Codeliste
+für `language` (bleibt Freitext wie bei `set_stt_language()` — welche
+Codes sinnvoll sind, hängt von den gemounteten Vosk-Modellen ab, das
+kennt `stations_store.py` nicht). Kein Entfernen/Deprecaten von
+`category_languages` — bleibt vollwertiger Fallback-Mechanismus, nicht
+nur Übergangslösung.
+
+## 2026-08-29 (Fortsetzung) — Vosk-Sprachmodelle per WebUI herunterladen (kein Konsolenzugriff nötig)
+
+**Auslöser**: direkte Folge der vorigen Session (Sprache pro Sender) —
+Nutzer wollte neue Sprachmodelle nicht mehr von Hand herunterladen/
+entpacken/mounten müssen. Vor der Umsetzung erst recherchiert (siehe
+Plan-Anfrage): `alphacephei.com/vosk/models` liefert keinen JSON-Index,
+nur eine HTML-Tabelle (per WebFetch geprüft, zweimal — einmal grob, dann
+vollständig für den Katalog) → statische, kuratierte Liste statt
+Live-Scraping. Wichtigster Vorbefund: die bestehenden
+`VOSK_MODEL_FOLDER(_EN)`-Mounts in `docker-compose.yml` sind `:ro`
+(read-only) UND brauchen pro Sprache eine manuelle Compose-Zeile +
+Neustart — beides unvereinbar mit "ohne Konsole". Präzedenzfall im
+Projekt bereits vorhanden: `whisper_cache`-Mount (beschreibbar,
+faster-whisper lädt selbst nach) — gleiches Muster für Vosk übernommen.
+
+**Umsetzung**:
+- Neues Modul `python/vosk_catalog.py`: statische Liste (`CATALOG`) von
+  48 Modell-Einträgen (offizielle Kaldi-Team-Modelle, klein+groß pro
+  Sprache wo verfügbar, 31 Sprachen) mit Code/Variante/Anzeigename/URL/
+  Größenschätzung, per WebFetch gegen die echte Modellseite
+  zusammengestellt. `key` (z.B. `"en-small"`) ist NICHT der Sprachcode
+  selbst (small/big derselben Sprache sind zwei Katalog-Einträge, aber
+  nur EIN `languages`-Eintrag kann je Sprachcode existieren).
+  `available_entries()` filtert bereits konfigurierte Sprachcodes raus.
+- Neues Modul `python/vosk_download.py`: `download_and_install()` —
+  Chunked-Download via `urllib.request` (Projekt nutzt konsequent
+  `urllib`, keine neue Abhängigkeit) in eine Temp-Datei, Zip-Validierung,
+  Entpacken in ein Temp-Verzeichnis, Vosk-typischen Wurzelordner finden
+  (`_find_model_root()`), **ein einziger atomarer `os.rename()`** als
+  finaler Installationsschritt, `finally`-Block räumt Temp-Reste bei
+  JEDEM Ausgang auf. `check_disk_space()` prüft `shutil.disk_usage()` vor
+  Downloadstart (2.5x Sicherheitsfaktor, Zip+entpackte Kopie liegen kurz
+  gleichzeitig auf der Platte).
+- `docker-compose.yml`: neuer beschreibbarer Sammel-Mount
+  `VOSK_MODELS_FOLDER:/app/vosk-models` (Default `./data/vosk-models`),
+  zugehöriger `VOSK_MODELS_FOLDER_HOST`-Envvar für die Host-Pfad-Anzeige
+  (gleiches Muster wie bei `VOSK_MODEL_FOLDER_HOST`). `Dockerfile`:
+  `--vosk-models-folder-host`-Flag im ENTRYPOINT, COPY-Zeilen für die
+  zwei neuen Module. `radiosabbelnich.py`: neues Argparse-Flag,
+  `host_paths["vosk_models_folder"]`. `env.example` dokumentiert.
+- `settings_store.py`: `set_stt_language()` bekommt Parameter `source`
+  ("manual"/"downloaded", Default beim Anlegen "manual", bei Bearbeiten
+  bestehender Einträge OHNE explizite Angabe bleibt der vorhandene Wert
+  erhalten — wichtig, damit ein bloßes Nachjustieren der Konfidenz-
+  Schwelle über das manuelle Formular die "downloaded"-Herkunft nicht
+  versehentlich zurücksetzt). `delete_stt_language()` gibt jetzt den
+  gelöschten Eintrag zurück (`pop()` statt `del`), damit `webui.py`
+  entscheiden kann, ob Dateien mitgelöscht werden dürfen — Funktion
+  selbst bleibt reine Konfigurationsänderung, fasst nie das Dateisystem an.
+- `webui.py`: neue Klasse `VoskDownloadState` (Kopie des `ImportState`-
+  Musters, zusätzlich Byte-Fortschritt `downloaded`/`total`). Neue
+  Endpunkte `GET /api/config/stt-languages/catalog`,
+  `POST /api/config/stt-languages/download`,
+  `GET /api/config/stt-languages/download/status`. `_handle_stt_language_
+  action()` (Löschen) erweitert um `delete_files`-Flag mit
+  DOPPELTER Absicherung vor `shutil.rmtree()`: `source == "downloaded"`
+  UND Pfad nachweislich per `os.path.realpath()` + Präfix-Vergleich
+  (`real_path.startswith(real_root + os.sep)`, NICHT bloßes
+  `startswith(real_root)` ohne Trennzeichen — sonst würde
+  `/app/vosk-models-evil/` fälschlich durchgehen) unter `VOSK_MODELS_DIR`.
+  Neue UI-Sektion unter "🌐 STT-Sprachen": Download-Dropdown (Katalog
+  minus bereits installierte Sprachen) + Fortschrittsbalken (Polling
+  1x/Sekunde, exakt das Sender-Import-Muster — bewusst KEIN SSE/
+  WebSocket, der `ThreadingHTTPServer` ist synchron und alle anderen
+  Langläufer im Projekt lösen das schon per Polling). Löschen-Button
+  zeigt bei `source === 'downloaded'` zusätzlich "+ Dateien löschen".
+  Resume-Polling beim Seiten-Reload (gleiches Muster wie beim Import).
+- 11 neue i18n-Keys (EN-Basis + `Deutsch.lng`) für Download-Fortschritt/
+  Fehler/Löschoptionen.
+- Doku: README.md (DE+EN — neuer Download-Absatz ersetzt den alten
+  "nur manuell mounten"-Absatz, der als Fallback erhalten bleibt;
+  `.env`-Tabelle, Datei-Tabelle, Mount-Tabelle), ARCHITECTURE.md
+  (neuer Abschnitt im STT-Sprachfilter-Kapitel, Docker-Host/Container-
+  Diagramm um `vosk-models/`(rw) ergänzt), CHANGELOG.md, VERSION
+  (v1.2.40).
+
+**Verifiziert**: `python3 -m py_compile` für alle sechs geänderten/neuen
+`.py`-Dateien fehlerfrei. i18n-Coverage wie in der vorigen Session
+verifiziert (alle 11 neuen Keys vollständig in EN+DE, per echtem Laden
+von `language/Deutsch.lng`). Isolierter Download-Test (Kopie der beiden
+neuen Module in ein Scratch-Verzeichnis, lokaler `http.server` als
+Fake-Vosk-Downloadquelle, siehe Testmuster oben): (1) erfolgreicher
+Download+Entpacken+atomare Installation eines echten Zips mit Vosk-
+typischem Wurzelordner, keine Temp-Reste danach; (2) korruptes "Zip"
+(reiner Text) löst `ValueError` aus, sauberer Rollback, kein Zielordner
+angelegt; (3) `InsufficientDiskSpaceError` bei absichtlich absurd hoher
+Katalog-Größe, kein Zielordner angelegt; (4) erneuter Download derselben
+Sprache ersetzt den vorhandenen Ordner sauber statt zu duplizieren.
+Isolierter Test von `settings_store.set_stt_language()`/
+`delete_stt_language()`: neue Sprache ohne `source`-Param → "manual",
+mit `source="downloaded"` → "downloaded", Nachjustieren einer
+"downloaded"-Sprache ohne `source`-Param behält "downloaded", ein
+simuliertes Alt-Sprachpaket ohne `source`-Schlüssel liefert korrekt
+"manual" über `.get("source","manual")`, `delete_stt_language()` gibt den
+gelöschten Eintrag zurück. Separat verifiziert: die
+Pfad-Präfix-Sicherheitslogik für "Dateien löschen" gegen fünf Fälle
+(normaler Download-Pfad → erlaubt; `source="manual"` → blockiert;
+Path-Traversal via `../../etc` → blockiert, weil `os.path.realpath()`
+das auflöst; Präfix-String-Trick `/app/vosk-models-evil/` → blockiert
+durch den `+ os.sep`-Zusatz im Vergleich; `delete_files=False` → nie
+gelöscht, unabhängig von allem anderen). Kein Live-Test im laufenden
+Container (kein Deploy in dieser Session angefordert) und kein echter
+Download eines realen, mehrere-hundert-MB-großen Vosk-Modells aus dem
+Internet (bewusst durch den lokalen Fake-Server ersetzt — ein echter
+Download wäre in dieser Umgebung nur ein Zeit-/Bandbreitentest gewesen,
+keine zusätzliche Aussage über die Korrektheit der Download-/
+Rollback-Logik selbst).
+
+**Bewusst NICHT gemacht**: kein `docker compose up -d --build` (Nutzer
+hat nur die Umsetzung angefordert, kein Deploy — WICHTIG für die nächste
+Session: der neue `VOSK_MODELS_FOLDER`-Mount in `docker-compose.yml`
+wird erst nach einem Rebuild aktiv, vorher schlägt ein Download-Versuch
+mit "Verzeichnis nicht beschreibbar" o.ä. fehl). Keine Migration
+bestehender `languages`-Einträge auf ein explizites `source`-Feld (bleibt
+lazy über `.get("source","manual")`, siehe `_migrate_stt_filter()` für
+das etablierte analoge Muster). Kein automatisches Umschalten/Vorschlagen
+von "groß" statt "klein" oder umgekehrt nach der Kalibrierung — der
+Nutzer wählt Variante und Zeitpunkt selbst. Keine Prüfung, ob eine
+Katalog-URL zum Download-Zeitpunkt noch existiert, außer durch den
+Download-Versuch selbst (kein separater Liveness-Check aller 48 URLs
+beim Laden der Config-Seite — würde bei jedem Seitenaufruf unnötig
+externe Requests auslösen, siehe Aufbau von `available_entries()`, das
+rein lokal filtert).
+
+## 2026-08-29 (Fortsetzung) — Automatische Sender-Sprach-Erkennung (`vosk_language_check.py`)
+
+**Auslöser**: nach dem Deploy des Modell-Downloads Rückfrage, ob de/en
+jetzt "fertig implementiert" sind — Antwort: Modelle ja (beide schon
+länger empirisch kalibriert), aber von 358 Sendern hatte KEINER ein
+eigenes `language`-Tag gesetzt (nur die alte Kategorie-Zuordnung griff).
+Da sich Sprache aus Sendernamen nicht zuverlässig raten lässt, per
+`AskUserQuestion` Optionen vorgeschlagen — Nutzer wollte ein Skript, das
+die Sender selbst abhört, mit dem Hinweis, die bestehende
+Erreichbarkeitsprüfung (`station_import.check_reachable()`) evtl. dafür
+zu erweitern/als Vorbild zu nehmen.
+
+**Umsetzung**: neues eigenständiges Skript `python/vosk_language_check.py`
+(Details/Architektur siehe `ARCHITECTURE.md`, Abschnitt "STT-Sprachfilter"
+→ "Automatische Sender-Sprach-Erkennung"). Kernstück: `capture_pcm()`
+(ffmpeg-Aufnahme, Audio-Capture-Technik von `station_import.py`
+übernommen, hier aber PCM tatsächlich behalten statt nur Byte-Zähler),
+`detect_language()` (jeder 3s-Clip gegen jede konfigurierte Sprache,
+`stt_filter._VoskEngine.transcribe()` direkt wiederverwendet, alle
+Sprachen gleichzeitig geladen statt Lazy-LRU), `_pick_winner()`
+(Mindesttrefferzahl UND Mindestvorsprung vor Zweitplatziertem, sonst
+"unklar"). CLI: `--apply`/`--force`/`--all`/`--category`/`--limit`/
+`--languages`/`--capture-seconds`/`--concurrency`/`--report`. Neue
+Funktion `stations_store.set_language()` (Partial-Update-Muster wie
+`set_enabled()`) fürs gezielte Setzen ohne Name/URL/Kategorie erneut
+mitschicken zu müssen. Standardverhalten bewusst sicher: nur Report,
+`stations.json` bleibt ohne `--apply` unangetastet; bestehende manuelle
+Tags werden auch mit `--apply` nie überschrieben, außer explizit
+`--force`.
+
+**Zwei echte Bugs beim Testen gefunden (vor dem ersten Live-Einsatz)**:
+1. `capture_pcm()` begrenzte ursprünglich nur die Wall-Clock-Wartezeit,
+   nicht die tatsächlich eingelesene Audiomenge — bei einer schneller-
+   als-Echtzeit-Quelle (reproduziert mit einem lokalen Testserver, der
+   eine 40s-Datei ohne Echtzeit-Drosselung auslieferte: `seconds=10`
+   ergab 40s eingelesenes Audio) hätte das unbegrenzt Audio angesammelt —
+   dieselbe Fehlerklasse wie der dokumentierte BBC-Radio-Scotland-Fall in
+   `station_import.py`. Fix: zusätzlicher `target_bytes`-Abbruch neben
+   der Zeit-Deadline.
+2. `os.makedirs(os.path.dirname(args.report), exist_ok=True)` warf
+   `FileNotFoundError`, wenn `--report` ein relativer Pfad ohne
+   Verzeichnisanteil war (`os.path.dirname('x.json') == ''`,
+   `os.makedirs('')` scheitert). Fix: nur `makedirs()`, wenn
+   `report_dir` nicht leer ist.
+
+**Live-Validierung** (Nutzer hat Bandbreite/Konsolenzugriff explizit
+freigegeben, kein Rücksprache-Zwang mehr): Kurztest mit 6 Sendern/20s
+gegen echte Streams, danach voller Lauf über alle 19 AKTIVEN Sender
+(von 358 gesamt — 339 sind deaktiviert/unsortiert importiert und wurden
+dabei NICHT geprüft, siehe unten) mit Standard-30s-Capture: 5× `de`
+eindeutig (ANTENNE BAYERN, R.SH, NDR2, RADIO BOB! 80er Rock, Rock Antenne
+Hamburg), 1× `en` eindeutig (**LBC UK**, 8/10 Clips), 13× "unklar" — alle
+13 "unklar"-Fälle waren tatsächlich deutsche Sender mit wenig
+zusammenhängender Sprache im Zeitfenster, KEIN einziger Fehltreffer in
+die falsche Richtung. Nutzer hat die 6 eindeutigen Treffer per `--apply`
+übernehmen lassen.
+
+**Dabei ein drittes, architektonisches Problem entdeckt** (kein Bug im
+engeren Sinn, aber beim ersten Live-`--apply` tatsächlich aufgetreten):
+die 6 `set_language()`-Aufrufe schrieben korrekt nach `stations.json`,
+der LAUFENDE Hauptloop zeigte aber weiter die alten Werte — weil das
+Skript als separater `docker exec`-Prozess KEINEN Zugriff auf das
+In-Memory `SwitcherState` hat und `active_stations` dort nur in
+`reload()` aktualisiert wird, das wiederum nur bei gesetztem
+`request_reload()`-Flag läuft (siehe ARCHITECTURE.md-Eintrag für Details).
+Workaround in dieser Session: einen Sender einmal unverändert über die
+reguläre Config-API erneut gespeichert (POST `/api/config/stations/<id>`)
+— `reload()` liest dabei die GESAMTE `stations.json` neu ein, danach
+bestätigte das Log `⚙ Senderliste neu geladen (19 aktiv)` und alle 6 Tags
+waren aktiv. NICHT ins Skript selbst eingebaut (würde bedeuten, dass
+`vosk_language_check.py` zusätzlich HTTP gegen die lokale WebUI-API
+spricht, statt direkt über `stations_store.py` zu schreiben — eigene
+Design-Entscheidung, dem Nutzer als offene Frage zurückgemeldet statt
+selbst entschieden).
+
+**Nachtrag (--include-disabled)**: Nutzer wollte anschließend auch die
+339 deaktivierten Sender einbeziehbar haben. Neue Option
+`--include-disabled`: nutzt `stations_store.load_all()` (alphabetisch
+sortiert) statt `load_active()` — alle anderen Filter (`--category`/
+`--all`/`--limit`) bleiben unverändert und wenden sich auf die dadurch
+größere Menge an.
+
+**Verifiziert**: `python3 -m py_compile` fehlerfrei. Isolierte Tests
+(Kopie der Module in ein Scratch-Verzeichnis, wie im etablierten
+Testmuster): `capture_pcm()` gegen echten lokalen Testserver (WAV/MP3 per
+ffmpeg synthetisiert) VOR und NACH dem Bytes-Cap-Fix (Fehler reproduziert,
+dann verifiziert behoben — exakt 10.0s bei `seconds=10`); `capture_pcm()`
+gegen unerreichbare URL liefert `None`; `_split_clips()`; `_pick_winner()`
+gegen 6 Szenarien (klarer Sieger, zu wenig Treffer, zu knapper Vorsprung,
+knapp ausreichender Vorsprung, leer, alle Null); `detect_language()` mit
+steuerbaren Fake-Engines; volle CLI-Verkabelung (`main()` end-to-end mit
+gemocktem `_load_engines`/gepatchtem `capture_pcm`) für: relativen
+Report-Pfad (deckte Bug 2 auf), `--apply` mit Respektierung bestehender
+Tags, Lauf OHNE `--apply` (stations.json nachweislich unverändert),
+`--all --force`. `--include-disabled`-Filterlogik isoliert gegen
+aktiv/inaktiv-Testdaten verifiziert. Echte Live-Läufe siehe oben
+("Live-Validierung").
+
+**Bewusst NICHT gemacht**: kein automatischer Reload-Trigger im Skript
+selbst (siehe oben, offene Frage an Nutzer). Keine Dokumentation/kein Fix
+für den Fall, dass `--include-disabled` bei 339 Sendern eine sehr lange
+Laufzeit hätte (grob 339×30s/4 ≈ 42 Min. bei Standard-Concurrency) — nur
+im README als Hinweis vermerkt, kein automatisches Zeitlimit oder
+Batching eingebaut, da nicht angefordert. Kein `--category`/`--limit`-
+Lauf über die deaktivierten Sender in dieser Session ausgeführt (Nutzer
+hat nur die Option angefordert, keinen Lauf).
+
+## 2026-08-29 (Fortsetzung) — Automatischer Reload-Trigger nach `--apply`
+
+**Auslöser**: die offen zurückgemeldete Design-Frage aus dem vorigen
+Eintrag (manueller Workaround für den Reload-Cache) — Nutzer wollte das
+automatisiert im Skript selbst.
+
+**Umsetzung**: neue Funktion `trigger_reload(any_station_id)` in
+`vosk_language_check.py` — liest den aktuellen Sender-Datensatz per
+`stations_store.load_all()`, sendet ihn UNVERÄNDERT per POST an
+`https://localhost:5000/api/config/stations/<id>` (Container-interner
+Port ist im Dockerfile-ENTRYPOINT fest verdrahtet, siehe
+`WEBUI_INTERNAL_PORT`), Zertifikatsprüfung deaktiviert (selbstsigniert),
+bei Fehlschlag Fallback auf `http://` (Schema von außen nicht bekannt).
+`reload()` im Hauptloop liest dabei die GESAMTE `stations.json` neu ein,
+welche Sender-ID die Anfrage ausgelöst hat, ist irrelevant — ein einziger
+Aufruf reicht für beliebig viele zuvor per `--apply` gesetzte Sprachen.
+Best-Effort: schlägt der Trigger fehl (WebUI aus/nicht erreichbar), bricht
+das Skript NICHT ab — die Datei ist ja bereits korrekt geschrieben, nur
+eine klare Meldung statt eines stillen Fehlschlags.
+
+**Verifiziert**: isolierter Test (lokaler `http.server` als WebUI-Attrappe,
+Sender-Datensatz aus einer Test-`stations.json`) für drei Fälle: (1) nur
+HTTP erreichbar (kein TLS) — Fallback greift korrekt, empfangener
+Request-Body entspricht exakt dem unveränderten Sender-Datensatz; (2)
+WebUI nicht erreichbar (Port ohne Listener) — `False`, kein Crash; (3)
+unbekannte Sender-ID — `False`, kein Crash. Danach Image neu gebaut,
+Doku (README DE+EN, ARCHITECTURE.md) von "manueller Workaround nötig" auf
+"passiert automatisch, Best-Effort" aktualisiert.
+
+**Zusätzlich live verifiziert** (nach Rebuild/Deploy): `trigger_reload()`
+gegen den tatsächlich laufenden Produktivcontainer aufgerufen (echter
+Sender "Radio Bob") — lieferte `True` beim ERSTEN Versuch (HTTPS, kein
+Fallback auf HTTP nötig), Log bestätigte `✏ Sender geändert: 'Radio Bob'`.
+
+## 2026-08-29 (Fortsetzung) — Nächtlicher Sender-Scan (Whisper-Sprach-ID, WebUI-integriert)
+
+**Auslöser**: direkter Anschluss an die vorigen beiden Sessions
+(Sprache-pro-Sender, `vosk_language_check.py`) — Nutzer wollte einen
+zweiten, WebUI-integrierten Weg zur automatischen Sprach-Erkennung, der
+nachts unbeaufsichtigt läuft, aber NIE selbst etwas scharf schaltet
+(nur Vorschlag + Bestätigen-Knopf). Vor der Umsetzung ausführlich per
+Plan recherchiert (siehe Plan-Anfrage, 7 Punkte) — wichtigste Erkenntnis
+dabei: `faster-whisper` (Version 1.2.1, im Container geprüft) hat bereits
+eine dedizierte `WhisperModel.detect_language()`-Methode (leichtgewichtig,
+nur EIN Encoder-Durchlauf statt echter Transkription), kein neues Paket
+nötig. Zweite wichtige Erkenntnis: der Scan verbindet sich mit EIGENEN,
+vom Hauptloop unabhängigen ffmpeg-Prozessen zu den geprüften Sendern —
+funktional KEINE Überschneidung mit laufender Wiedergabe (in der vorigen
+Session bereits mehrfach live bewiesen), die Nacht-Fenster-Empfehlung ist
+also eine CPU-Budget-Entscheidung, kein technischer Zwang.
+
+**Umsetzung**:
+- Neues Modul `python/night_scan.py` (Kernlogik, siehe ARCHITECTURE.md
+  für Diagramm + volle Begründung): `scan_station()` verbindet per
+  ffmpeg, liest fensterweise (`WINDOW_SECONDS=3.0`), klassifiziert jedes
+  Fenster per `speech_detector.SpeechDetector` (dasselbe Silero-VAD wie
+  live, NICHT Whispers eigenes gebündeltes VAD) und sammelt NUR
+  "speech"-Fenster, bis `min_speech_seconds` erreicht ist oder
+  `capture_timeout_seconds` abläuft. Vier Ausgänge: "detected"
+  (Sprache+Konfidenz), "music" (Timeout, nie genug Sprache — ein
+  NÜTZLICHES Ergebnis), "unreachable" (nie Audio), "error"
+  (Whisper-Aufruf selbst gescheitert). `run_scan()` verarbeitet Sender in
+  Batches à `concurrency` (Default 1), `should_stop`-Callback wird vor
+  jedem Batch geprüft (Stop-Knopf bzw. Fenster-Ende).
+- `settings_store.py`: neuer `night_scan`-Block (enabled/enabled_hours/
+  whisper_model_size/capture_timeout_seconds/min_speech_seconds/
+  concurrency/last_run_date/last_run_started_at/last_run_finished_at/
+  suggestions/scanned_at), `update()` um 6 neue Parameter erweitert
+  (gleiches `enabled_hours`-UNSET-Muster wie `news_break`), drei neue
+  Funktionen: `set_night_scan_suggestion()`, `clear_night_scan_suggestion()`
+  (räumt NUR den Vorschlag weg, `scanned_at` bleibt für die
+  Priorisierung erhalten — bewusst als zwei getrennte Dicts modelliert,
+  siehe DEFAULTS-Kommentar), `record_night_scan_run()`.
+- `webui.py`: `NightScanState` (Kopie des `ImportState`-Musters,
+  zusätzlich `should_stop()`/`request_stop()` in Personalunion, weil
+  Scan-Fortschritt und Stop-Wunsch denselben Lock brauchen;
+  `record_result()` persistiert JEDEN Sender-Befund SOFORT über
+  `settings_store`, nicht erst am Scan-Ende — Vorschläge erscheinen
+  dadurch schon während ein Lauf noch geht). `NightScanScheduler` (Kopie
+  des `update_check.UpdateChecker`-Musters: Hintergrund-Thread, pollt
+  alle 60s, startet automatisch höchstens 1x/Kalendertag innerhalb
+  `enabled_hours`; `start_now()` für den manuellen Knopf ignoriert
+  Fenster/Datum bewusst). Neue Endpunkte: `GET .../night-scan/status`,
+  `POST .../night-scan/start`, `POST .../night-scan/stop`,
+  `POST .../night-scan/suggestions/<id>/confirm|dismiss` (confirm prüft
+  serverseitig `label=="detected"`, sonst 400 — "music"/"unreachable"
+  haben keine Sprache zum Übernehmen). Neue Config-Seiten-Sektion "🌙
+  Nächtlicher Sender-Scan": Einstellungen-Formular (Muster wie
+  `#stt-form`/`#news-break-form`, inkl. Stunden-Fenster wie bei
+  News-Break), Start/Stop-Knöpfe + Fortschrittstext (Polling-Muster wie
+  Sender-Import/Vosk-Download), EIGENE Vorschlags-Tabelle (bewusst NICHT
+  in die Sender-Liste integriert — anders als das `language`-Dropdown
+  pro Sender, weil Vorschläge transienter Review-Queue-Charakter haben,
+  nicht permanenter Sender-Zustand; hätte die ohnehin schon dichte
+  Sender-Zeile zusätzlich überladen). 24 neue i18n-Keys (EN+DE).
+- Kein neuer Dependency-Bedarf: `faster-whisper`/`silero-vad-lite` sind
+  bereits im Image, `whisper_cache`-Mount (rw) wird wiederverwendet
+  (`night_scan.WHISPER_DOWNLOAD_ROOT` = `stt_filter.WHISPER_DOWNLOAD_ROOT`).
+
+**Ein echter Bug beim Testen gefunden (vor dem ersten Deploy)**: exakt
+dieselbe Fehlerklasse wie der `vosk_language_check.capture_pcm()`-Bug aus
+der vorigen Session — `scan_station()`s Sammelschleife prüfte
+ursprünglich nur die Wall-Clock-Deadline, nicht die tatsächlich
+verarbeitete Audiomenge. Per Testserver (60s Audio ohne Echtzeit-
+Drosselung) reproduziert: `capture_timeout_seconds=8` verarbeitete ohne
+zusätzlichen Deckel 60s statt der erwarteten ~8-9s. Fix: zusätzliche
+Schleifenbedingung `total_seconds < capture_timeout_seconds`.
+
+**Verifiziert**: `python3 -m py_compile` für alle geänderten/neuen
+Dateien fehlerfrei. Isolierte Tests (Scratch-Verzeichnis, etabliertes
+Muster): `scan_station()` gegen echten lokalen Testserver (Sinuston-MP3)
+mit steuerbaren Fake-VAD/Fake-Whisper-Objekten für alle vier Ausgänge
+("detected" inkl. korrekt normalisiertem float32-Audio-Array an Whisper,
+"music" mit Bug-Reproduktion UND Fix-Verifikation, "unreachable",
+"error"), plus VAD-nicht-verfügbar → `RuntimeError`. `run_scan()`:
+Batching/Progress-Callbacks/`should_stop`-Abbruch gegen 5 Fake-Sender.
+`settings_store`: alle neuen Validierungen (Grenzwerte, `enabled_hours`-
+Format, UNSET-Reset auf "rund um die Uhr") sowie das
+Suggestion/scanned_at-Zusammenspiel (Clear entfernt nur den Vorschlag,
+`scanned_at` bleibt). `webui.NightScanState`/`NightScanScheduler`: Klassen
+aus `webui.py` extrahiert und gegen echte `settings_store`/`stations_store`
+mit gemocktem Whisper/`scan_station` end-to-end getestet (`_in_window()`/
+`_due()`-Logik, kompletter `start_now()`-Lauf inkl. Prioritätsfilter
+"nur aktive Sender ohne eigenes language-Feld", Ablehnung eines zweiten
+gleichzeitigen Starts, `record_night_scan_run()`-Bookkeeping) — volles
+`import webui` auf dem Host nicht möglich (aubio-Build schlägt gegen die
+hier installierte numpy-Version fehl, projektfremdes Problem), aber
+`python3 -m py_compile` UND der erfolgreiche Container-Start (der
+`_check_i18n_coverage()` beim Modul-Import scharf schaltet) bestätigen
+zusammen, dass `webui.py` als Ganzes syntaktisch/referenziell korrekt ist.
+
+**Live gegen den Produktivcontainer verifiziert** (Nutzer hat
+Konsolenzugriff/Ressourcennutzung bereits in der vorigen Session
+freigegeben): manueller Scan über alle 19 aktiven Sender (13 davon ohne
+eigenes `language`-Feld, 6 aus der vorigen Session bereits getaggt und
+korrekt übersprungen) mit verkürztem Test-Zeitbudget (20s/8s statt der
+Defaults 150s/25s, danach zurückgesetzt) — 3 sprachlastige Sender korrekt
+mit 0.98-0.996 Konfidenz als `de` erkannt, alle 10 übrigen (musiklastig,
+darunter tatsächlich der echte englische Sender "Heart London" bei dem
+knappen Test-Budget) korrekt als "music" statt eines Fehltipps, KEIN
+einziger Fehltreffer. Whisper-"tiny"-Modell lud beim ersten Lauf
+automatisch von HuggingFace in den bestehenden `whisper_cache`-Mount.
+Confirm/Dismiss/Fehlerfall (Confirm auf "music"-Vorschlag → 400) je
+einmal live gegen die echte API getestet, inkl. Bestätigung im Log
+(`⚙ Senderliste neu geladen`) nach einem Confirm.
+
+**Bewusst NICHT gemacht**: keine Bereinigung verwaister
+`suggestions`/`scanned_at`-Einträge nach Sender-Löschung (siehe
+ARCHITECTURE.md, "Offene Punkte"). Keine `ListenerGate`-Integration
+(technisch nicht nötig, siehe Auslöser-Absatz oben). Kein automatisches
+Hochstufen von "tiny" auf ein größeres Whisper-Modell bei wiederholt
+knappen Ergebnissen. Kein vollständiger nächtlicher Automatik-Lauf in
+dieser Session abgewartet (nur der manuelle Trigger live getestet) — der
+Scheduler-Thread selbst (`_due()`/`_in_window()`) ist aber isoliert
+gegen simulierte Uhrzeiten/Daten vollständig verifiziert.
+
+## 2026-08-29 (Fortsetzung) — Nächtlicher Sender-Scan auf komplette Senderliste erweitert
+
+**Auslöser**: direkter Anschluss an den vorigen Eintrag — der Scan prüfte
+bisher nur `load_active()` (19 Sender), obwohl 350+ in der Liste stehen.
+Die meisten davon wurden nie bewusst deaktiviert, sondern nur nie
+geprüft (Sender-Import legt neue Sender standardmäßig deaktiviert an,
+siehe `station_import.py`). Nutzer wollte eine vollständige Übersicht
+über alle Sender (Sprache + Erreichbarkeit), um leichter entscheiden zu
+können, welche deaktivierten Sender es wert sind, aktiviert zu werden —
+Priorität dabei klar: aktive Sender zuerst, kein Zeitdruck für den Rest
+("darf sich über mehrere Nächte ziehen"). Vor der Umsetzung wieder erst
+ein Plan mit 4 Punkten — zwei davon stellten sich bei der Recherche als
+bereits gelöst heraus (siehe Plan-Antwort): `scanned_at` persistiert
+schon pro Sender sofort (nicht erst am Lauf-Ende), und die
+Vorschlags-Tabelle hatte nie einen Aktiv-Filter — beides brauchte keine
+Änderung.
+
+**Umsetzung**:
+- `webui.py`, `NightScanScheduler._run_scan()`: `stations_store.load_active()`
+  → `load_all()`. Sortierschlüssel um eine Stufe erweitert:
+  `(not s.get("enabled", True), scanned_at.get(s["id"], 0))` — Tupel-
+  Vergleich sorgt dafür, dass aktive Sender (erstes Element `False`)
+  IMMER vor deaktivierten (`True`) einsortiert werden, erst innerhalb
+  jeder Gruppe zählt weiterhin `scanned_at`.
+- Neue Config-Seiten-Zeile "🌙"-Sektion: Fortschrittstext
+  (`renderNightScanCoverage()`, reine Frontend-Berechnung aus bereits
+  geladenen Daten — `lastStationsData` von `/api/config/stations`
+  lieferte schon vorher `load_all()`, kein neuer Endpoint nötig) zeigt
+  "X von Y aktiven, Z von W deaktivierten Sendern bisher erfasst".
+  Vorschlags-Tabelle um Status-Spalte ("aktiv"/"deaktiviert") und
+  dieselbe Aktiv-zuerst-Sortierung wie der Scan selbst ergänzt
+  (`renderNightScanSuggestions()`). Neue globale JS-Variable
+  `lastNightScanScannedAt` (Cache von `night_scan.scanned_at`, analog
+  zu `lastNightScanSuggestions`).
+- 4 neue i18n-Keys (EN+DE): `cfg_night_scan_col_status`,
+  `cfg_night_scan_status_active/_disabled`, `cfg_night_scan_coverage`.
+- Klargestellt (Doku, kein Code nötig): "Übernehmen" setzt weiterhin NUR
+  das `language`-Feld, NIE `enabled` — Freischalten eines Senders bleibt
+  bewusst eine getrennte, manuelle Entscheidung.
+
+**Verifiziert**: `python3 -m py_compile` fehlerfrei. Isolierter
+Python-Test der neuen zweistufigen Sortierung (5 Sender, gemischt aktiv/
+deaktiviert/verschiedene `scanned_at`-Werte) bestätigte die erwartete
+Reihenfolge. Für die JS-Änderungen (kein direkter Python-Test möglich)
+erstmals in dieser Session-Reihe `jsdom` genutzt (`npm install jsdom`
+im Scratchpad): die drei neuen/geänderten Funktionen
+(`nightScanResultText`, `renderNightScanCoverage`,
+`renderNightScanSuggestions`) aus dem `_CONFIG_PAGE_HTML`-Template
+extrahiert und gegen eine echte (jsdom-)DOM-Umgebung mit Fake-`t()`/
+`esc()`/Testdaten laufen lassen — bestätigt: Coverage-Berechnung schließt
+bereits getaggte Sender korrekt aus, trennt korrekt nach aktiv/
+deaktiviert; Vorschlags-Tabelle sortiert aktive Sender korrekt vor
+deaktivierten, zeigt die Status-Spalte korrekt, und nur "detected"-Zeilen
+bekommen einen Übernehmen-Knopf. i18n-Coverage separat wie gewohnt
+verifiziert (Regex-Extraktion + echtes `Deutsch.lng`-Laden).
+
+**Live gegen den Produktivcontainer verifiziert**: nach Rebuild/Deploy
+Stand geprüft (358 Sender gesamt, 12 aktive + 339 deaktivierte noch ohne
+`language`, macht 351 — von `night_scan/status` als `total` korrekt
+bestätigt). Manueller Scan mit verkürztem Test-Zeitbudget (15s/6s,
+Concurrency 3) gestartet und per Status-Polling live mitverfolgt: nach
+genau den 12 verbleibenden aktiven Sendern wechselte der Scan nahtlos zu
+deaktivierten (90s90s, 105'5 Spreeradio, 1LIVE diggi, ...) — exakt die
+erwartete Grenze. Nach 24 geprüften Sendern per Stop-Knopf abgebrochen:
+`stopped_early: true` korrekt gemeldet, 24 Vorschläge UND 25
+`scanned_at`-Einträge vorhanden (die zweite Zahl ist eine Spur höher, weil
+ein Sender aus einem früheren Testlauf dieser Session bereits einen
+Eintrag hatte — erwartetes Verhalten, kein Fehler), davon 12 Vorschläge
+nachweislich für deaktivierte Sender (per Abgleich gegen
+`/api/config/stations`). Test-Parameter danach auf die Defaults
+(150s/25s/Concurrency 1) zurückgesetzt; `night_scan.enabled`/
+`enabled_hours` standen beim Nachschauen auf `True`/`[1, 6]` statt der
+Defaults — das war NICHT meine Testeinstellung, vermutlich eigene
+Interaktion des Nutzers mit der neuen WebUI-Sektion währenddessen,
+deshalb bewusst unangetastet gelassen.
+
+**Bewusst NICHT gemacht**: kein vollständiger Durchlauf über alle 351
+offenen Sender abgewartet (würde bei Concurrency 1/150s-Timeout mehrere
+Nächte dauern, wie im Plan selbst schon geschätzt) — nur der
+Grenzübergang aktiv→deaktiviert und die Persistenz über einen Abbruch
+hinweg wurden live geprüft, der Rest folgt aus bereits vorher etablierter
+und verifizierter Logik (`scanned_at`-Persistenz, siehe vorheriger
+Eintrag). Keine Paginierung/Filterung der Vorschlags-Tabelle ergänzt
+(im Plan als möglicher Nachschlag benannt, aber nicht angefordert) —
+könnte bei mehreren hundert Zeilen über die Zeit unhandlich werden.
+
+**Nachtrag beim Commit-Vorbereiten**: `.gitignore`-Lücke gefunden und
+gefixt — `data/vosk-model-*/` (aus der vorletzten Session, für die
+manuell gemounteten Einzelsprachen-Ordner) matcht `data/vosk-models/`
+(der neue beschreibbare Download-Sammelordner) NICHT, weil kein
+Bindestrich vor dem "s" steht. Ohne den Fix hätten künftig per WebUI
+heruntergeladene Vosk-Modelle (mehrere hundert MB) versehentlich in git
+landen können. Neue Zeile `data/vosk-models/` ergänzt.
