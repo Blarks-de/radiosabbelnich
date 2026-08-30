@@ -42,14 +42,6 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 - Musik-Library: Enrichment (Cover/Lyrics), Energy-Erkennung/Browse-UI
 - iOS-App (Idee, kein Zeitplan)
 
-## 2026-08-30
-
-- VPN-/Tailscale-Hinweise aus README.md entfernt (Warnkasten, PWA-Abschnitt,
-  `ICECAST_HOSTNAME`-Beschreibung, TLS-Beispiel) — nirgends mehr der
-  Eindruck, RadioSabbelNich sei fürs Hören von unterwegs gedacht.
-- `radiosabbelnich.sh` zeigt bei jedem Aufruf (egal welches Unterkommando)
-  zuerst die Versionsinfo aus `VERSION`.
-
 ## 2026-08-29
 
 - Neu: **Nächtlicher Sender-Scan** ("🌙"-Sektion auf der Config-Seite,

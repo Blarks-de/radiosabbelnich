@@ -10510,3 +10510,12 @@ Radio-Hören, und ist als bewusste Ausnahme bereits in `CLAUDE.md`/
 **Verifiziert**: `grep -in "tailscale\|vpn\|wireguard" README.md`
 liefert keinen Treffer mehr; derselbe Grep über CHANGELOG.md liefert nur
 noch den oben genannten, bewusst belassenen Android-Eintrag.
+
+## 2026-08-30 — CHANGELOG-Abschnitt zur VPN-Bereinigung vom Nutzer wieder entfernt
+
+Der Nutzer hat den im vorigen Eintrag beschriebenen `## 2026-08-30`-
+CHANGELOG-Abschnitt (VPN/Tailscale-Bereinigung + Wrapper-Versionsanzeige)
+manuell wieder gelöscht und um Push + Deploy gebeten. Kein inhaltlicher
+Widerspruch zur eigentlichen Doku-Änderung — README.md bleibt bereinigt,
+nur der CHANGELOG-Eintrag dazu entfällt. Nicht hinterfragt, einfach
+übernommen.
