@@ -10461,3 +10461,52 @@ manuell gemounteten Einzelsprachen-Ordner) matcht `data/vosk-models/`
 Bindestrich vor dem "s" steht. Ohne den Fix hätten künftig per WebUI
 heruntergeladene Vosk-Modelle (mehrere hundert MB) versehentlich in git
 landen können. Neue Zeile `data/vosk-models/` ergänzt.
+
+## 2026-08-30 — Wrapper zeigt immer die Versionsinfo an
+
+Nutzerwunsch: `radiosabbelnich.sh` sollte bei jedem Aufruf die
+Versionsinfo aus `VERSION` anzeigen, nicht nur implizit über `status`.
+
+**Umsetzung**: neue Funktion `print_version()` liest `VERSION` (falls
+vorhanden) und gibt sie mit 📌-Icon aus; Aufruf direkt vor dem
+`case`-Dispatch am Skriptende, also unabhängig vom gewählten
+Unterkommando (`check`/`start`/`stop`/`restart`/`status`/`-h`/unbekannter
+Befehl) — bewusst dort statt in jeder einzelnen `cmd_*`-Funktion einzeln,
+damit kein Aufrufpfad die Zeile vergessen kann.
+
+**Verifiziert**: `./radiosabbelnich.sh -h` zeigt `📌 v1.2.44 build
+2026-08-29 17:35 Uhr` als erste Ausgabezeile vor dem `usage()`-Text.
+
+## 2026-08-30 — VPN/Tailscale-Hinweise aus README.md und CHANGELOG.md entfernt
+
+Nutzerwunsch: Es soll nirgends mehr der Eindruck entstehen, man könnte
+RadioSabbelNich übers Internet streamen und von unterwegs hören — auch
+nicht implizit über VPN-/Tailscale-Erwähnungen. Kein Wireguard-Bezug
+vorhanden (geprüft per grep).
+
+**Umsetzung**: In README.md (DE + EN) den Warnkasten-Titel und -Text von
+"hinter VPN (Tailscale o.ä.)" auf "im eigenen (Heim-)Netz" umformuliert
+(inkl. TOC-Anker), ebenso die Intro-Zeile ("im ganzen (Tail-)Netz" →
+"im eigenen (Heim-)Netzwerk"), den Urheberrechts-Absatz, "Bekannte
+Einschränkungen" sowie zwei bislang übersehene Fundstellen aus einem
+zweiten Durchgang: den PWA-Abschnitt ("praktisch für unterwegs" → "praktisch
+fürs Handy im eigenen WLAN") und zwei Stellen, die `ICECAST_HOSTNAME`/die
+Stream-Adresse als "öffentlich" bezeichnet hatten (jetzt "im lokalen
+Netz"). Rein technische Beschreibungen ohne "von unterwegs hören"-Bezug
+wurden auf Nutzerentscheidung (per Nachfrage) ebenfalls generalisiert:
+die `status`-Warnung bei nicht erreichbarem Hostnamen nennt jetzt keinen
+Tailscale-Mechanismus mehr namentlich, das HTTPS/TLS-Zertifikatsbeispiel
+verweist statt auf `tailscale cert` jetzt auf Let's Encrypt/certbot. Die
+tatsächliche Tailscale-Status-Prüfung in `radiosabbelnich.sh` selbst
+(`cmd_status()`) bleibt unverändert bestehen — nur ihre README-Beschreibung
+wurde entschärft.
+
+**Bewusst NICHT geändert**: Der CHANGELOG-Eintrag vom 2026-08-08 zum
+Umzug des Android-APK-Update-Servers weg von einem "nur per Tailscale
+erreichbaren Dienst" — betrifft die App-Update-Infrastruktur, nicht das
+Radio-Hören, und ist als bewusste Ausnahme bereits in `CLAUDE.md`/
+`android-app/SESSION.md` dokumentiert. Auf Nachfrage vom Nutzer bestätigt.
+
+**Verifiziert**: `grep -in "tailscale\|vpn\|wireguard" README.md`
+liefert keinen Treffer mehr; derselbe Grep über CHANGELOG.md liefert nur
+noch den oben genannten, bewusst belassenen Android-Eintrag.

@@ -65,6 +65,17 @@ usage() {
     echo "  status  - aktueller Zustand (Default ohne Argument)"
 }
 
+# Versionsinfo aus VERSION am Repo-Root -- bei JEDEM Aufruf (egal welches
+# Unterkommando) als Erstes ausgegeben, nicht nur bei "status": der Wrapper
+# ist der einzige Berührungspunkt vieler Nutzer mit dem Stack, und welcher
+# Build gerade läuft ist unabhängig vom gewählten Kommando relevant.
+print_version() {
+    if [ -f VERSION ]; then
+        echo "📌 $(cat VERSION)"
+        echo
+    fi
+}
+
 # --- RAM/HD-Anzeige, von check/start/status gemeinsam genutzt ---
 print_ram_hd() {
     local mem_total_kb mem_avail_kb mem_used_kb mem_total_gb mem_used_gb mem_percent
@@ -610,6 +621,8 @@ cmd_restart() {
     echo
     cmd_start
 }
+
+print_version
 
 case "${1:-status}" in
     check)   cmd_check ;;

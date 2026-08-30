@@ -6,7 +6,7 @@
 
 ## Inhaltsverzeichnis
 
-- [⚠️ Nur privat, nur hinter VPN — kein öffentlicher Betrieb](#️-nur-privat-nur-hinter-vpn--kein-öffentlicher-betrieb)
+- [⚠️ Nur privat, nur im eigenen Netz — kein öffentlicher Betrieb](#️-nur-privat-nur-im-eigenen-netz--kein-öffentlicher-betrieb)
 - [Wie die Erkennung funktioniert](#wie-die-erkennung-funktioniert)
 - [Umgang mit toten Sendern (Watchdog)](#umgang-mit-toten-sendern-watchdog)
 - [Vorausschauendes Puffern & Playout-Delay](#vorausschauendes-puffern--playout-delay)
@@ -37,7 +37,7 @@
   - [Deutschsprachige Musik ausblenden (geplant)](#deutschsprachige-musik-ausblenden-geplant)
   - [iOS-App (Idee, noch nicht terminiert)](#ios-app-idee-noch-nicht-terminiert)
 - [Lizenz](#lizenz)
-- [⚠️ Private use only, behind a VPN — no public deployment](#️-private-use-only-behind-a-vpn--no-public-deployment)
+- [⚠️ Private use only, local network only — no public deployment](#️-private-use-only-local-network-only--no-public-deployment)
 - [How detection works](#how-detection-works)
 - [Handling dead stations (watchdog)](#handling-dead-stations-watchdog)
 - [Look-ahead buffering & playout delay](#look-ahead-buffering--playout-delay)
@@ -82,7 +82,7 @@ RadioSabbelNich hört mehrere Internetradio-Sender gleichzeitig für dich mit
 und schaltet automatisch weiter, sobald irgendwo geredet wird.
 Moderation, Nachrichten, Werbung, Jingles. Übrig bleibt (möglichst) nur
 Musik. Der ausgewählte Sender wird per Icecast neu ausgestrahlt, sodass
-man ihn im ganzen (Tail-)Netz mit VLC, im Browser oder sonst einem
+man ihn im eigenen (Heim-)Netzwerk mit VLC, im Browser oder sonst einem
 Streaming-Client hören kann.
 
 Zusätzlich erkennt RadioSabbelNich automatisch wiederkehrende Songs per
@@ -90,14 +90,14 @@ Audio-Fingerprinting (Chromaprint) und merkt sich, wie oft ein Song schon
 lief — Grundlage für eine spätere Titel-/Interpret-Anzeige per
 Cloud-Abgleich (siehe [Song-Erkennung](#song-erkennung)).
 
-## ⚠️ Nur privat, nur hinter VPN — kein öffentlicher Betrieb
+## ⚠️ Nur privat, nur im eigenen Netz — kein öffentlicher Betrieb
 
 **RadioSabbelNich ist ausdrücklich nicht für den öffentlichen Betrieb
 gedacht.** Icecast-Port (8000) und Web-Interface-Port (5000) gehören
 niemals direkt ins offene Internet (kein Port-Forwarding, kein
-öffentlicher Reverse-Proxy) — RadioSabbelNich läuft immer hinter einem VPN
-(Tailscale o.ä.), erreichbar nur für Geräte im eigenen vertrauten Netz.
-Zwei konkrete Gründe:
+öffentlicher Reverse-Proxy) — RadioSabbelNich läuft immer nur im eigenen
+vertrauten Heimnetz, erreichbar ausschließlich für Geräte in diesem
+lokalen Netz. Zwei konkrete Gründe:
 
 - **Ressourcen**: Ein offen erreichbarer Icecast-Mountpoint wird früher
   oder später gefunden (Scanner, Streaming-Aggregatoren, Hotlinking) —
@@ -105,7 +105,7 @@ Zwei konkrete Gründe:
   und Rechenzeit, ohne dass man das je wieder eingefangen bekommt.
 - **Urheberrecht**: RadioSabbelNich streamt fremde, lizenzierte
   Radioprogramme neu aus. Für den privaten Eigenbedarf im eigenen
-  (Tail-)Netz ist das eine Sache — öffentlich zugänglich gemacht, ist es
+  lokalen Netz ist das eine Sache — öffentlich zugänglich gemacht, ist es
   eine unlizenzierte öffentliche Wiedergabe urheberrechtlich geschützter
   Inhalte. Es gibt reichlich Kanzleien, für die genau das ein
   Geschäftsmodell ist.
@@ -843,7 +843,7 @@ Erreichbar unter `http://<host>:5000/`:
   in einen externen Player (Standardmäßig automatisch aus der Adresse
   gebildet, über die die Seite gerade aufgerufen wird; auf der
   Config-Seite unter "🔗 Streaming-Adresse" fest hinterlegbar, falls die
-  tatsächliche öffentliche Adresse davon abweicht), **📱 Handy** für die
+  tatsächliche Adresse im lokalen Netz davon abweicht), **📱 Handy** für die
   Adresse dieses Web-Interfaces selbst (praktisch, um die Seite auf einem
   zweiten Gerät zu öffnen oder als PWA zu installieren, siehe unten).
   Jedes Popup zeigt zusätzlich die Adresse als Klartext samt
@@ -943,8 +943,8 @@ erreichbar (z.B. für VLC).
 
 ### Als App installieren (PWA)
 
-Die Player-Seite ist als Progressive Web App installierbar — praktisch für
-unterwegs, damit "Zappen" nicht erst einen Browser-Tab braucht. Unter
+Die Player-Seite ist als Progressive Web App installierbar — praktisch fürs
+Handy im eigenen WLAN, damit "Zappen" nicht erst einen Browser-Tab braucht. Unter
 Chrome/Android: Seite öffnen → Menü (⋮) → "Zum Startbildschirm hinzufügen"
 (bzw. Chrome zeigt das oft von selbst als Vorschlag an). Die installierte
 App läuft dann im eigenen Fenster ohne Adressleiste (`display: standalone`).
@@ -1089,15 +1089,17 @@ Datei oder bequemer über `http://<host>:5000/config`.
 
 Für den laufenden Betrieb danach reicht `./radiosabbelnich.sh` (ohne
 Argument = `status`, sonst `check`/`start`/`stop`/`restart`) statt sich
-`docker compose`-Befehle zu merken — `status` zeigt Container-Zustand,
+`docker compose`-Befehle zu merken — bei jedem Aufruf, egal welches
+Unterkommando, zeigt der Wrapper als Erstes den Inhalt von `VERSION`
+(aktueller Build). `status` zeigt zusätzlich Container-Zustand,
 lokale Port-Erreichbarkeit, RAM/HD sowie den aktuell laufenden Sender/
 Track und die Hörerzahl, sofern das Web-Interface erreichbar ist.
 Zusätzlich zeigt `status` den konfigurierten `ICECAST_HOSTNAME` (die
-Adresse für Hörer von außen, nicht nur `localhost`) und warnt rot, falls
-Tailscale ausgeloggt/gestoppt ist (nur bei einem `*.ts.net`-Hostnamen
-relevant) oder gar kein Internet/DNS erreichbar ist (per Ping gegen
-`hamburg.de` geprüft) — beides Fälle, in denen der Stream lokal noch
-normal läuft, aber niemand von außen mehr rankommt. Ein weiterer
+Adresse für Hörer im lokalen Netz, nicht nur `localhost`) und warnt rot,
+falls dieser Hostname nicht erreichbar ist oder gar kein Internet/DNS
+erreichbar ist (per Ping gegen `hamburg.de` geprüft) — beides Fälle, in
+denen der Stream lokal noch normal läuft, aber die konfigurierte Adresse
+nicht mehr stimmt. Ein weiterer
 Abschnitt zeigt den `NEWS_MP3_FOLDER`-Pfad der Nachrichten-Pause samt
 Trefferzahl (schlankere Variante desselben Checks aus `check`).
 
@@ -1107,7 +1109,7 @@ Trefferzahl (schlankere Variante desselben Checks aus `check`).
 |---|---|
 | `ICECAST_ADMIN_USER`/`_PASSWORD` | Icecast-Admin-Login (auch für die Hörer-Abfrage im Web-Interface) |
 | `ICECAST_SOURCE_PASSWORD` | Passwort, mit dem RadioSabbelNich selbst auf Icecast pusht |
-| `ICECAST_HOSTNAME` | Öffentlicher Hostname für den Icecast-Stream |
+| `ICECAST_HOSTNAME` | Hostname für den Icecast-Stream im lokalen Netz |
 | `ICECAST_PORT` | Host-Port für den rohen Icecast-Stream (Default 8000) |
 | `ICECAST_LOCATION`/`ICECAST_ADMIN_EMAIL` | Server-Info-Felder in Icecasts `icecast.xml` |
 | `WEBUI_PORT` | Host-Port für das Web-Interface (Default 5000) |
@@ -1123,7 +1125,7 @@ Trefferzahl (schlankere Variante desselben Checks aus `check`).
 Ohne `TLS_CERT_FILE`/`TLS_KEY_FILE` laufen Web-Interface und Icecast-Stream
 wie bisher nur über HTTP — kein Pflichtschritt.
 
-Mit einem Zertifikat (z.B. per `tailscale cert <hostname>` erzeugt, ein
+Mit einem Zertifikat (z.B. per Let's Encrypt/certbot erzeugt, ein
 `.crt`+`.key`-Paar):
 
 1. Beide Host-Pfade in `.env` eintragen (`TLS_CERT_FILE`/`TLS_KEY_FILE`).
@@ -1235,7 +1237,7 @@ bis zu 24h lang fälschlich weiter als "verfügbar" anzeigen.
 ## Bekannte Einschränkungen
 
 - Kein Auth auf dem Web-Interface/Config-Seite — siehe Warnung oben,
-  unbedingt hinter VPN/Tailscale betreiben.
+  unbedingt nur im eigenen lokalen Netz betreiben.
 - Nicht jeder Sender liefert brauchbare "Jetzt läuft"-Metadaten; das
   entscheidet der jeweilige Sender-Betreiber.
 - Fingerprint-Erkennung ist ein Best-Effort-Mechanismus (Constellation-
@@ -1404,7 +1406,7 @@ RadioSabbelNich listens to several internet radio stations at once and
 automatically switches away the moment someone starts talking —
 presenting, news, ads, jingles. What's left (ideally) is just music.
 The currently selected station is re-streamed via Icecast, so you can
-listen to it anywhere on your (Tail)net with VLC, in the browser, or
+listen to it on your own home network with VLC, in the browser, or
 any other streaming client.
 
 It also automatically recognizes recurring songs via audio fingerprinting
@@ -1412,22 +1414,22 @@ It also automatically recognizes recurring songs via audio fingerprinting
 groundwork for a later title/artist display via a cloud lookup (see
 [Song recognition](#song-recognition)).
 
-## ⚠️ Private use only, behind a VPN — no public deployment
+## ⚠️ Private use only, local network only — no public deployment
 
 **RadioSabbelNich is explicitly not meant for public deployment.** The
 Icecast port (8000) and the web interface port (5000) must never be
 exposed directly to the open internet (no port forwarding, no public
-reverse proxy) — RadioSabbelNich always runs behind a VPN (Tailscale or
-similar), reachable only from devices on your own trusted network. Two
-concrete reasons:
+reverse proxy) — RadioSabbelNich always runs only on your own trusted
+home network, reachable exclusively from devices on that local network.
+Two concrete reasons:
 
 - **Resources**: an openly reachable Icecast mount point will sooner
   or later be found (scanners, streaming aggregators, hotlinking) —
   and then potentially half the internet starts pulling bandwidth and
   CPU time uncontrolled, in a way you can never fully rein back in.
 - **Copyright**: RadioSabbelNich re-streams other people's licensed radio
-  programs. For private personal use inside your own (Tail)net that's
-  one thing — made publicly accessible, it's an unlicensed public
+  programs. For private personal use inside your own local network
+  that's one thing — made publicly accessible, it's an unlicensed public
   performance of copyrighted content. There is no shortage of law
   firms for whom that's exactly a business model.
 
@@ -2133,8 +2135,8 @@ Reachable at `http://<host>:5000/`:
   open a QR code popup: **▶️ VLC** for the stream URL to enter into an
   external player (by default derived automatically from the address
   the page is currently being accessed with; can be pinned on the
-  config page under "🔗 Streaming-Adresse" if the actual public address
-  differs), **📱 Phone** for the address of this web interface itself
+  config page under "🔗 Streaming-Adresse" if the actual local network
+  address differs), **📱 Phone** for the address of this web interface itself
   (handy for opening the page on a second device or installing it as a
   PWA, see below). Each popup also shows the address as plain text
   with a "📋 Copy address" button. QR codes are generated entirely
@@ -2232,8 +2234,8 @@ The raw Icecast stream also remains reachable in parallel at
 
 ### Installing as an app (PWA)
 
-The player page can be installed as a Progressive Web App — handy on
-the go, so "zapping" doesn't need a browser tab first. On Chrome/
+The player page can be installed as a Progressive Web App — handy for
+your phone on your own Wi-Fi, so "zapping" doesn't need a browser tab first. On Chrome/
 Android: open the page → menu (⋮) → "Add to home screen" (Chrome often
 suggests this on its own). The installed app then runs in its own
 window without an address bar (`display: standalone`).
@@ -2372,15 +2374,17 @@ the file or more conveniently via `http://<host>:5000/config`.
 
 For day-to-day operation afterwards, `./radiosabbelnich.sh` (no
 argument = `status`, otherwise `check`/`start`/`stop`/`restart`) saves
-you from remembering `docker compose` commands — `status` shows
+you from remembering `docker compose` commands — every invocation,
+regardless of the subcommand, prints the `VERSION` file contents
+(current build) first. `status` also shows
 container state, local port reachability, RAM/disk, plus the currently
 playing station/track and listener count, if the web interface is
 reachable. It also shows the configured `ICECAST_HOSTNAME` (the address
-listeners use from outside, not just `localhost`) and prints a red
-warning if Tailscale is logged out/stopped (only relevant for a
-`*.ts.net` hostname) or if there's no internet/DNS at all (checked via
-a ping to `hamburg.de`) — both cases where the stream still runs fine
-locally but nobody outside can reach it anymore. Another section shows
+listeners on the local network use, not just `localhost`) and prints a
+red warning if that hostname isn't reachable or if there's no
+internet/DNS at all (checked via a ping to `hamburg.de`) — both cases
+where the stream still runs fine locally but the configured address is
+no longer valid. Another section shows
 the news break's `NEWS_MP3_FOLDER` path along with a file count (a
 leaner version of the same check from `check`).
 
@@ -2390,7 +2394,7 @@ leaner version of the same check from `check`).
 |---|---|
 | `ICECAST_ADMIN_USER`/`_PASSWORD` | Icecast admin login (also used for the listener query in the web interface) |
 | `ICECAST_SOURCE_PASSWORD` | Password RadioSabbelNich itself uses to push to Icecast |
-| `ICECAST_HOSTNAME` | Public hostname for the Icecast stream |
+| `ICECAST_HOSTNAME` | Hostname for the Icecast stream on the local network |
 | `ICECAST_PORT` | Host port for the raw Icecast stream (default 8000) |
 | `ICECAST_LOCATION`/`ICECAST_ADMIN_EMAIL` | Server info fields in Icecast's `icecast.xml` |
 | `WEBUI_PORT` | Host port for the web interface (default 5000) |
@@ -2406,7 +2410,7 @@ leaner version of the same check from `check`).
 Without `TLS_CERT_FILE`/`TLS_KEY_FILE`, the web interface and Icecast
 stream keep running over plain HTTP as before — not a required step.
 
-With a certificate (e.g. generated via `tailscale cert <hostname>`, a
+With a certificate (e.g. generated via Let's Encrypt/certbot, a
 `.crt`+`.key` pair):
 
 1. Enter both host paths in `.env` (`TLS_CERT_FILE`/`TLS_KEY_FILE`).
@@ -2519,7 +2523,7 @@ this, the banner could keep falsely showing an already-installed update as
 ## Known limitations
 
 - No auth on the web interface/config page — see the warning above,
-  make sure to run it behind a VPN/Tailscale.
+  make sure to only run it on your own local network.
 - Not every station delivers usable "now playing" metadata; that's up
   to the respective station operator.
 - Fingerprint detection is a best-effort mechanism (constellation-map

@@ -49,8 +49,8 @@
   },
   "update_check": {
     "enabled": true,
-    "last_checked_at": 1787991172.3982317,
-    "last_known_remote_version": "v1.2.36 build 2026-08-28 18:16 Uhr",
+    "last_checked_at": 1788083476.7509243,
+    "last_known_remote_version": "v1.2.44 build 2026-08-29 17:35 Uhr",
     "update_available": false
   },
   "night_scan": {
@@ -63,81 +63,81 @@
     "capture_timeout_seconds": 150.0,
     "min_speech_seconds": 25.0,
     "concurrency": 1,
-    "last_run_date": null,
-    "last_run_started_at": 1788024097.9081562,
-    "last_run_finished_at": 1788024146.6519856,
+    "last_run_date": "2026-08-30",
+    "last_run_started_at": 1788051600.504874,
+    "last_run_finished_at": 1788069688.963212,
     "suggestions": {
       "105-5-spreeradio-80er": {
-        "label": "detected",
-        "language": "en",
-        "confidence": 0.518,
-        "scanned_at": 1788024100.0789802
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788051757.6358094
       },
       "105-5-spreeradio-rock": {
-        "label": "detected",
-        "language": "de",
-        "confidence": 0.981,
-        "scanned_at": 1788024100.0793262
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788051888.4028063
       },
       "80s80s": {
-        "label": "detected",
-        "language": "de",
-        "confidence": 0.995,
-        "scanned_at": 1788024101.049203
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788052019.856337
       },
       "ffn": {
-        "label": "detected",
-        "language": "de",
-        "confidence": 0.978,
-        "scanned_at": 1788024102.1673355
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788052169.9855964
       },
       "hamburg-zwei": {
         "label": "detected",
         "language": "de",
-        "confidence": 0.984,
-        "scanned_at": 1788024102.167765
+        "confidence": 0.993,
+        "scanned_at": 1788052177.9115067
       },
       "heart-london": {
-        "label": "detected",
-        "language": "en",
-        "confidence": 0.942,
-        "scanned_at": 1788024102.548697
-      },
-      "ndr-90-3-hamburg": {
         "label": "music",
         "language": null,
         "confidence": null,
-        "scanned_at": 1788024112.773785
+        "scanned_at": 1788052313.5164454
+      },
+      "ndr-90-3-hamburg": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.99,
+        "scanned_at": 1788052350.8145013
       },
       "ndr1-welle-nord-schleswig-holstein": {
-        "label": "detected",
-        "language": "en",
-        "confidence": 0.588,
-        "scanned_at": 1788024112.774102
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788052495.9731162
       },
       "radio-bob": {
         "label": "music",
         "language": null,
         "confidence": null,
-        "scanned_at": 1788024118.4545338
+        "scanned_at": 1788052631.5704691
       },
       "radio-bob-best-of-rock": {
         "label": "music",
         "language": null,
         "confidence": null,
-        "scanned_at": 1788024118.4549809
+        "scanned_at": 1788052770.8144376
       },
       "radio-bob-blues": {
         "label": "music",
         "language": null,
         "confidence": null,
-        "scanned_at": 1788024118.4572978
+        "scanned_at": 1788052914.365476
       },
       "swr3": {
         "label": "detected",
         "language": "de",
-        "confidence": 0.945,
-        "scanned_at": 1788024100.078511
+        "confidence": 0.99,
+        "scanned_at": 1788051626.7396734
       },
       "90s90s": {
         "label": "detected",
@@ -210,22 +210,1078 @@
         "language": "en",
         "confidence": 0.916,
         "scanned_at": 1788024146.64973
+      },
+      "bayern-2": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788053060.2524974
+      },
+      "antenne-th-ringen": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.98,
+        "scanned_at": 1788053138.5933564
+      },
+      "100-5-alemannia": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788053280.3455024
+      },
+      "bayern-3": {
+        "label": "detected",
+        "language": "en",
+        "confidence": 0.851,
+        "scanned_at": 1788053374.7964659
+      },
+      "br-heimat": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788053519.8875864
+      },
+      "br-klassik": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788053667.9124172
+      },
+      "bremen-eins": {
+        "label": "detected",
+        "language": "en",
+        "confidence": 0.929,
+        "scanned_at": 1788053702.437259
+      },
+      "bremen-vier": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788053847.727104
+      },
+      "bremen-vier-rockt": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788053992.662048
+      },
+      "bremen-zwei": {
+        "label": "detected",
+        "language": "en",
+        "confidence": 0.923,
+        "scanned_at": 1788054030.1079519
+      },
+      "100-5-das-hitradio": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.99,
+        "scanned_at": 1788054120.2085016
+      },
+      "105-5-spreeradio-weihnachtsradio": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788054253.8091922
+      },
+      "campusradio-universit-t-duisburg-essen-campusfm": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788054393.645452
+      },
+      "bayern-1-niederbayern-und-oberpfalz": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.997,
+        "scanned_at": 1788054437.1341736
+      },
+      "bayern-1-mainfranken": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.93,
+        "scanned_at": 1788054552.6867886
+      },
+      "bayern-1-oberbayern": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.988,
+        "scanned_at": 1788054596.2021878
+      },
+      "campusradio-m-nster-radio-q": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788054744.0121121
+      },
+      "campusradio-siegen-radius921": {
+        "label": "detected",
+        "language": "en",
+        "confidence": 0.58,
+        "scanned_at": 1788054850.7855933
+      },
+      "bigfm": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788054981.4591033
+      },
+      "campusradio-bielefeld-hertz-87-9": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788055128.7925189
+      },
+      "campusradio-regensburg-studentenfunk": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788055275.7472744
+      },
+      "dasding": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.995,
+        "scanned_at": 1788055298.1537454
+      },
+      "campusradio-karlsruhe-radio-kit": {
+        "label": "unreachable",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788055298.3491395
+      },
+      "campusradio-paderborn-l-unico": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788055448.3870583
+      },
+      "deluxe-lounge-radio": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788055579.984979
+      },
+      "campusradio-k-ln-k-lncampus": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788055726.5544667
+      },
+      "deluxe-easy": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788055857.909841
+      },
+      "campusradio-bochum-ct-das-radio": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.994,
+        "scanned_at": 1788055900.7494771
+      },
+      "deluxe-music-radio": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.971,
+        "scanned_at": 1788055921.122863
+      },
+      "deutschlandfunk-kultur": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788056068.1095984
+      },
+      "deutschlandfunk": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788056214.9927742
+      },
+      "deutschlandfunk-nova": {
+        "label": "detected",
+        "language": "en",
+        "confidence": 0.966,
+        "scanned_at": 1788056299.2302828
+      },
+      "deutschlandradio-dokumente-und-debatten": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788056446.2505372
+      },
+      "domradio-de": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.985,
+        "scanned_at": 1788056590.5395286
+      },
+      "fluxfm": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788056721.4758947
+      },
+      "die-neue-107-7": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788056862.9291456
+      },
+      "donau-3-fm": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.988,
+        "scanned_at": 1788056875.9868476
+      },
+      "freundesdienst": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.974,
+        "scanned_at": 1788056904.2914467
+      },
+      "campusradio-mannheim-radioaktiv": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788057053.0933964
+      },
+      "fritz": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.997,
+        "scanned_at": 1788057075.7181828
+      },
+      "hbr": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.965,
+        "scanned_at": 1788057099.6090996
+      },
+      "hr-info": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.991,
+        "scanned_at": 1788057122.053585
+      },
+      "hr1": {
+        "label": "detected",
+        "language": "en",
+        "confidence": 0.852,
+        "scanned_at": 1788057189.623327
+      },
+      "egofm": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.993,
+        "scanned_at": 1788057208.0377877
+      },
+      "hr2-kultur": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788057356.0350704
+      },
+      "hr4": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.981,
+        "scanned_at": 1788057378.284609
+      },
+      "hr3": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788057523.3479464
+      },
+      "hcjb": {
+        "label": "detected",
+        "language": "ru",
+        "confidence": 0.994,
+        "scanned_at": 1788057543.6640356
+      },
+      "jam-fm": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.985,
+        "scanned_at": 1788057551.4352524
+      },
+      "jam-fm-new-music-radio": {
+        "label": "detected",
+        "language": "es",
+        "confidence": 0.428,
+        "scanned_at": 1788057634.0769887
+      },
+      "jam-fm-black-label": {
+        "label": "detected",
+        "language": "en",
+        "confidence": 0.874,
+        "scanned_at": 1788057692.7480023
+      },
+      "hit-radio-ffh": {
+        "label": "detected",
+        "language": "en",
+        "confidence": 0.864,
+        "scanned_at": 1788057831.5105817
+      },
+      "harmony-fm": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788057973.164742
+      },
+      "jazzradio-berlin": {
+        "label": "detected",
+        "language": "en",
+        "confidence": 0.768,
+        "scanned_at": 1788058045.820565
+      },
+      "wdr-die-maus": {
+        "label": "detected",
+        "language": "en",
+        "confidence": 0.889,
+        "scanned_at": 1788058083.2847805
+      },
+      "mdr-aktuell": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.994,
+        "scanned_at": 1788058105.3428597
+      },
+      "mdr-jump": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788058250.62297
+      },
+      "mdr-klassik": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788058395.807535
+      },
+      "campusradio-ilmenau": {
+        "label": "detected",
+        "language": "en",
+        "confidence": 0.952,
+        "scanned_at": 1788058421.6152885
+      },
+      "mdr-kultur": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788058566.9060683
+      },
+      "inselradio": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.98,
+        "scanned_at": 1788058645.1674464
+      },
+      "mdr-sachsen": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788058790.124444
+      },
+      "mdr-th-ringen": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.993,
+        "scanned_at": 1788058830.3557806
+      },
+      "mdr-sputnik": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.995,
+        "scanned_at": 1788058852.7892582
+      },
+      "n-joy": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.991,
+        "scanned_at": 1788058875.4782395
+      },
+      "ndr-1-radio-mv": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.994,
+        "scanned_at": 1788058897.9783278
+      },
+      "ndr-1-niedersachsen": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.996,
+        "scanned_at": 1788058920.5154557
+      },
+      "ndr-2": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.995,
+        "scanned_at": 1788058942.9353914
+      },
+      "ndr-1-welle-nord": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.991,
+        "scanned_at": 1788058965.2282467
+      },
+      "ndr-90-3": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.997,
+        "scanned_at": 1788058990.7132528
+      },
+      "ndr-info": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.998,
+        "scanned_at": 1788059013.3426533
+      },
+      "ndr-blue": {
+        "label": "detected",
+        "language": "en",
+        "confidence": 0.923,
+        "scanned_at": 1788059065.7387965
+      },
+      "ndr-info-spezial": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.999,
+        "scanned_at": 1788059088.3733244
+      },
+      "ndr-kultur": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788059233.6173568
+      },
+      "ndr-schlager": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.887,
+        "scanned_at": 1788059268.2301073
+      },
+      "radio-7": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788059398.872826
+      },
+      "metal-only": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788059546.5172193
+      },
+      "ostseewelle-hit-radio": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788059687.9293752
+      },
+      "radio-bob-national": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.988,
+        "scanned_at": 1788059700.7956777
+      },
+      "radio-bob-nrw": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788059844.6388116
+      },
+      "planet-radio": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.995,
+        "scanned_at": 1788059962.2958035
+      },
+      "radio-bob-schleswig-holstein": {
+        "label": "detected",
+        "language": "en",
+        "confidence": 0.85,
+        "scanned_at": 1788060043.9618704
+      },
+      "radio-bob-metal": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788060179.266168
+      },
+      "landeswelle-th-ringen": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788060299.8503544
+      },
+      "radio-bob-alternative-rock": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788060430.7125857
+      },
+      "nice": {
+        "label": "detected",
+        "language": "en",
+        "confidence": 0.888,
+        "scanned_at": 1788060565.0531473
+      },
+      "radio-90-1": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.975,
+        "scanned_at": 1788060586.7921813
+      },
+      "radio-bob-country": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788060717.404125
+      },
+      "radio-bob-classic-rock": {
+        "label": "detected",
+        "language": "en",
+        "confidence": 0.955,
+        "scanned_at": 1788060789.7642224
+      },
+      "radio-bob-emo": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788060932.5414846
+      },
+      "radio-bob-college-rock": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788061077.603558
+      },
+      "radio-bob-christmas": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788061223.2957375
+      },
+      "radio-bob-wacken": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788061364.0390475
+      },
+      "radio-bob-acdc": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788061503.8507524
+      },
+      "radio-bob-deutschrock": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788061646.3919656
+      },
+      "radio-bob-90er-rock": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788061790.6342628
+      },
+      "radio-bob-70er-rock": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788061932.7760568
+      },
+      "radio-bob-grunge": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788062078.2859092
+      },
+      "radio-bob-hardrock": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788062212.0286486
+      },
+      "radio-bob-metalcore": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788062352.663932
+      },
+      "radio-bob-2000er-rock": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788062491.871275
+      },
+      "radio-b2": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.996,
+        "scanned_at": 1788062510.1779764
+      },
+      "radio-bob-tobias-sammet-rockshow": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788062648.937321
+      },
+      "radio-bob-the-boss-hoss": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788062785.4450111
+      },
+      "radio-bob-metallica": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788062931.0179892
+      },
+      "radio-bob-fury-in-the-slaughterhouse": {
+        "label": "detected",
+        "language": "en",
+        "confidence": 0.557,
+        "scanned_at": 1788063056.9418943
+      },
+      "radio-bob-mittelalter-rock": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788063199.2283006
+      },
+      "radio-bob-donots": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788063340.2586799
+      },
+      "radio-bob-symphonic-metal": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788063479.5007248
+      },
+      "radio-bob-punk": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788063619.9839876
+      },
+      "radio-bob-prog-rock": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788063765.5992196
+      },
+      "radio-bob-kuschelrock": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788063899.0819523
+      },
+      "radio-bob-power-metal": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788064044.2016451
+      },
+      "radio-bob-death-metal": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788064174.9542906
+      },
+      "radio-bob-rockparty": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788064318.237916
+      },
+      "radio-bob-newcomer": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788064463.707826
+      },
+      "radio-bob-southern-rock": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788064603.5770483
+      },
+      "radio-bob-der-dunkle-parabelritter": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788064739.5905762
+      },
+      "radio-bob-gothic-rock": {
+        "label": "detected",
+        "language": "en",
+        "confidence": 0.737,
+        "scanned_at": 1788064798.4268994
+      },
+      "radio-bob-folk-rock": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788064943.7868817
+      },
+      "radio-bob-festival": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788065074.4490755
+      },
+      "radio-bob-unplugged": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.987,
+        "scanned_at": 1788065082.2822075
+      },
+      "radio-bob-singer-songwriter": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788065224.6482456
+      },
+      "radio-bob-harte-saite": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788065364.3965762
+      },
+      "radio-bob-queen": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788065501.1825361
+      },
+      "radio-bob-rock-oldies": {
+        "label": "detected",
+        "language": "en",
+        "confidence": 0.735,
+        "scanned_at": 1788065524.7241366
+      },
+      "radio-brocken": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788065655.3391416
+      },
+      "radio-bob-rock-hits": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788065795.7910435
+      },
+      "radio-horeb": {
+        "label": "detected",
+        "language": "la",
+        "confidence": 0.269,
+        "scanned_at": 1788065852.2353983
+      },
+      "radio-bob-mot-rhead": {
+        "label": "detected",
+        "language": "en",
+        "confidence": 0.646,
+        "scanned_at": 1788065932.060051
+      },
+      "radio-energy-sachsen": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.996,
+        "scanned_at": 1788066018.8544915
+      },
+      "radio-regenbogen": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.992,
+        "scanned_at": 1788066061.576821
+      },
+      "radio-teddy": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.996,
+        "scanned_at": 1788066069.4061732
+      },
+      "radio-saw": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.996,
+        "scanned_at": 1788066077.395489
+      },
+      "radio-teddy-berlin-brandenburg": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.997,
+        "scanned_at": 1788066091.0194464
+      },
+      "radio-paloma": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.995,
+        "scanned_at": 1788066151.5650434
+      },
+      "oldenburg-eins": {
+        "label": "detected",
+        "language": "en",
+        "confidence": 0.866,
+        "scanned_at": 1788066293.57846
+      },
+      "radio-top-40": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788066414.2707677
+      },
+      "radio-energy-stuttgart": {
+        "label": "detected",
+        "language": "en",
+        "confidence": 0.935,
+        "scanned_at": 1788066495.6671033
+      },
+      "radio-energy-bremen": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788066636.7057707
+      },
+      "radio-teddy-gute-nacht-lieder": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.963,
+        "scanned_at": 1788066668.2699986
+      },
+      "radio-teddy-s-dwest": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.997,
+        "scanned_at": 1788066678.9004555
+      },
+      "radio-teddy-deutsch-pop-nonstop": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.992,
+        "scanned_at": 1788066689.63543
+      },
+      "radio-teddy-kinderlieder": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.993,
+        "scanned_at": 1788066700.326917
+      },
+      "radio-teddy-kinder-disco": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.995,
+        "scanned_at": 1788066720.17523
+      },
+      "radio-teddy-kita-kabelsalat": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.993,
+        "scanned_at": 1788066730.869887
+      },
+      "radio-teddy-rolf-zuckowski": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.996,
+        "scanned_at": 1788066742.5553591
+      },
+      "radio-teddy-teddy-cool-bibi-tina": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788066877.3053312
+      },
+      "radio-teddy-weihnachtslieder": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788067007.8154693
+      },
+      "rbb-inforadio": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.985,
+        "scanned_at": 1788067030.3011653
+      },
+      "rbbkultur": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788067177.3609595
+      },
+      "radioeins": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788067322.6223757
+      },
+      "rbb-88-8": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788067467.8559556
+      },
+      "reboot-fm": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788067616.1711829
+      },
+      "rock-antenne": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788067738.967065
+      },
+      "rock-antenne-heavy-metal": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788067861.8659685
+      },
+      "radio-teddy-schlager": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.997,
+        "scanned_at": 1788067914.5400274
+      },
+      "radio-teddy-teddy-cool-eure-superstars": {
+        "label": "detected",
+        "language": "es",
+        "confidence": 0.363,
+        "scanned_at": 1788068032.2154875
+      },
+      "rockland-fm": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788068162.8931496
+      },
+      "rpr1": {
+        "label": "detected",
+        "language": "en",
+        "confidence": 0.918,
+        "scanned_at": 1788068207.5855024
+      },
+      "rockland-radio": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.991,
+        "scanned_at": 1788068230.4648433
+      },
+      "radio-teddy-bayern": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.995,
+        "scanned_at": 1788068310.061421
+      },
+      "sr-1-europawelle": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.99,
+        "scanned_at": 1788068455.505892
+      },
+      "sr-2-kulturradio": {
+        "label": "detected",
+        "language": "en",
+        "confidence": 0.378,
+        "scanned_at": 1788068504.6844912
+      },
+      "sr-3-saarlandwelle": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788068650.1223185
+      },
+      "radio-teddy-hessen": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.994,
+        "scanned_at": 1788068690.848576
+      },
+      "radio-teddy-bremen": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.995,
+        "scanned_at": 1788068704.4836361
+      },
+      "sunshine-live-house": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788068835.210953
+      },
+      "sunshine-live": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788068965.8210924
+      },
+      "radio-teddy-mecklenburg-vorpommern": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788069096.4955318
+      },
+      "sunshine-live-classics": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788069227.295263
+      },
+      "radio-teddy-nordrhein-westfalen": {
+        "label": "detected",
+        "language": "de",
+        "confidence": 0.99,
+        "scanned_at": 1788069235.159356
+      },
+      "sunshine-live-edm": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788069374.6242058
+      },
+      "sunshine-live-trance": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788069515.6272
+      },
+      "sunshine-live-hard": {
+        "label": "detected",
+        "language": "en",
+        "confidence": 0.973,
+        "scanned_at": 1788069544.1236482
+      },
+      "sunshine-live-lounge": {
+        "label": "music",
+        "language": null,
+        "confidence": null,
+        "scanned_at": 1788069688.9614782
       }
     },
     "scanned_at": {
-      "105-5-spreeradio-80er": 1788024100.0789802,
-      "105-5-spreeradio-rock": 1788024100.0793262,
+      "105-5-spreeradio-80er": 1788051757.6358094,
+      "105-5-spreeradio-rock": 1788051888.4028063,
       "1live": 1788003511.4154139,
-      "80s80s": 1788024101.049203,
-      "ffn": 1788024102.1673355,
-      "hamburg-zwei": 1788024102.167765,
-      "heart-london": 1788024102.548697,
-      "ndr-90-3-hamburg": 1788024112.773785,
-      "ndr1-welle-nord-schleswig-holstein": 1788024112.774102,
-      "radio-bob": 1788024118.4545338,
-      "radio-bob-best-of-rock": 1788024118.4549809,
-      "radio-bob-blues": 1788024118.4572978,
-      "swr3": 1788024100.078511,
+      "80s80s": 1788052019.856337,
+      "ffn": 1788052169.9855964,
+      "hamburg-zwei": 1788052177.9115067,
+      "heart-london": 1788052313.5164454,
+      "ndr-90-3-hamburg": 1788052350.8145013,
+      "ndr1-welle-nord-schleswig-holstein": 1788052495.9731162,
+      "radio-bob": 1788052631.5704691,
+      "radio-bob-best-of-rock": 1788052770.8144376,
+      "radio-bob-blues": 1788052914.365476,
+      "swr3": 1788051626.7396734,
       "90s90s": 1788024119.110913,
       "105-5-spreeradio": 1788024126.960121,
       "1live-diggi": 1788024126.9604716,
@@ -237,7 +1293,183 @@
       "br24": 1788024141.9538014,
       "absolut-relax": 1788024142.635024,
       "bayern-1-mittel-und-oberfranken": 1788024146.64932,
-      "bayern-1-schwaben": 1788024146.64973
+      "bayern-1-schwaben": 1788024146.64973,
+      "bayern-2": 1788053060.2524974,
+      "antenne-th-ringen": 1788053138.5933564,
+      "100-5-alemannia": 1788053280.3455024,
+      "bayern-3": 1788053374.7964659,
+      "br-heimat": 1788053519.8875864,
+      "br-klassik": 1788053667.9124172,
+      "bremen-eins": 1788053702.437259,
+      "bremen-vier": 1788053847.727104,
+      "bremen-vier-rockt": 1788053992.662048,
+      "bremen-zwei": 1788054030.1079519,
+      "100-5-das-hitradio": 1788054120.2085016,
+      "105-5-spreeradio-weihnachtsradio": 1788054253.8091922,
+      "campusradio-universit-t-duisburg-essen-campusfm": 1788054393.645452,
+      "bayern-1-niederbayern-und-oberpfalz": 1788054437.1341736,
+      "bayern-1-mainfranken": 1788054552.6867886,
+      "bayern-1-oberbayern": 1788054596.2021878,
+      "campusradio-m-nster-radio-q": 1788054744.0121121,
+      "campusradio-siegen-radius921": 1788054850.7855933,
+      "bigfm": 1788054981.4591033,
+      "campusradio-bielefeld-hertz-87-9": 1788055128.7925189,
+      "campusradio-regensburg-studentenfunk": 1788055275.7472744,
+      "dasding": 1788055298.1537454,
+      "campusradio-karlsruhe-radio-kit": 1788055298.3491395,
+      "campusradio-paderborn-l-unico": 1788055448.3870583,
+      "deluxe-lounge-radio": 1788055579.984979,
+      "campusradio-k-ln-k-lncampus": 1788055726.5544667,
+      "deluxe-easy": 1788055857.909841,
+      "campusradio-bochum-ct-das-radio": 1788055900.7494771,
+      "deluxe-music-radio": 1788055921.122863,
+      "deutschlandfunk-kultur": 1788056068.1095984,
+      "deutschlandfunk": 1788056214.9927742,
+      "deutschlandfunk-nova": 1788056299.2302828,
+      "deutschlandradio-dokumente-und-debatten": 1788056446.2505372,
+      "domradio-de": 1788056590.5395286,
+      "fluxfm": 1788056721.4758947,
+      "die-neue-107-7": 1788056862.9291456,
+      "donau-3-fm": 1788056875.9868476,
+      "freundesdienst": 1788056904.2914467,
+      "campusradio-mannheim-radioaktiv": 1788057053.0933964,
+      "fritz": 1788057075.7181828,
+      "hbr": 1788057099.6090996,
+      "hr-info": 1788057122.053585,
+      "hr1": 1788057189.623327,
+      "egofm": 1788057208.0377877,
+      "hr2-kultur": 1788057356.0350704,
+      "hr4": 1788057378.284609,
+      "hr3": 1788057523.3479464,
+      "hcjb": 1788057543.6640356,
+      "jam-fm": 1788057551.4352524,
+      "jam-fm-new-music-radio": 1788057634.0769887,
+      "jam-fm-black-label": 1788057692.7480023,
+      "hit-radio-ffh": 1788057831.5105817,
+      "harmony-fm": 1788057973.164742,
+      "jazzradio-berlin": 1788058045.820565,
+      "wdr-die-maus": 1788058083.2847805,
+      "mdr-aktuell": 1788058105.3428597,
+      "mdr-jump": 1788058250.62297,
+      "mdr-klassik": 1788058395.807535,
+      "campusradio-ilmenau": 1788058421.6152885,
+      "mdr-kultur": 1788058566.9060683,
+      "inselradio": 1788058645.1674464,
+      "mdr-sachsen": 1788058790.124444,
+      "mdr-th-ringen": 1788058830.3557806,
+      "mdr-sputnik": 1788058852.7892582,
+      "n-joy": 1788058875.4782395,
+      "ndr-1-radio-mv": 1788058897.9783278,
+      "ndr-1-niedersachsen": 1788058920.5154557,
+      "ndr-2": 1788058942.9353914,
+      "ndr-1-welle-nord": 1788058965.2282467,
+      "ndr-90-3": 1788058990.7132528,
+      "ndr-info": 1788059013.3426533,
+      "ndr-blue": 1788059065.7387965,
+      "ndr-info-spezial": 1788059088.3733244,
+      "ndr-kultur": 1788059233.6173568,
+      "ndr-schlager": 1788059268.2301073,
+      "radio-7": 1788059398.872826,
+      "metal-only": 1788059546.5172193,
+      "ostseewelle-hit-radio": 1788059687.9293752,
+      "radio-bob-national": 1788059700.7956777,
+      "radio-bob-nrw": 1788059844.6388116,
+      "planet-radio": 1788059962.2958035,
+      "radio-bob-schleswig-holstein": 1788060043.9618704,
+      "radio-bob-metal": 1788060179.266168,
+      "landeswelle-th-ringen": 1788060299.8503544,
+      "radio-bob-alternative-rock": 1788060430.7125857,
+      "nice": 1788060565.0531473,
+      "radio-90-1": 1788060586.7921813,
+      "radio-bob-country": 1788060717.404125,
+      "radio-bob-classic-rock": 1788060789.7642224,
+      "radio-bob-emo": 1788060932.5414846,
+      "radio-bob-college-rock": 1788061077.603558,
+      "radio-bob-christmas": 1788061223.2957375,
+      "radio-bob-wacken": 1788061364.0390475,
+      "radio-bob-acdc": 1788061503.8507524,
+      "radio-bob-deutschrock": 1788061646.3919656,
+      "radio-bob-90er-rock": 1788061790.6342628,
+      "radio-bob-70er-rock": 1788061932.7760568,
+      "radio-bob-grunge": 1788062078.2859092,
+      "radio-bob-hardrock": 1788062212.0286486,
+      "radio-bob-metalcore": 1788062352.663932,
+      "radio-bob-2000er-rock": 1788062491.871275,
+      "radio-b2": 1788062510.1779764,
+      "radio-bob-tobias-sammet-rockshow": 1788062648.937321,
+      "radio-bob-the-boss-hoss": 1788062785.4450111,
+      "radio-bob-metallica": 1788062931.0179892,
+      "radio-bob-fury-in-the-slaughterhouse": 1788063056.9418943,
+      "radio-bob-mittelalter-rock": 1788063199.2283006,
+      "radio-bob-donots": 1788063340.2586799,
+      "radio-bob-symphonic-metal": 1788063479.5007248,
+      "radio-bob-punk": 1788063619.9839876,
+      "radio-bob-prog-rock": 1788063765.5992196,
+      "radio-bob-kuschelrock": 1788063899.0819523,
+      "radio-bob-power-metal": 1788064044.2016451,
+      "radio-bob-death-metal": 1788064174.9542906,
+      "radio-bob-rockparty": 1788064318.237916,
+      "radio-bob-newcomer": 1788064463.707826,
+      "radio-bob-southern-rock": 1788064603.5770483,
+      "radio-bob-der-dunkle-parabelritter": 1788064739.5905762,
+      "radio-bob-gothic-rock": 1788064798.4268994,
+      "radio-bob-folk-rock": 1788064943.7868817,
+      "radio-bob-festival": 1788065074.4490755,
+      "radio-bob-unplugged": 1788065082.2822075,
+      "radio-bob-singer-songwriter": 1788065224.6482456,
+      "radio-bob-harte-saite": 1788065364.3965762,
+      "radio-bob-queen": 1788065501.1825361,
+      "radio-bob-rock-oldies": 1788065524.7241366,
+      "radio-brocken": 1788065655.3391416,
+      "radio-bob-rock-hits": 1788065795.7910435,
+      "radio-horeb": 1788065852.2353983,
+      "radio-bob-mot-rhead": 1788065932.060051,
+      "radio-energy-sachsen": 1788066018.8544915,
+      "radio-regenbogen": 1788066061.576821,
+      "radio-teddy": 1788066069.4061732,
+      "radio-saw": 1788066077.395489,
+      "radio-teddy-berlin-brandenburg": 1788066091.0194464,
+      "radio-paloma": 1788066151.5650434,
+      "oldenburg-eins": 1788066293.57846,
+      "radio-top-40": 1788066414.2707677,
+      "radio-energy-stuttgart": 1788066495.6671033,
+      "radio-energy-bremen": 1788066636.7057707,
+      "radio-teddy-gute-nacht-lieder": 1788066668.2699986,
+      "radio-teddy-s-dwest": 1788066678.9004555,
+      "radio-teddy-deutsch-pop-nonstop": 1788066689.63543,
+      "radio-teddy-kinderlieder": 1788066700.326917,
+      "radio-teddy-kinder-disco": 1788066720.17523,
+      "radio-teddy-kita-kabelsalat": 1788066730.869887,
+      "radio-teddy-rolf-zuckowski": 1788066742.5553591,
+      "radio-teddy-teddy-cool-bibi-tina": 1788066877.3053312,
+      "radio-teddy-weihnachtslieder": 1788067007.8154693,
+      "rbb-inforadio": 1788067030.3011653,
+      "rbbkultur": 1788067177.3609595,
+      "radioeins": 1788067322.6223757,
+      "rbb-88-8": 1788067467.8559556,
+      "reboot-fm": 1788067616.1711829,
+      "rock-antenne": 1788067738.967065,
+      "rock-antenne-heavy-metal": 1788067861.8659685,
+      "radio-teddy-schlager": 1788067914.5400274,
+      "radio-teddy-teddy-cool-eure-superstars": 1788068032.2154875,
+      "rockland-fm": 1788068162.8931496,
+      "rpr1": 1788068207.5855024,
+      "rockland-radio": 1788068230.4648433,
+      "radio-teddy-bayern": 1788068310.061421,
+      "sr-1-europawelle": 1788068455.505892,
+      "sr-2-kulturradio": 1788068504.6844912,
+      "sr-3-saarlandwelle": 1788068650.1223185,
+      "radio-teddy-hessen": 1788068690.848576,
+      "radio-teddy-bremen": 1788068704.4836361,
+      "sunshine-live-house": 1788068835.210953,
+      "sunshine-live": 1788068965.8210924,
+      "radio-teddy-mecklenburg-vorpommern": 1788069096.4955318,
+      "sunshine-live-classics": 1788069227.295263,
+      "radio-teddy-nordrhein-westfalen": 1788069235.159356,
+      "sunshine-live-edm": 1788069374.6242058,
+      "sunshine-live-trance": 1788069515.6272,
+      "sunshine-live-hard": 1788069544.1236482,
+      "sunshine-live-lounge": 1788069688.9614782
     }
   }
 }

@@ -42,6 +42,14 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 - Musik-Library: Enrichment (Cover/Lyrics), Energy-Erkennung/Browse-UI
 - iOS-App (Idee, kein Zeitplan)
 
+## 2026-08-30
+
+- VPN-/Tailscale-Hinweise aus README.md entfernt (Warnkasten, PWA-Abschnitt,
+  `ICECAST_HOSTNAME`-Beschreibung, TLS-Beispiel) — nirgends mehr der
+  Eindruck, RadioSabbelNich sei fürs Hören von unterwegs gedacht.
+- `radiosabbelnich.sh` zeigt bei jedem Aufruf (egal welches Unterkommando)
+  zuerst die Versionsinfo aus `VERSION`.
+
 ## 2026-08-29
 
 - Neu: **Nächtlicher Sender-Scan** ("🌙"-Sektion auf der Config-Seite,
@@ -353,10 +361,10 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
   Genre-Teilstring-Filter) an die `rock`/`klassik`/Queen/Pavarotti-
   Buttons angebunden; "Jetzt läuft" zeigt bei Query-Wiedergabe
   Artist – Titel statt nur den Dateinamen.
-- `radiosabbelnich.sh status`: warnt jetzt rot bei ausgeloggtem/
-  gestopptem Tailscale (für `*.ts.net`-Hostnamen) oder fehlendem
-  Internet/DNS (Ping gegen `hamburg.de`), zeigt den konfigurierten
-  `ICECAST_HOSTNAME` und den MP3-Ordner-Status der Nachrichten-Pause.
+- `radiosabbelnich.sh status`: warnt jetzt rot bei nicht erreichbarem
+  konfigurierten Hostnamen oder fehlendem Internet/DNS (Ping gegen
+  `hamburg.de`), zeigt den konfigurierten `ICECAST_HOSTNAME` und den
+  MP3-Ordner-Status der Nachrichten-Pause.
 - Alle `.py`-Module von Repo-Root nach `python/` verschoben (reines
   Aufräumen); Web-Interface-Button-Labels präzisiert ("VLC" → "VLC
   Stream", "Handy" → "Handy Fernsteuerung"); QR-Code zum Download der
