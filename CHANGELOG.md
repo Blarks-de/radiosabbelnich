@@ -44,6 +44,11 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 
 ## 2026-09-02
 
+- Fix: Docker-Build brach bei aubio (Schritt 4/43) mit
+  `BackendUnavailable: Cannot import 'setuptools.build_meta'` ab, weil
+  `--no-build-isolation` das System-Environment nutzt und Python 3.12
+  dort kein setuptools mehr automatisch mitbringt — `setuptools`/`wheel`
+  jetzt vorab im ersten `pip install` ergänzt.
 - Neu: README.md (DE + EN) um Sektion "Verwendete Open-Source-Software" /
   "Third-Party Open Source Components" ergänzt — Tabelle mit allen
   eingebundenen Fremdkomponenten (Backend + Android) und ihren verifizierten

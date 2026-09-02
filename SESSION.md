@@ -10576,3 +10576,35 @@ Markdown-Tabellensyntax und funktionierende TOC-Anker geprüft (DE:
 ins Repo kopiert (z.B. kein `THIRD_PARTY_LICENSES`-Verzeichnis) — das
 war nicht Teil der Anforderung, nur eine Übersichtstabelle mit
 Lizenzangaben und Links zu den offiziellen Quellen.
+
+## 2026-09-02: Docker-Build-Fix — aubio scheitert unter Python 3.12 an fehlendem setuptools
+
+**Auslöser**: `docker compose up -d --build radiosabbelnich` brach bei
+Schritt 4/43 (`RUN curl ... && pip install --no-cache-dir
+--no-build-isolation /tmp/aubio-src/aubio-0.4.9 ...`) mit
+`BackendUnavailable: Cannot import 'setuptools.build_meta'` ab.
+
+**Ursache**: Der aubio-Install (Dockerfile, siehe Kommentarblock ab
+Zeile 21 zu Phase-3-BPM-Erkennung) läuft bewusst mit
+`--no-build-isolation`, damit er das schon installierte numpy aus dem
+System-Environment direkt nutzt statt eine zweite isolierte
+Build-Umgebung samt eigenem numpy-Download aufzusetzen (letzteres hing
+sich in diesem Image auf, siehe Eintrag zu Phase 3 oben). Ohne
+Build-Isolation muss aber `setuptools.build_meta` (der PEP-517-Backend
+für aubios `setup.py`) selbst im System-Environment vorhanden sein —
+und das `python:3.12-slim`-Basisimage bringt setuptools anders als
+ältere Python-Images nicht mehr automatisch mit.
+
+**Umsetzung**: Im ersten `pip install`-Schritt (Dockerfile Zeile 19,
+vor dem aubio-Build) `setuptools` und `wheel` vorangestellt, mit
+Kommentar, der den Zusammenhang zum `--no-build-isolation`-Schritt
+weiter unten erklärt (sonst nicht offensichtlich, warum ausgerechnet
+hier setuptools gebraucht wird — es wird ja nirgends direkt
+importiert). Kurz geprüft: `--no-build-isolation` kommt im Dockerfile
+nur ein einziges Mal vor (grep bestätigt), also ist aubio der einzige
+betroffene Build-Schritt.
+
+**Verifiziert**: `docker compose build radiosabbelnich` läuft jetzt
+vollständig durch alle 43 Schritte durch, inklusive dem zuvor
+fehlschlagenden aubio-Compile-Schritt — Image wurde erfolgreich
+gebaut und getaggt (`radiosabbelnich-radiosabbelnich`).

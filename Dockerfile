@@ -16,7 +16,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libgomp1
     libchromaprint-tools \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir numpy silero-vad-lite vosk faster-whisper psutil mutagen
+# setuptools/wheel hier bewusst vorab: Python 3.12 bringt setuptools nicht
+# mehr automatisch im Environment mit, der aubio-Build weiter unten läuft
+# aber mit --no-build-isolation genau in diesem System-Environment (siehe
+# Begründung dort) und braucht setuptools.build_meta zum Bauen -- ohne
+# diese Zeile bricht Schritt 4 mit "BackendUnavailable: Cannot import
+# 'setuptools.build_meta'" ab.
+RUN pip install --no-cache-dir setuptools wheel numpy silero-vad-lite vosk faster-whisper psutil mutagen
 
 # aubio 0.4.9 (letztes PyPI-Release, 2019) fürs BPM-Tempo (Phase 3 der
 # Musik-Library, siehe python/music_bpm.py) -- kein Wheel auf PyPI, UND
