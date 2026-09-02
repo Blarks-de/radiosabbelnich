@@ -42,6 +42,13 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 - Musik-Library: Enrichment (Cover/Lyrics), Energy-Erkennung/Browse-UI
 - iOS-App (Idee, kein Zeitplan)
 
+## 2026-09-02
+
+- Neu: README.md (DE + EN) um Sektion "Verwendete Open-Source-Software" /
+  "Third-Party Open Source Components" ergänzt — Tabelle mit allen
+  eingebundenen Fremdkomponenten (Backend + Android) und ihren verifizierten
+  Lizenzen, AudD explizit als kommerzieller externer Dienst abgegrenzt.
+
 ## 2026-08-29
 
 - Neu: **Nächtlicher Sender-Scan** ("🌙"-Sektion auf der Config-Seite,

@@ -10519,3 +10519,60 @@ manuell wieder gelöscht und um Push + Deploy gebeten. Kein inhaltlicher
 Widerspruch zur eigentlichen Doku-Änderung — README.md bleibt bereinigt,
 nur der CHANGELOG-Eintrag dazu entfällt. Nicht hinterfragt, einfach
 übernommen.
+
+## 2026-09-02 — README-Sektion "Verwendete Open-Source-Software" (rechtliche Absicherung)
+
+**Auslöser**: Parallel zur laufenden Rechtsberatung zu Lizenzfragen sollte
+das README (DE + EN) eine Übersicht aller eingebundenen Fremdkomponenten
+mit tatsächlich verifizierten Lizenzen bekommen — explizit keine
+Vermutungen aus dem Gedächtnis, da lizenzrechtlich relevant.
+
+**Umsetzung**: Neue Sektion "Verwendete Open-Source-Software" (DE) bzw.
+"Third-Party Open Source Components" (EN) jeweils direkt vor "Lizenz"/
+"License" eingefügt, inkl. TOC-Einträgen. Jede Komponente wurde einzeln
+per Websuche gegen die jeweilige offizielle Quelle (GitHub-COPYING/LICENSE-
+Datei bzw. offizielle Homepage) verifiziert, nicht geraten:
+
+- Icecast: GPL-2.0 (`xiph/Icecast-Server` COPYING)
+- ffmpeg: GPL-2.0-or-later — wichtig: **nicht** pauschal LGPL, da dieses
+  Image `python:3.12-slim` (Debian) als Basis nutzt und Debians
+  `ffmpeg`-Paket mit `--enable-gpl` gebaut wird (u.a. wegen x264, selbst
+  GPL-2+) — per Websuche zur Debian-Bookworm-Paketbau-Konfiguration
+  bestätigt, nicht aus dem Standard-FFmpeg-LGPL-Ruf angenommen
+- Silero VAD (Modell + `silero-vad-lite`-Binding von daanzu): beide MIT
+- Vosk (alphacep, Python + Kotlin/Android): Apache-2.0
+- faster-whisper (SYSTRAN): MIT
+- Chromaprint/`fpcalc`: LGPL-2.1 (Kern MIT, enthält aber LGPL-Code aus
+  ffmpeg, daher Gesamtpaket als LGPL-2.1 eingestuft, siehe offizielle
+  LICENSE.md im Repo)
+- mutagen: GPL-2.0-or-later
+- aubio: GPL-3.0-or-later (COPYING nennt GPLv3, Homepage-Text "oder
+  später")
+- SQLite: Public Domain
+- AndroidX Media3/ExoPlayer: Apache-2.0
+- Docker Engine/Compose: Apache-2.0
+
+Die "Zweck im Projekt"-Spalte wurde nicht geraten, sondern per Grep
+gegen die tatsächliche Nutzung im Code verifiziert (z.B. `import aubio`
+in `music_bpm.py`, `fpcalc`-Subprocess in `song_fingerprint.py`,
+`from silero_vad_lite import SileroVAD` in `speech_detector.py`).
+
+AudD (Song-Erkennung Phase 2) bewusst **nicht** in die OSS-Tabelle
+gemischt, sondern als eigener Absatz danach: kommerzieller externer
+API-Dienst, kein im Projekt enthaltener Code, daher lizenzrechtlich
+kategorisch anders zu behandeln als die Tabellenkomponenten.
+
+Einleitungssatz stellt klar, dass RadioSabbelNich selbst GPLv3 ist und
+alle gelisteten Komponenten unverändert bzw. gemäß ihrer eigenen Lizenz
+eingebunden werden (Subprozess-Aufruf, Bibliothek oder Docker-Image je
+nach Komponente) — kein Fremdcode wurde modifiziert.
+
+**Verifiziert**: Beide README-Sektionen manuell auf korrekte
+Markdown-Tabellensyntax und funktionierende TOC-Anker geprüft (DE:
+`#verwendete-open-source-software`, EN:
+`#third-party-open-source-components`).
+
+**Bewusst NICHT gemacht**: Keine Lizenztexte der Drittkomponenten selbst
+ins Repo kopiert (z.B. kein `THIRD_PARTY_LICENSES`-Verzeichnis) — das
+war nicht Teil der Anforderung, nur eine Übersichtstabelle mit
+Lizenzangaben und Links zu den offiziellen Quellen.

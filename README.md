@@ -36,6 +36,7 @@
   - [Automatische Song-Erkennung: Cloud-Erweiterung (geplant)](#automatische-song-erkennung-cloud-erweiterung-geplant)
   - [Deutschsprachige Musik ausblenden (geplant)](#deutschsprachige-musik-ausblenden-geplant)
   - [iOS-App (Idee, noch nicht terminiert)](#ios-app-idee-noch-nicht-terminiert)
+- [Verwendete Open-Source-Software](#verwendete-open-source-software)
 - [Lizenz](#lizenz)
 - [⚠️ Private use only, local network only — no public deployment](#️-private-use-only-local-network-only--no-public-deployment)
 - [How detection works](#how-detection-works)
@@ -67,6 +68,7 @@
   - [Automatic song recognition: cloud extension (planned)](#automatic-song-recognition-cloud-extension-planned)
   - [Hiding German-language music (planned)](#hiding-german-language-music-planned)
   - [iOS app (idea, not yet scheduled)](#ios-app-idea-not-yet-scheduled)
+- [Third-Party Open Source Components](#third-party-open-source-components)
 - [License](#license)
 
 ![License](https://img.shields.io/badge/license-GPLv3-blue.svg)
@@ -1387,6 +1389,36 @@ Swift/SwiftUI gebaut und über Xcode auf einem Mac kompiliert — ein
 eigenständiges Projekt mit eigenem Tech-Stack, analog zu
 `android-app/`. Bislang nur Idee, kein Zeitplan.
 
+## Verwendete Open-Source-Software
+
+RadioSabbelNich selbst steht unter der GPLv3 (siehe [Lizenz](#lizenz)
+unten). Die folgenden Fremdkomponenten werden unverändert eingebunden —
+je nach Art per Subprozess-Aufruf (`ffmpeg`, `fpcalc`), als Python-/
+Kotlin-Bibliothek oder als Docker-Image — und jeweils gemäß ihrer
+eigenen Lizenz genutzt, nicht modifiziert:
+
+| Komponente | Zweck im Projekt | Lizenz |
+|---|---|---|
+| [Icecast](https://icecast.org/) | Streaming-Server, strahlt den gemischten Audio-Ausgang aus (`docker-compose.yml`, Image `perl19/icecast2`) | GPL-2.0 |
+| [ffmpeg](https://ffmpeg.org/) | Decodiert die Quell-Streams und encodiert den Ausgangs-Stream (`stream_source.py`, per Subprozess) | GPL-2.0-or-later (im Debian-Paketbuild dieses Images mit `--enable-gpl`, u.a. wegen x264) |
+| [Silero VAD](https://github.com/snakers4/silero-vad) (via [`silero-vad-lite`](https://github.com/daanzu/py-silero-vad-lite)) | Sprach-/Musik-Erkennung auf Signalebene (`speech_detector.py`) | MIT |
+| [Vosk](https://github.com/alphacep/vosk-api) (alphacep) | Offline-Spracherkennung für den STT-Sprachfilter (`stt_filter.py`, `vosk_language_check.py`) | Apache-2.0 |
+| [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (SYSTRAN) | Alternative STT-Engine sowie Sprach-Erkennung beim nächtlichen Sender-Scan (`stt_filter.py`, `night_scan.py`) | MIT |
+| [Chromaprint](https://github.com/acoustid/chromaprint) / `fpcalc` | Extrahiert die Audio-Fingerprint-Rohdaten für die Song-Erkennung Phase 1 (`song_fingerprint.py`, per Subprozess) | LGPL-2.1 |
+| [mutagen](https://github.com/quodlibet/mutagen) | Liest Audio-Tags aus Musikdateien (`audio_tags.py`) | GPL-2.0-or-later |
+| [aubio](https://aubio.org/) | BPM-Erkennung in der Musik-Library (`music_bpm.py`) | GPL-3.0-or-later |
+| [SQLite](https://sqlite.org/) | Speichert Fingerprint- und Musik-Library-Daten (`fingerprint.py`, über Pythons `sqlite3`) | Public Domain |
+| [Docker](https://github.com/moby/moby) / [Docker Compose](https://github.com/docker/compose) | Container-Laufzeit und Orchestrierung des Deployments | Apache-2.0 |
+| Kotlin/[ExoPlayer](https://github.com/androidx/media) (AndroidX Media3) | Audio-Wiedergabe in der eigenständigen Android-App (`android-app/`) | Apache-2.0 |
+| [Vosk Android-Bindings](https://github.com/alphacep/vosk-api) (alphacep, Kotlin) | Offline-Spracherkennung in der Android-App (`android-app/`) | Apache-2.0 |
+
+**AudD ist keine Open-Source-Komponente:** Die optionale Song-Erkennung
+Phase 2 (siehe [Song-Erkennung](#song-erkennung)) nutzt bei aktivierter
+Konfiguration die kommerzielle externe API von
+[AudD](https://audd.io/) — ein externer, kostenpflichtiger
+Cloud-Dienst, kein im Projekt enthaltener oder eingebundener
+Open-Source-Code, und daher bewusst nicht Teil obiger Tabelle.
+
 ## Lizenz
 
 Lizenziert unter der GNU General Public License v3.0 (GPLv3), siehe
@@ -2669,6 +2701,36 @@ possibly music library operation as the Android version, but built
 with Swift/SwiftUI and compiled via Xcode on a Mac — a standalone
 project with its own tech stack, analogous to `android-app/`. Idea
 only so far, no timeline.
+
+## Third-Party Open Source Components
+
+RadioSabbelNich itself is licensed under the GPLv3 (see
+[License](#license) below). The following third-party components are
+included unmodified — depending on the component, via subprocess call
+(`ffmpeg`, `fpcalc`), as a Python/Kotlin library, or as a Docker image
+— and each is used strictly under its own license, not modified:
+
+| Component | Purpose in this project | License |
+|---|---|---|
+| [Icecast](https://icecast.org/) | Streaming server that broadcasts the mixed audio output (`docker-compose.yml`, image `perl19/icecast2`) | GPL-2.0 |
+| [ffmpeg](https://ffmpeg.org/) | Decodes the source streams and encodes the output stream (`stream_source.py`, via subprocess) | GPL-2.0-or-later (this image's Debian package build uses `--enable-gpl`, e.g. for x264) |
+| [Silero VAD](https://github.com/snakers4/silero-vad) (via [`silero-vad-lite`](https://github.com/daanzu/py-silero-vad-lite)) | Signal-level speech/music detection (`speech_detector.py`) | MIT |
+| [Vosk](https://github.com/alphacep/vosk-api) (alphacep) | Offline speech recognition for the STT speech filter (`stt_filter.py`, `vosk_language_check.py`) | Apache-2.0 |
+| [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (SYSTRAN) | Alternative STT engine and language detection during the nightly station scan (`stt_filter.py`, `night_scan.py`) | MIT |
+| [Chromaprint](https://github.com/acoustid/chromaprint) / `fpcalc` | Extracts raw audio fingerprint data for song recognition phase 1 (`song_fingerprint.py`, via subprocess) | LGPL-2.1 |
+| [mutagen](https://github.com/quodlibet/mutagen) | Reads audio tags from music files (`audio_tags.py`) | GPL-2.0-or-later |
+| [aubio](https://aubio.org/) | BPM detection in the music library (`music_bpm.py`) | GPL-3.0-or-later |
+| [SQLite](https://sqlite.org/) | Stores fingerprint and music library data (`fingerprint.py`, via Python's `sqlite3`) | Public Domain |
+| [Docker](https://github.com/moby/moby) / [Docker Compose](https://github.com/docker/compose) | Container runtime and orchestration of the deployment | Apache-2.0 |
+| Kotlin/[ExoPlayer](https://github.com/androidx/media) (AndroidX Media3) | Audio playback in the standalone Android app (`android-app/`) | Apache-2.0 |
+| [Vosk Android bindings](https://github.com/alphacep/vosk-api) (alphacep, Kotlin) | Offline speech recognition in the Android app (`android-app/`) | Apache-2.0 |
+
+**AudD is not an open-source component:** the optional song
+recognition phase 2 (see [Song recognition](#song-recognition)) uses
+[AudD](https://audd.io/)'s commercial external API when enabled — a
+paid external cloud service, not open-source code included or
+bundled in this project, and therefore deliberately excluded from the
+table above.
 
 ## License
 
