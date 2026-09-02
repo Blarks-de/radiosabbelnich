@@ -1137,6 +1137,22 @@ zeitgestempelten Datei (~46 MB ueber echtes Internet statt Emulator-NAT)
 Update erkannt, Signatur passt) → abgebrochen, `version.json` auf den
 echten Stand zurueckgesetzt.
 
+## Verwendete Open-Source-Software
+
+Diese App selbst ist Teil von RadioSabbelNich (GPLv3, siehe
+[Haupt-README](../README.md#lizenz)). Die folgenden Fremdkomponenten
+werden unverändert als Gradle-Abhängigkeit (`app/build.gradle.kts`)
+eingebunden und jeweils gemäß ihrer eigenen Lizenz genutzt:
+
+| Komponente | Zweck in dieser App | Lizenz |
+|---|---|---|
+| [Kotlin](https://github.com/JetBrains/kotlin) (JetBrains) | Programmiersprache, in der die gesamte App geschrieben ist | Apache-2.0 |
+| [AndroidX Core-KTX / AppCompat / ConstraintLayout / Lifecycle / DocumentFile](https://github.com/androidx/androidx) (Google) | Grundlegende Jetpack-Bausteine — Kotlin-Erweiterungen, Basis-Activities, UI-Layout, `PlaybackService` als Lifecycle-Service, Ordnerzugriff für den News-Break-Import | Apache-2.0 |
+| [Material Components for Android](https://github.com/material-components/material-components-android) (Google) | UI-Komponenten (Material Design) | Apache-2.0 |
+| [kotlinx.coroutines](https://github.com/Kotlin/kotlinx.coroutines) (JetBrains) | Asynchrone Verarbeitung (Streams, StateFlow) | Apache-2.0 |
+| [AndroidX Media3 / ExoPlayer](https://github.com/androidx/media) (Google) | Audio-Wiedergabe der Sender-Streams (`PlaybackService.kt`) | Apache-2.0 |
+| [Vosk Android-Bindings](https://github.com/alphacep/vosk-api) (alphacep) | Offline-Spracherkennung für den Sprache/Musik-Filter (`analysis/StreamAnalyzer.kt`, `stt/`) | Apache-2.0 |
+
 ## Bekannte Grenzen / offene Punkte
 
 - **Doppelter (seit der Vorwärmung eher dreifacher) Netzwerkverbrauch**

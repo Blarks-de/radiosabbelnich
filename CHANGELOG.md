@@ -48,6 +48,9 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
   "Third-Party Open Source Components" ergänzt — Tabelle mit allen
   eingebundenen Fremdkomponenten (Backend + Android) und ihren verifizierten
   Lizenzen, AudD explizit als kommerzieller externer Dienst abgegrenzt.
+- **Android:** Pendant-Sektion "Verwendete Open-Source-Software" in
+  `android-app/README.md` ergänzt — alle sechs Gradle-Abhängigkeitsgruppen
+  einzeln mit verifizierter Lizenz (durchweg Apache-2.0).
 
 ## 2026-08-29
 

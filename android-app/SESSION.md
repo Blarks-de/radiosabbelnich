@@ -1912,3 +1912,36 @@ live gegen die echte AudD-API verifiziert (siehe `../SESSION.md`), dann
   korrekt `"Chris de Sarandy – Good Old Days (3:00)"`.
 - Build + Upload nach `blarks.de/radio/update/` (Pflicht laut
   `CLAUDE.md`) im Anschluss an diesen Eintrag durchgeführt.
+
+## 2026-09-02 — README-Sektion "Verwendete Open-Source-Software" ergänzt (Pendant zur Docker-README-Sektion)
+
+**Auslöser**: Direkte Folge des entsprechenden Docker-README-Abschnitts
+(siehe Haupt-`SESSION.md`, 2026-09-02) im Rahmen der laufenden
+Rechtsberatung zu Lizenzfragen — die App hat mit `app/build.gradle.kts`
+eigene Abhängigkeiten, die im Haupt-README nur zusammengefasst
+("Kotlin/ExoPlayer", "Vosk Android-Bindings") auftauchen.
+
+**Umsetzung**: Neue Sektion "Verwendete Open-Source-Software" in
+`README.md`, platziert direkt vor "Bekannte Grenzen / offene Punkte" (die
+App-README hat kein eigenes Inhaltsverzeichnis und keine eigene
+Lizenz-Sektion, daher kein TOC-Eintrag nötig, Verweis stattdessen auf
+`../README.md#lizenz`). Alle sechs tatsächlich in `app/build.gradle.kts`
+deklarierten Abhängigkeitsgruppen aufgeführt, Lizenzen einzeln per
+Websuche gegen die offiziellen GitHub-LICENSE-Dateien verifiziert, nicht
+angenommen:
+
+- Kotlin (JetBrains): Apache-2.0
+- AndroidX Core-KTX/AppCompat/ConstraintLayout/Lifecycle/DocumentFile
+  (Google/AOSP): Apache-2.0
+- Material Components for Android (Google): Apache-2.0
+- kotlinx.coroutines (JetBrains): Apache-2.0
+- AndroidX Media3/ExoPlayer: Apache-2.0
+- Vosk Android-Bindings (alphacep): Apache-2.0
+
+Bemerkenswert gegenüber dem Docker-Projekt: hier ist tatsächlich jede
+einzelne Abhängigkeit Apache-2.0, kein Lizenz-Mix.
+
+**Verifiziert**: Reine Doku-Änderung, kein Code betroffen — daher bewusst
+KEIN `./gradlew assembleDebug`/APK-Build/Upload nach `blarks.de` (siehe
+`CLAUDE.md`: der Build-/Upload-Zwang gilt für inhaltliche App-Änderungen,
+nicht für README-Ergänzungen ohne Code-Bezug).
