@@ -477,6 +477,50 @@ def similarity(fp_a: list[int], fp_b: list[int]) -> float:
     return best
 
 
+# Kuratierte Erstbefüllung für is_german_language (siehe README.md/
+# ARCHITECTURE.md, "Deutschsprachige Musik ausblenden") -- bewusst eine
+# kurze Handliste bekannter deutschsprachiger Interpreten statt einer
+# externen Datenquelle (kein zusätzlicher Netzwerk-Call/Cache-Risiko,
+# gleiches Muster wie die Genre-Teilstring-Filter in music_query.py).
+# Klein gehalten und NICHT als Anspruch auf Vollständigkeit gedacht -- die
+# eigentliche, verlässliche Klassifizierung passiert über den Zeitverlauf
+# per manuellem "Deutsch!"-Button (set_language()), das hier ist nur ein
+# Kaltstart-Vorteil, damit der Skip-Filter nicht bei leerer DB komplett
+# wirkungslos ist. Klein geschrieben, Substring-Vergleich gegen den
+# (klein geschriebenen) Interpreten-Namen.
+_GERMAN_ARTIST_HINTS = frozenset({
+    "herbert grönemeyer", "grönemeyer", "peter fox", "seeed", "wir sind helden",
+    "die ärzte", "die toten hosen", "tote hosen", "silbermond", "juli",
+    "ich + ich", "ich und ich", "andreas bourani", "mark forster", "revolverheld",
+    "rosenstolz", "unheilig", "in extremo", "rammstein", "oomph!",
+    "eisbrecher", "megaherz", "andrea berg", "helene fischer", "roland kaiser",
+    "howard carpendale", "matthias reim", "wolfgang petry", "udo lindenberg",
+    "peter maffay", "cro", "sido", "bushido", "kollegah",
+    "capital bra", "apache 207", "shirin david", "casper", "clueso",
+    "max herre", "kraftklub", "beginner", "fettes brot", "deichkind",
+    "fanta 4", "die fantastischen vier", "nena", "extrabreit", "trio",
+    "spider murphy gang", "ideal", "element of crime", "sportfreunde stiller",
+    "the bosshoss", "philipp poisel", "max giesinger", "namika", "lea",
+    "loredana", "sarah connor", "xavier naidoo", "adel tawil", "glasperlenspiel",
+    "madsen", "kettcar", "tocotronic", "einstürzende neubauten", "nina hagen",
+    "falco", "dj ötzi", "voxxclub", "vanessa mai", "beatrice egli",
+})
+
+
+def guess_is_german(artist: Optional[str]) -> Optional[bool]:
+    """Substring-Abgleich gegen _GERMAN_ARTIST_HINTS. Liefert NUR True
+    (positive Bestätigung) oder None (unbekannt) -- absichtlich NIE False:
+    ein fehlender Listentreffer heißt nicht "garantiert nicht deutsch",
+    das würde bei der (kurzen, nicht vollständigen) Liste sonst
+    reihenweise falsch-negative is_german_language=0 erzeugen. Eine echte
+    Verneinung bleibt der manuellen Klassifizierung (set_language()) oder
+    einem künftigen AudD-Genre-Signal vorbehalten."""
+    if not artist:
+        return None
+    lowered = artist.lower()
+    return True if any(hint in lowered for hint in _GERMAN_ARTIST_HINTS) else None
+
+
 class SongFingerprintDB:
     """SQLite-gestützter Cache bekannter Songs. ANDERS als FingerprintDB
     (deren Connection exklusiv dem Hauptloop-Thread gehört, weil
@@ -526,6 +570,18 @@ class SongFingerprintDB:
             if "duration_seconds" not in columns:
                 conn.execute("ALTER TABLE song_fingerprints ADD COLUMN duration_seconds INTEGER")
                 log.info("🎵 Song-Fingerprint-DB-Schema migriert: Spalte 'duration_seconds' ergänzt.")
+            # "Deutschsprachige Musik ausblenden" (siehe README.md/
+            # ARCHITECTURE.md): NULL = unklassifiziert (Default für jede
+            # bestehende Zeile nach dieser Migration), 0/1 = bewusst
+            # klassifiziert -- entweder per guess_is_german() (kuratierte
+            # Interpreten-Liste, siehe unten) oder manuell per "Deutsch!"-
+            # Button (set_language()). Bewusst KEIN BOOLEAN-Typ -- SQLite
+            # kennt den ohnehin nicht, INTEGER mit expliziter NULL-Semantik
+            # ist hier zusätzlich das einzige, was "unklassifiziert" von
+            # "geprüft und nicht deutsch" unterscheiden kann.
+            if "is_german_language" not in columns:
+                conn.execute("ALTER TABLE song_fingerprints ADD COLUMN is_german_language INTEGER")
+                log.info("🎵 Song-Fingerprint-DB-Schema migriert: Spalte 'is_german_language' ergänzt.")
             # Kalibrierungs-Logging für similarity_threshold (siehe
             # SESSION.md, Eintrag zu diesem Zwischenschritt): ein Ähnlichkeit-
             # Skalarwert taugt nichts, eine ganze Verteilung von Hit- vs.
@@ -566,16 +622,21 @@ class SongFingerprintDB:
             conn.close()
 
     def match_or_learn(self, fingerprint: list[int], station_id: str,
-                        similarity_threshold: float) -> Optional[dict]:
+                        similarity_threshold: float) -> dict:
         """Vergleicht `fingerprint` per Brute-Force gegen alle gecachten
         Songs (siehe ARCHITECTURE.md, "Offene Punkte" zur Skalierungsgrenze
         dieses Ansatzes). `similarity_threshold` wird bei jedem Aufruf frisch
         übergeben (nicht am Objekt fixiert), damit eine Änderung über
         /config wie bei stt_filter.confidence_threshold ohne Neustart wirkt.
         Bei Treffer: play_count/last_seen/station_id aktualisieren,
-        Match-Info zurückgeben. Bei keinem Treffer: neuen Eintrag anlegen
-        (title/artist NULL -- Phase 2 füllt sie später über den
-        Cloud-Lookup), None zurückgeben.
+        Match-Info zurückgeben (`new`: False). Bei keinem Treffer: neuen
+        Eintrag anlegen (title/artist NULL -- Phase 2 füllt sie später über
+        den Cloud-Lookup) und dessen frisch vergebene `song_id` zurückgeben
+        (`new`: True) -- seit der "Deutsch!"-Button-Erweiterung (siehe
+        README.md) IMMER ein dict statt None bei Cache-Miss, damit der
+        Aufrufer auch einen noch unidentifizierten Song schon anhand seiner
+        `song_id` manuell klassifizieren kann, bevor Titel/Interpret
+        überhaupt bekannt sind.
 
         Protokolliert JEDEN Aufruf zusätzlich in `song_match_log`
         (Kalibrierungs-Zwischenschritt vor der eigentlichen
@@ -587,20 +648,21 @@ class SongFingerprintDB:
         try:
             c = conn.cursor()
             rows = c.execute(
-                "SELECT id, fingerprint_hash, title, artist, play_count, album, year, duration_seconds "
-                "FROM song_fingerprints"
+                "SELECT id, fingerprint_hash, title, artist, play_count, album, year, "
+                "duration_seconds, is_german_language FROM song_fingerprints"
             ).fetchall()
 
             best_id, best_score, best_row = None, 0.0, None
-            for row_id, fp_text, title, artist, play_count, album, year, duration_seconds in rows:
+            for row_id, fp_text, title, artist, play_count, album, year, duration_seconds, is_german_language in rows:
                 candidate = [int(v) for v in fp_text.split(",")] if fp_text else []
                 score = similarity(fingerprint, candidate)
                 if score > best_score:
-                    best_id, best_score, best_row = row_id, score, (title, artist, play_count, album, year, duration_seconds)
+                    best_id, best_score, best_row = row_id, score, (
+                        title, artist, play_count, album, year, duration_seconds, is_german_language)
 
             now = time.strftime("%Y-%m-%d %H:%M:%S")
             if best_id is not None and best_score >= similarity_threshold:
-                title, artist, play_count, album, year, duration_seconds = best_row
+                title, artist, play_count, album, year, duration_seconds, is_german_language = best_row
                 c.execute(
                     "UPDATE song_fingerprints SET play_count = play_count + 1, last_seen = ?, "
                     "station_id = ? WHERE id = ?",
@@ -616,7 +678,9 @@ class SongFingerprintDB:
                           "bereits %dx gehört", best_id, artist, title, best_score, play_count + 1)
                 return {"song_id": best_id, "title": title, "artist": artist,
                         "album": album, "year": year, "duration_seconds": duration_seconds,
-                        "play_count": play_count + 1, "similarity": best_score}
+                        "play_count": play_count + 1, "similarity": best_score,
+                        "is_german": bool(is_german_language) if is_german_language is not None else None,
+                        "new": False}
 
             c.execute(
                 "INSERT INTO song_match_log (ts, station_id, similarity, threshold, is_hit, "
@@ -630,10 +694,13 @@ class SongFingerprintDB:
                 "play_count, station_id) VALUES (?, NULL, NULL, ?, ?, 1, ?)",
                 (fp_text, now, now, station_id),
             )
+            new_id = c.lastrowid
             conn.commit()
-            log.debug("[song_fingerprint] neuer Song gelernt (bester Kandidat hatte nur Ähnlichkeit %.2f, "
-                      "Schwelle %.2f)", best_score, similarity_threshold)
-            return None
+            log.debug("[song_fingerprint] neuer Song gelernt (Song #%d, bester Kandidat hatte nur "
+                      "Ähnlichkeit %.2f, Schwelle %.2f)", new_id, best_score, similarity_threshold)
+            return {"song_id": new_id, "title": None, "artist": None, "album": None, "year": None,
+                    "duration_seconds": None, "play_count": 1, "similarity": best_score,
+                    "is_german": None, "new": True}
         finally:
             conn.close()
 
@@ -648,15 +715,47 @@ class SongFingerprintDB:
         match_or_learn() dafür schreibt. Eigene kurzlebige Connection,
         gleiches Muster wie delete_fingerprint()/clear_all() unten -- diese
         Methode läuft wie set_cloud_metadata()s Aufrufer im Hintergrund-
-        Thread von SongRecognizer, nicht im Hauptloop."""
+        Thread von SongRecognizer, nicht im Hauptloop.
+
+        Wendet zusätzlich guess_is_german() auf den jetzt bekannten
+        `artist` an (kuratierte Erstbefüllung, siehe README.md/
+        ARCHITECTURE.md, "Deutschsprachige Musik ausblenden") -- per
+        COALESCE aber NUR, falls is_german_language noch NULL ist. Ein
+        manueller "Deutsch!"-Klick (set_language()) kann diese Zeile
+        theoretisch schon VOR der AudD-Antwort erreicht haben (Nutzer
+        reagiert schneller als der Cloud-Lookup) und darf dadurch nicht
+        wieder überschrieben werden."""
+        is_german_guess = guess_is_german(artist)
         conn = sqlite3.connect(self.db_path)
         try:
             conn.execute(
                 "UPDATE song_fingerprints SET title = ?, artist = ?, album = ?, year = ?, "
-                "duration_seconds = ? WHERE fingerprint_hash = ?",
-                (title, artist, album, year, duration_seconds, fingerprint_hash),
+                "duration_seconds = ?, "
+                "is_german_language = COALESCE(is_german_language, ?) "
+                "WHERE fingerprint_hash = ?",
+                (title, artist, album, year, duration_seconds,
+                 1 if is_german_guess else None,
+                 fingerprint_hash),
             )
             conn.commit()
+        finally:
+            conn.close()
+
+    def set_language(self, song_id: int, is_german: bool) -> bool:
+        """Manuelles Anlernen per "Deutsch!"-Button (bzw. dessen Gegenstück
+        auf der Config-Seite, siehe README.md) -- gewinnt immer gegen
+        guess_is_german(), da diese Methode direkt (nicht per COALESCE)
+        schreibt. Eigene kurzlebige Connection, gleiches Muster wie
+        delete_fingerprint()/clear_all() unten. Gibt zurück, ob eine Zeile
+        mit dieser `song_id` existierte."""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cur = conn.execute(
+                "UPDATE song_fingerprints SET is_german_language = ? WHERE id = ?",
+                (1 if is_german else 0, song_id),
+            )
+            conn.commit()
+            return cur.rowcount > 0
         finally:
             conn.close()
 
@@ -790,8 +889,8 @@ def build_recognition_stats(db_path: str, current_threshold: float) -> dict:
             "FROM song_fingerprints GROUP BY station_id ORDER BY 2 DESC LIMIT 10"
         ).fetchall()
         top_songs = c.execute(
-            "SELECT title, artist, play_count, station_id FROM song_fingerprints "
-            "WHERE title IS NOT NULL ORDER BY play_count DESC LIMIT 10"
+            "SELECT id, title, artist, play_count, station_id, is_german_language "
+            "FROM song_fingerprints WHERE title IS NOT NULL ORDER BY play_count DESC LIMIT 10"
         ).fetchall()
 
         match_rows = c.execute(
@@ -847,8 +946,9 @@ def build_recognition_stats(db_path: str, current_threshold: float) -> dict:
                 for s, n, wt, p in top_stations
             ],
             "top_songs": [
-                {"title": t, "artist": a, "play_count": pc, "station_id": s}
-                for t, a, pc, s in top_songs
+                {"song_id": i, "title": t, "artist": a, "play_count": pc, "station_id": s,
+                 "is_german": bool(g) if g is not None else None}
+                for i, t, a, pc, s, g in top_songs
             ],
             "match_log": {
                 "total": len(match_rows),
@@ -948,7 +1048,9 @@ class SongRecognizer:
         # solange nichts (lokal oder per Cloud) identifiziert ist. Getrennt
         # von _last_fingerprint: der bleibt auch bei title/artist=NULL
         # gesetzt (reine Songwechsel-Erkennung), _current_song nur bei
-        # BEKANNTEM Titel.
+        # bekannter `song_id` (seit der "Deutsch!"-Button-Erweiterung --
+        # vorher nur bei bekanntem Titel, siehe SESSION.md: der Button
+        # muss aber schon VOR einer AudD-Identifikation bedienbar sein).
         self._current_song: Optional[dict] = None
 
     def feed(self, pcm_int16: np.ndarray):
@@ -958,13 +1060,15 @@ class SongRecognizer:
         with self._lock:
             return dict(self._current_song) if self._current_song else None
 
-    def _set_current_song(self, title: Optional[str], artist: Optional[str],
-                           album: Optional[str] = None, year: Optional[int] = None,
-                           duration_seconds: Optional[int] = None):
+    def _set_current_song(self, song_id: Optional[int], title: Optional[str],
+                           artist: Optional[str], album: Optional[str] = None,
+                           year: Optional[int] = None, duration_seconds: Optional[int] = None,
+                           is_german: Optional[bool] = None):
         with self._lock:
             self._current_song = (
-                {"title": title, "artist": artist, "album": album, "year": year,
-                 "duration_seconds": duration_seconds} if title else None
+                {"song_id": song_id, "title": title, "artist": artist, "album": album,
+                 "year": year, "duration_seconds": duration_seconds, "is_german": is_german}
+                if song_id is not None else None
             )
 
     def reset(self):
@@ -1016,20 +1120,28 @@ class SongRecognizer:
                     # anstoßen, spart CPU (siehe Vorgabe/ARCHITECTURE.md).
                     return
                 match = self.db.match_or_learn(fp, station_id, similarity_threshold)
-                if match is not None:
-                    self._set_current_song(match.get("title"), match.get("artist"),
+                if not match["new"]:
+                    self._set_current_song(match["song_id"], match.get("title"), match.get("artist"),
                                             match.get("album"), match.get("year"),
-                                            match.get("duration_seconds"))
+                                            match.get("duration_seconds"), match.get("is_german"))
                 else:
                     result = on_unknown_fingerprint(
                         self.db, snapshot, fp, self.sample_rate, station_id, cloud_lookup_enabled
                     )
+                    # guess_is_german() lief bei einem AudD-Treffer schon in
+                    # set_cloud_metadata() gegen die DB-Zeile -- hier
+                    # zusätzlich direkt auf `result` angewendet, damit der
+                    # laufende "jetzt läuft"-Zustand (_current_song) nicht
+                    # erst auf den nächsten match_or_learn()-Durchlauf
+                    # warten muss, um is_german zu zeigen/zu skippen.
                     self._set_current_song(
+                        match["song_id"],
                         result.get("title") if result else None,
                         result.get("artist") if result else None,
                         result.get("album") if result else None,
                         result.get("year") if result else None,
                         result.get("duration_seconds") if result else None,
+                        guess_is_german(result.get("artist")) if result else None,
                     )
             except Exception as e:
                 log.warning("⚠ Song-Erkennungs-Sample übersprungen (Fehler: %s)", e)

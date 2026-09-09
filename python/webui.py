@@ -1549,13 +1549,23 @@ def _build_status(state: SwitcherState, icecast_cfg: dict, host_paths: dict = No
                                      "pending": True, "paused_no_listeners": True}
             else:
                 recognized = song_recognizer.get_current_song()
-                if recognized:
+                # "song_id"/"is_german" (seit dem "Deutsch!"-Button, siehe
+                # README.md) gehen in BEIDEN Zweigen mit raus, nicht nur bei
+                # bekanntem Titel: der Button muss schon bedienbar sein,
+                # bevor AudD (falls überhaupt aktiv) den Song identifiziert
+                # hat -- recognized selbst ist bereits ab einer bekannten
+                # song_id gesetzt (siehe SongRecognizer._set_current_song()).
+                if recognized and recognized.get("title"):
                     now_playing_tags = {"title": recognized["title"], "artist": recognized["artist"],
                                          "album": recognized.get("album"), "year": recognized.get("year"),
-                                         "duration_seconds": recognized.get("duration_seconds")}
+                                         "duration_seconds": recognized.get("duration_seconds"),
+                                         "song_id": recognized.get("song_id"),
+                                         "is_german": recognized.get("is_german")}
                 else:
                     now_playing_tags = {"title": None, "artist": None, "album": None, "year": None,
-                                         "pending": True, "paused_no_listeners": False}
+                                         "pending": True, "paused_no_listeners": False,
+                                         "song_id": recognized.get("song_id") if recognized else None,
+                                         "is_german": recognized.get("is_german") if recognized else None}
                     # Statt des neutralen "🔍 noch nicht erkannt"-Platzhalters
                     # zeigt die Player-Seite hier den konkreten AudD-Grund an,
                     # falls Cloud-Lookup aktiv ist, aber gerade nicht
@@ -1819,6 +1829,7 @@ _PAGE_HTML = """<!doctype html>
 <div class="action-buttons">
   <button id="btn-zapping-error" title="Letzten fälschlich erkannten Werbe-Clip aus der Datenbank löschen" data-i18n="idx_zapping_error_btn" data-i18n-title="idx_zapping_error_title">🛑 Zapping-Fehler</button>
   <button id="btn-gesabbel" title="Sofort weiterschalten, weil hier gerade geredet wird" data-i18n="idx_gesabbel_btn" data-i18n-title="idx_gesabbel_title">⚡ ZAPPEN!</button>
+  <button id="btn-mark-german" title="Aktuell erkannten Song als deutschsprachig markieren (zum künftigen Ausblenden)" data-i18n="idx_mark_german_btn" data-i18n-title="idx_mark_german_title" hidden>🇩🇪 Deutsch!</button>
   <button id="btn-news-break-skip" title="Andere MP3 während der Nachrichten-Pause (Pause bleibt aktiv)" data-i18n="idx_news_break_skip_btn" data-i18n-title="idx_news_break_skip_title" disabled>⏭ Andere Pause-MP3</button>
 </div>
 <div class="filter-toggle-row">
@@ -2058,6 +2069,22 @@ function applyStatus(data) {
     npSubtitleText = parts.join(' · ');
   }
   document.getElementById('now-playing-subtitle').textContent = npSubtitleText;
+
+  // "Deutsch!"-Button (siehe README.md, "Deutschsprachige Musik
+  // ausblenden"): sichtbar, sobald der Hauptloop dem aktuellen Song
+  // überhaupt eine song_id zugewiesen hat -- bewusst UNABHÄNGIG davon, ob
+  // Titel/Interpret schon bekannt sind (Nutzer kann "das ist deutsch"
+  // hören, lange bevor/ohne dass AudD den Song je identifiziert). Einmal
+  // markiert: disabled statt komplett zu verschwinden, damit sichtbar
+  // bleibt, dass die Markierung angekommen ist.
+  const markGermanBtn = document.getElementById('btn-mark-german');
+  if (npTags && npTags.song_id != null) {
+    markGermanBtn.hidden = false;
+    markGermanBtn.disabled = !!npTags.is_german;
+    markGermanBtn.textContent = npTags.is_german ? t('idx_mark_german_done_btn') : t('idx_mark_german_btn');
+  } else {
+    markGermanBtn.hidden = true;
+  }
 
   const filterBtn = document.getElementById('btn-filter-toggle');
   if (data.filter_enabled === false) {
@@ -2409,6 +2436,27 @@ document.getElementById('btn-gesabbel').addEventListener('click', async () => {
     await fetch('/api/skip', {method: 'POST'});
     setActionMsg(t('idx_zap_switching'));
     setTimeout(refresh, 1500);
+  } catch (e) {
+    setActionMsg(t('common_error', {msg: e.message}));
+  }
+});
+
+document.getElementById('btn-mark-german').addEventListener('click', async () => {
+  const songId = lastStatus && lastStatus.now_playing_tags && lastStatus.now_playing_tags.song_id;
+  if (songId == null) return;
+  try {
+    const res = await fetch('/api/song/mark-german', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({song_id: songId, is_german: true}),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      setActionMsg(t('idx_mark_german_saved'));
+      setTimeout(refresh, 800);
+    } else {
+      setActionMsg('– ' + data.error);
+    }
   } catch (e) {
     setActionMsg(t('common_error', {msg: e.message}));
   }
@@ -4887,6 +4935,73 @@ function renderStatsTable(tableEl, rows, cols) {
   }
 }
 
+// Eigener Renderer statt renderStatsTable() oben: braucht pro Zeile einen
+// Klick-Button (Korrektur-UI für is_german_language, siehe README.md,
+// "Deutschsprachige Musik ausblenden") -- renderStatsTable() kann nur
+// Text-Zellen, keine Event-Handler.
+async function markSongGerman(songId, isGerman) {
+  try {
+    const res = await fetch('/api/song/mark-german', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({song_id: songId, is_german: isGerman}),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      loadSongRecognitionStats();
+    } else {
+      showMsg(data.error, true);
+    }
+  } catch (e) {
+    showMsg(t('common_error', {msg: e.message}), true);
+  }
+}
+
+function renderSongsTable(tableEl, rows) {
+  tableEl.innerHTML = '';
+  for (const row of rows) {
+    const tr = document.createElement('tr');
+
+    const songTd = document.createElement('td');
+    songTd.textContent = `${row.artist} – ${row.title}`;
+    tr.appendChild(songTd);
+
+    const playsTd = document.createElement('td');
+    playsTd.textContent = row.play_count;
+    tr.appendChild(playsTd);
+
+    const stationTd = document.createElement('td');
+    stationTd.textContent = row.station_id || '–';
+    tr.appendChild(stationTd);
+
+    const langTd = document.createElement('td');
+    const stateSpan = document.createElement('span');
+    stateSpan.textContent = row.is_german === true ? t('cfg_songstats_lang_german')
+      : row.is_german === false ? t('cfg_songstats_lang_not_german')
+      : t('cfg_songstats_lang_unknown');
+    langTd.appendChild(stateSpan);
+
+    const markBtn = document.createElement('button');
+    markBtn.type = 'button';
+    markBtn.textContent = t('cfg_songstats_mark_german_btn');
+    markBtn.disabled = row.is_german === true;
+    markBtn.addEventListener('click', () => markSongGerman(row.song_id, true));
+    langTd.appendChild(document.createTextNode(' '));
+    langTd.appendChild(markBtn);
+
+    const unmarkBtn = document.createElement('button');
+    unmarkBtn.type = 'button';
+    unmarkBtn.textContent = t('cfg_songstats_unmark_german_btn');
+    unmarkBtn.disabled = row.is_german === false;
+    unmarkBtn.addEventListener('click', () => markSongGerman(row.song_id, false));
+    langTd.appendChild(document.createTextNode(' '));
+    langTd.appendChild(unmarkBtn);
+
+    tr.appendChild(langTd);
+    tableEl.appendChild(tr);
+  }
+}
+
 async function loadSongRecognitionStats() {
   try {
     const s = await api('/api/song-recognition/stats');
@@ -4926,13 +5041,7 @@ async function loadSongRecognitionStats() {
       })),
       ['station', 'entries', 'titled', 'plays'],
     );
-    renderStatsTable(
-      document.getElementById('song-stats-songs-table'),
-      loc.top_songs.map(row => ({
-        song: `${row.artist} – ${row.title}`, plays: row.play_count, station: row.station_id || '–',
-      })),
-      ['song', 'plays', 'station'],
-    );
+    renderSongsTable(document.getElementById('song-stats-songs-table'), loc.top_songs);
 
     document.getElementById('song-stats-audd-token').textContent =
       aud.token_configured ? t('cfg_songstats_yes') : t('cfg_songstats_no');
@@ -5394,6 +5503,8 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                 self._handle_switch_relative(-1)
             elif self.path == "/api/skip":
                 self._handle_skip()
+            elif self.path == "/api/song/mark-german":
+                self._handle_mark_german()
             elif self.path == "/api/news-break/skip":
                 self._handle_news_break_skip()
             elif self.path == "/api/filter/toggle":
@@ -5505,6 +5616,7 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                     stt_filter_whisper_model_size=payload.get("stt_filter_whisper_model_size"),
                     stt_filter_sample_interval_seconds=payload.get("stt_filter_sample_interval_seconds"),
                     stt_filter_combine_mode=payload.get("stt_filter_combine_mode"),
+                    song_recognition_skip_german_enabled=payload.get("song_recognition_skip_german_enabled"),
                     update_check_enabled=payload.get("update_check_enabled"),
                     night_scan_enabled=payload.get("night_scan_enabled"),
                     night_scan_enabled_hours=(
@@ -5726,6 +5838,38 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                 self._send_json({"ok": False, "error": f"Datenbankfehler: {e}"}, status=500)
                 return
             self._send_json({"ok": True, "cleared": cleared})
+
+        def _handle_mark_german(self):
+            # "Deutsch!"-Button auf der Player-Seite UND die Korrektur-
+            # Buttons in der Song-Statistik auf der Config-Seite (siehe
+            # README.md, "Deutschsprachige Musik ausblenden") -- beide
+            # rufen denselben Endpoint, `is_german` unterscheidet Markieren/
+            # Zurücknehmen. Schreibt direkt in song_fingerprints, unabhängig
+            # vom aktuell laufenden Song (die Config-Seite kann jeden der
+            # Top-Songs klassifizieren, nicht nur den gerade erkannten).
+            song_recognizer = getattr(state, "song_recognizer", None)
+            if not song_recognizer:
+                self._send_json({"ok": False, "error": "Song-Erkennung ist nicht aktiv."}, status=400)
+                return
+            payload = self._read_json_body()
+            song_id = payload.get("song_id")
+            is_german = payload.get("is_german")
+            if not isinstance(song_id, int) or isinstance(song_id, bool) or not isinstance(is_german, bool):
+                self._send_json(
+                    {"ok": False, "error": "song_id (int) und is_german (bool) erforderlich."}, status=400)
+                return
+            try:
+                found = song_recognizer.db.set_language(song_id, is_german)
+            except Exception as e:
+                log.exception("⚠ Sprach-Markierung für Song #%s fehlgeschlagen.", song_id)
+                self._send_json({"ok": False, "error": f"Datenbankfehler: {e}"}, status=500)
+                return
+            if not found:
+                self._send_json({"ok": False, "error": "Unbekannte song_id."}, status=404)
+                return
+            log.info("🇩🇪 Song #%d manuell als %s markiert.",
+                     song_id, "deutsch" if is_german else "nicht deutsch")
+            self._send_json({"ok": True})
 
         def _handle_import_start(self):
             # "Sender importieren"-Knopf: laden+prüfen kann bei einer

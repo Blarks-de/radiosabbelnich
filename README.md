@@ -19,6 +19,7 @@
   - [Kalibrierungs-Wizard](#kalibrierungs-wizard)
   - [Konfiguration im Detail](#konfiguration-im-detail)
 - [Song-Erkennung](#song-erkennung)
+  - [Deutschsprachige Musik ausblenden](#deutschsprachige-musik-ausblenden)
 - [Sprache des Web-Interfaces](#sprache-des-web-interfaces)
 - [Web-Interface](#web-interface)
   - [Als App installieren (PWA)](#als-app-installieren-pwa)
@@ -34,7 +35,6 @@
 - [Zukünftige Features](#zukünftige-features)
   - [Eigene Musik-Library & Kategorisierung (geplant)](#eigene-musik-library--kategorisierung-geplant)
   - [Automatische Song-Erkennung: Cloud-Erweiterung (geplant)](#automatische-song-erkennung-cloud-erweiterung-geplant)
-  - [Deutschsprachige Musik ausblenden (geplant)](#deutschsprachige-musik-ausblenden-geplant)
   - [iOS-App (Idee, noch nicht terminiert)](#ios-app-idee-noch-nicht-terminiert)
 - [Verwendete Open-Source-Software](#verwendete-open-source-software)
 - [Lizenz](#lizenz)
@@ -51,6 +51,7 @@
   - [Calibration wizard](#calibration-wizard)
   - [Configuration in detail](#configuration-in-detail)
 - [Song recognition](#song-recognition)
+  - [Hiding German-language music](#hiding-german-language-music)
 - [Web interface language](#web-interface-language)
 - [Web interface](#web-interface-1)
   - [Installing as an app (PWA)](#installing-as-an-app-pwa)
@@ -66,7 +67,6 @@
 - [Future features](#future-features)
   - [Own music library & categorization (planned)](#own-music-library--categorization-planned)
   - [Automatic song recognition: cloud extension (planned)](#automatic-song-recognition-cloud-extension-planned)
-  - [Hiding German-language music (planned)](#hiding-german-language-music-planned)
   - [iOS app (idea, not yet scheduled)](#ios-app-idea-not-yet-scheduled)
 - [Third-Party Open Source Components](#third-party-open-source-components)
 - [License](#license)
@@ -703,7 +703,8 @@ derselben Antwort.
   "interval_seconds": 45.0,
   "snippet_seconds": 11.0,
   "similarity_threshold": 0.65,
-  "cloud_lookup_enabled": false
+  "cloud_lookup_enabled": false,
+  "skip_german_enabled": false
 }
 ```
 
@@ -730,6 +731,13 @@ derselben Antwort.
   Mindestabstand zwischen Cloud-Anfragen (60s) schützt zusätzlich vor
   Kontingent-Verbrauch, falls `similarity_threshold` in der Praxis zu
   locker/streng greift.
+- **`skip_german_enabled`** — überspringt automatisch als deutschsprachig
+  markierte Songs (siehe "Deutschsprachige Musik ausblenden" unten).
+  Eigener Schalter, UNABHÄNGIG von `enabled`/`cloud_lookup_enabled` oben —
+  wer nur die Wiedererkennung/Anzeige nutzen will, soll nicht überraschend
+  Sender übersprungen bekommen. Wie `enabled`/`cloud_lookup_enabled`
+  bislang nur über `settings.json`/die `/api/config`-API steuerbar, keine
+  eigene Checkbox auf der Config-Seite.
 
 Jeder Vergleich landet zusätzlich in `song_match_log`
 (`data/song_fingerprints.db`) — `python3 check_song_calibration.py`
@@ -786,6 +794,31 @@ letztere zählt AUSSCHLIESSLICH ab Einführung dieser Statistik-Sektion,
 nicht den tatsächlichen AudD-Kontostand (AudD liefert dafür weder ein
 Antwort-Feld noch einen Abfrage-Endpoint). Erscheint nur, solange
 `song_recognition.enabled` an ist.
+
+### Deutschsprachige Musik ausblenden
+
+Eigenständig vom [STT-Sprachfilter](#stt-sprachfilter): der filtert
+gesprochene Sprache (Moderation/Werbung), nicht gesungene Sprache innerhalb
+eines Songs — dafür ist dieses Feature gedacht. Jede Zeile in
+`song_fingerprints` bekommt ein `is_german_language`-Flag
+(unklassifiziert/deutsch/nicht deutsch), auf drei Wegen befüllt:
+
+- **Kuratierte Interpreten-Liste**: eine kleine, nicht vollständige
+  Handliste bekannter deutschsprachiger Interpreten wird automatisch
+  angewendet, sobald AudD (Phase 2) Titel/Interpret liefert — reiner
+  Kaltstart-Vorteil, keine externe Datenquelle, kein zusätzliches Caching.
+- **Manuell per "Deutsch!"-Button**: direkt neben "⚡ ZAPPEN!" auf der
+  Player-Seite, markiert den gerade laufenden Song — schon bedienbar,
+  bevor (oder ganz ohne dass) AudD ihn identifiziert hat. Ein manueller
+  Klick gewinnt immer gegen die kuratierte Liste.
+- **Korrektur-Liste auf der Config-Seite**: in der Song-Statistik
+  ("Meistgespielte erkannte Songs") lässt sich jeder der Top-10-Songs
+  nachträglich als deutsch/nicht deutsch markieren bzw. korrigieren.
+
+Der eigentliche Skip-Filter ist über `song_recognition.skip_german_enabled`
+(siehe oben) an-/abschaltbar — steht die DB noch leer/unklassifiziert da,
+tut der Filter nichts, er wächst mit der Zeit (Button-Nutzung + kuratierte
+Liste) mit.
 
 ## Sprache des Web-Interfaces
 
@@ -1372,23 +1405,6 @@ ohne Online-Dienst) ist bereits umgesetzt, siehe eigener Abschnitt
 - **AudD als optionaler Online-Fallback**: nur für Songs, die weder im
   lokalen Cache noch in der eigenen Musiksammlung-Referenz auftauchen.
   Bewusst optional, kein Zwang zu einem externen API-Key.
-
-### Deutschsprachige Musik ausblenden (geplant)
-
-Eigenständig vom bestehenden [STT-Sprachfilter](#stt-sprachfilter): der
-filtert Moderation/Werbung (gesprochene Sprache), nicht gesungene Sprache
-innerhalb eines Songs — dieses Feature ist ausschließlich für Letzteres
-gedacht.
-
-- Jeder Eintrag in `song_fingerprints` (siehe oben) bekommt ein
-  `is_german_language`-Flag, initial über eine kuratierte
-  Interpreten-Namensliste befüllt.
-- **Manuelles Anlernen per UI**: ein "Deutsch!"-Button unter dem
-  bestehenden "⚡ ZAPPEN!"-Button auf der Player-Seite (siehe
-  [Web-Interface](#web-interface)) markiert den gerade laufenden Song
-  nachträglich.
-- Optionaler Filter-/Skip-Modus, der so markierte Songs im Radio-Betrieb
-  überspringt.
 
 ### iOS-App (Idee, noch nicht terminiert)
 
@@ -2044,7 +2060,8 @@ spotify`) — no extra request, just more fields in the same response.
   "interval_seconds": 45.0,
   "snippet_seconds": 11.0,
   "similarity_threshold": 0.65,
-  "cloud_lookup_enabled": false
+  "cloud_lookup_enabled": false,
+  "skip_german_enabled": false
 }
 ```
 
@@ -2068,6 +2085,13 @@ spotify`) — no extra request, just more fields in the same response.
   phase 1 (no crash). A fixed internal minimum interval between cloud calls
   (60s) additionally guards against quota exhaustion in case
   `similarity_threshold` is too loose/strict in practice.
+- **`skip_german_enabled`** — automatically skips songs marked as
+  German-language (see "Hiding German-language music" below). Own switch,
+  INDEPENDENT of `enabled`/`cloud_lookup_enabled` above — anyone who only
+  wants recognition/display shouldn't get surprise station skips. Like
+  `enabled`/`cloud_lookup_enabled`, only controllable via
+  `settings.json`/the `/api/config` API so far, no dedicated checkbox on
+  the config page.
 
 Every comparison is also logged to `song_match_log`
 (`data/song_fingerprints.db`) — `python3 check_song_calibration.py`
@@ -2121,6 +2145,30 @@ requests after the 300-request free tier) — the latter counts ONLY since
 this statistics section was introduced, not the actual AudD account
 balance (AudD provides neither a response field nor a lookup endpoint for
 that). Only shown while `song_recognition.enabled` is on.
+
+### Hiding German-language music
+
+Independent of the [STT speech filter](#stt-speech-filter): that one
+filters spoken language (presenting/ads), not sung language within a
+song — this feature is for the latter. Every row in `song_fingerprints`
+gets an `is_german_language` flag (unclassified/German/not German), filled
+three ways:
+
+- **Curated artist list**: a small, non-exhaustive hand list of known
+  German-language artists is applied automatically as soon as AudD (phase
+  2) supplies title/artist — a pure cold-start convenience, no external
+  data source, no extra caching.
+- **Manually via the "German!" button**: right next to "⚡ ZAP!" on the
+  player page, marks the currently playing song — usable before (or
+  entirely without) AudD ever identifying it. A manual click always wins
+  over the curated list.
+- **Correction list on the config page**: in the song statistics
+  ("Most-played recognized songs"), each of the top-10 songs can be
+  marked/corrected as German/not German afterwards.
+
+The actual skip filter is toggled via `song_recognition.skip_german_enabled`
+(see above) — while the DB is still empty/unclassified, the filter does
+nothing; it grows over time (button use + curated list).
 
 ## Web interface language
 
@@ -2687,21 +2735,6 @@ phase 2:
   neither in the local cache nor in the user's own music library
   reference. Deliberately optional, no requirement for an external API
   key.
-
-### Hiding German-language music (planned)
-
-Independent from the existing [STT speech filter](#stt-speech-filter):
-that one filters moderation/ads (spoken speech), not sung lyrics within a
-song — this feature is exclusively for the latter.
-
-- Every entry in `song_fingerprints` (see above) gets an
-  `is_german_language` flag, initially populated via a curated list of
-  artist names.
-- **Manual tagging via the UI**: a "German!" button below the existing
-  "⚡ ZAP!" button on the player page (see [Web interface](#web-interface-1))
-  retroactively marks the currently playing song.
-- Optional filter/skip mode that skips songs marked this way during radio
-  playback.
 
 ### iOS app (idea, not yet scheduled)
 

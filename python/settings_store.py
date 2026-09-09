@@ -137,6 +137,19 @@ DEFAULTS = {
         # bei stt_filter.confidence_threshold 0.75) -- vor produktivem
         # Einsatz gegen echtes Stream-Audio nachjustieren.
         "similarity_threshold": 0.65,
+        # "Deutschsprachige Musik ausblenden" (siehe README.md/
+        # ARCHITECTURE.md): überspringt im Hauptloop Songs, deren
+        # song_fingerprints-Zeile is_german_language=1 hat (manuell per
+        # "Deutsch!"-Button gesetzt oder per kuratierter Interpreten-Liste
+        # vorbefüllt, siehe song_fingerprint.guess_is_german()). Eigener
+        # Schalter, UNABHÄNGIG von "enabled" oben -- wer nur Phase 1
+        # (Wiedererkennung/Anzeige) nutzt, soll nicht überraschend anfangen,
+        # Sender zu überspringen. Bewusst wie "enabled"/
+        # "cloud_lookup_enabled" NUR über settings.json/die generische
+        # /api/config/settings-Route erreichbar, noch ohne eigene Checkbox
+        # auf der Config-Seite (gleiches Muster wie /api/library/scan --
+        # bewusst noch ohne UI-Anschluss in dieser Phase, siehe SESSION.md).
+        "skip_german_enabled": False,
     },
     # Automatische Update-Prüfung für die Docker-Installation (siehe
     # ARCHITECTURE.md, Abschnitt "Automatische Update-Prüfung", und
@@ -371,6 +384,7 @@ def update(prebuffer_seconds=None, prebuffer_count=None, import_url=None,
            song_recognition_snippet_seconds=None,
            song_recognition_similarity_threshold=None,
            song_recognition_cloud_lookup_enabled=None,
+           song_recognition_skip_german_enabled=None,
            update_check_enabled=None,
            night_scan_enabled=None, night_scan_enabled_hours=UNSET,
            night_scan_whisper_model_size=None,
@@ -582,6 +596,8 @@ def update(prebuffer_seconds=None, prebuffer_count=None, import_url=None,
             sr["similarity_threshold"] = song_recognition_similarity_threshold
         if song_recognition_cloud_lookup_enabled is not None:
             sr["cloud_lookup_enabled"] = bool(song_recognition_cloud_lookup_enabled)
+        if song_recognition_skip_german_enabled is not None:
+            sr["skip_german_enabled"] = bool(song_recognition_skip_german_enabled)
 
         if update_check_enabled is not None:
             data["update_check"]["enabled"] = bool(update_check_enabled)

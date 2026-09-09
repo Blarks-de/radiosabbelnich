@@ -459,21 +459,25 @@ erzwingt einen Mindestabstand zwischen Cloud-Calls, unabhängig davon, wie
 oft `on_unknown_fingerprint()` aufgerufen wird.
 
 **Live-Anzeige (`_current_song`, `SongRecognizer.get_current_song()`)**:
-wird bei jedem lokalen Hit (aus dem in der DB gespeicherten title/artist,
-kann dort weiterhin `None` sein, falls der Song nie per Cloud identifiziert
-wurde) UND nach einem erfolgreichen AudD-Identify gesetzt, sonst (kein
-Titel bekannt) auf `None` — lock-geschützt wie `_last_fingerprint`, aus
-demselben Grund bei JEDEM `reset()` mitgeleert (echter Streamwechsel darf
-nicht den Song des ALTEN Senders weiter anzeigen). `webui.py`s
+gesetzt, sobald `match_or_learn()` eine `song_id` liefert (sowohl bei
+einem Cache-Hit als auch beim frischen Anlegen einer Zeile bei Cache-Miss
+— seit der "Deutsch!"-Button-Erweiterung unten NICHT mehr erst ab
+bekanntem Titel, siehe dort), sonst auf `None` — lock-geschützt wie
+`_last_fingerprint`, aus demselben Grund bei JEDEM `reset()` mitgeleert
+(echter Streamwechsel darf nicht den Song des ALTEN Senders weiter
+anzeigen). `webui.py`s
 `_build_status()` liest das im Radio-Zweig (`state.song_recognizer`, dort
 registriert von `radiosabbelnich.py`s `main()`, analog `news_break_tags`/
 `music_tags`) und befüllt `now_playing_tags` — derselbe Anzeige-Slot, den
 News-Pause und Musiksammlung-Modus schon nutzen, keine neuen Templates/JS
 nötig. Läuft `song_recognition.enabled`, aber `get_current_song()` liefert
-`None`, bleibt `now_playing_tags` NICHT einfach `None` (Nutzer-Wunsch,
-"zum Debuggen sichtbar statt still leer") — stattdessen ein Dict mit
-`pending: true` (aktiv, wartet auf den nächsten Treffer) oder zusätzlich
-`paused_no_listeners: true`, falls das Hörer-Gate unten gerade greift. Ohne
+`None` ODER (noch) keinen Titel, bleibt `now_playing_tags` NICHT einfach
+`None` (Nutzer-Wunsch, "zum Debuggen sichtbar statt still leer") —
+stattdessen ein Dict mit `pending: true` (aktiv, wartet auf den nächsten
+Treffer) oder zusätzlich `paused_no_listeners: true`, falls das Hörer-Gate
+unten gerade greift. `song_id`/`is_german` reisen in BEIDEN Zweigen mit
+(siehe "Deutsch!"-Button unten) — auch im `pending`-Fall, sobald
+`get_current_song()` überhaupt schon eine `song_id` liefert. Ohne
 `enabled` bleibt es unverändert bei `None`, kein Anzeige-Rauschen für
 Installationen ohne Song-Erkennung. Die JS-Seite (`applyStatus()`) rendert
 das über zwei neue i18n-Keys (`idx_song_pending`/
@@ -634,6 +638,74 @@ eine echte externe Referenz (AudD sagt unabhängig vom lokalen Threshold,
 welcher Song es ist) und ist der bessere Weg zu einer fundierten
 Kalibrierung — bislang aber nicht dafür automatisiert ausgewertet, siehe
 "Offene Punkte".
+
+**Deutschsprachige Musik ausblenden (`is_german_language`, "Deutsch!"-
+Button, seit 2026-09-09)**: eigenständig vom STT-Sprachfilter oben — der
+filtert gesprochene Sprache (Moderation/Werbung), hier geht es um
+GESUNGENE Sprache innerhalb eines als Musik erkannten Songs, dafür taugt
+STT nichts. Neue, nullable `is_german_language`-Spalte auf
+`song_fingerprints` (Migration per `PRAGMA table_info()` +
+`ALTER TABLE`, identisches Muster wie `album`/`year`/`duration_seconds`
+oben) — bewusst `NULL`/`0`/`1` statt eines echten Boolean-Typs (den kennt
+SQLite ohnehin nicht): `NULL` = unklassifiziert, `0`/`1` = bewusst
+klassifiziert. Drei Wege, wie eine Zeile klassifiziert wird:
+
+1. **Kuratierte Interpreten-Liste (`guess_is_german()`)**: kleine
+   Handliste bekannter deutschsprachiger Interpreten (Substring-Vergleich
+   auf den kleingeschriebenen `artist`-String, gleiches Muster wie die
+   Genre-Filter in `music_query.py`) — liefert absichtlich NUR `True`
+   oder `None`, NIE `False`: ein fehlender Listentreffer heißt nicht
+   "garantiert nicht deutsch", nur "unbekannt". Läuft automatisch in
+   `SongRecognizer._run()` (sobald ein `artist` aus einem AudD-Treffer
+   bekannt wird, direkt für die Live-Anzeige) UND in
+   `set_cloud_metadata()` (schreibt die DB-Zeile) — dort per
+   `COALESCE(is_german_language, ?)`, damit eine bereits VORHER manuell
+   gesetzte Klassifizierung (Nutzer war schneller als AudD, siehe Punkt 2)
+   nicht überschrieben wird.
+2. **Manuell per "Deutsch!"-Button** (Player-Seite, direkt neben "⚡
+   ZAPPEN!"): markiert den GERADE laufenden, erkannten Song. Bewusst schon
+   sichtbar/klickbar, sobald `now_playing_tags.song_id` existiert — NICHT
+   erst ab bekanntem Titel: der Hörer erkennt "das ist deutsch" oft am
+   Klang, lange bevor (oder ganz ohne dass) AudD den Song je identifiziert.
+   Dafür musste `match_or_learn()` seinen Rückgabewert ändern: liefert
+   seit dieser Erweiterung IMMER ein dict (auch bei Cache-Miss, mit der
+   frisch per `INSERT`/`c.lastrowid` vergebenen `song_id`, `new: True`)
+   statt vorher `None` bei Cache-Miss — der einzige Aufrufer
+   (`SongRecognizer._run()`) unterscheidet seitdem über das `new`-Flag
+   statt über `is not None`. `SongRecognizer._set_current_song()`/
+   `_current_song` sind entsprechend von "nur bei bekanntem Titel" auf
+   "sobald `song_id` bekannt" umgestellt (siehe Live-Anzeige-Absatz oben).
+   Ruft `POST /api/song/mark-german` (`{song_id, is_german}`) →
+   `SongFingerprintDB.set_language()` — schreibt DIREKT (nicht per
+   COALESCE), ein manueller Klick gewinnt also immer gegen einen späteren
+   `guess_is_german()`-Treffer, aber nicht umgekehrt (Punkt 1 respektiert
+   Punkt 2, nicht andersrum).
+3. **Korrektur-Liste auf der Config-Seite**: dieselbe "Meistgespielte
+   erkannte Songs"-Tabelle wie in der Statistik-Sektion oben, jetzt mit
+   Sprache-Spalte + zwei Buttons ("Als deutsch markieren"/"Als nicht
+   deutsch markieren") pro Zeile — ruft denselben `/api/song/mark-german`-
+   Endpoint, kann aber JEDEN der Top-10-Songs klassifizieren, nicht nur
+   den gerade laufenden. Eigener `renderSongsTable()`-Renderer statt des
+   generischen `renderStatsTable()`-Helpers (der kann nur Text-Zellen,
+   keine Event-Handler).
+
+**Skip-Filter (`song_recognition.skip_german_enabled`, Hauptloop)**: rein
+additiv zur bestehenden Song-Erkennung — direkt nach dem bestehenden
+`maybe_recognize_async()`-Aufruf prüft der Hauptloop
+`song_recognizer.get_current_song().get("is_german")` und ruft bei
+`True` `do_switch()` auf, exakt wie beim bekannten Jingle-Match oben. Kein
+zusätzlicher State fürs "nicht doppelt für denselben Song auslösen" nötig:
+`do_switch()` ruft für jeden geprüften Kandidaten ohnehin schon
+`song_recognizer.reset()` auf (siehe "Reset an jedem echten Streamwechsel"
+oben), das leert `_current_song` von selbst. Eigener Schalter,
+UNABHÄNGIG von `song_recognition.enabled`/`cloud_lookup_enabled` — wer nur
+Phase 1 (Wiedererkennung/Anzeige) oder nur das manuelle Anlernen nutzen
+will, soll nicht überraschend anfangen, Sender zu überspringen. Bewusst
+NUR über `settings.json`/die generische `/api/config/settings`-Route
+erreichbar, noch OHNE eigene Checkbox auf der Config-Seite — gleiches
+Muster wie `/api/library/scan` ("bewusst noch ohne UI-Anschluss in dieser
+Phase"): `song_recognition.enabled`/`cloud_lookup_enabled` selbst haben
+bis heute ebenfalls keine UI-Checkbox, nur die generische Settings-API.
 
 ## Logging
 

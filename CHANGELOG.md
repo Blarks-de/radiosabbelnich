@@ -18,6 +18,7 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 ## Aktueller Stand
 
 **Zuletzt umgesetzt** (siehe Datumsabschnitte unten für Details):
+- Deutschsprachige Musik ausblenden (kuratierte Liste + "Deutsch!"-Button + Skip-Filter)
 - Nächtlicher Sender-Scan (Whisper-Sprach-ID, WebUI-integriert, Vorschlag statt Automatik)
 - Automatische Sender-Sprach-Erkennung (`vosk_language_check.py`)
 - Vosk-Sprachmodelle per WebUI herunterladen (kein Konsolenzugriff mehr nötig)
@@ -32,18 +33,12 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 - Werbeblock-Vorbuffering + Sprache-Gate für die Nachrichten-Pause
 - GPLv3-Lizenzierung, Inhaltsverzeichnisse für README.md/ARCHITECTURE.md
 
-**Aktuell offen/geplant** (Details: README.md, "Zukünftige Features"):
-- Song-Erkennung: Vorbefüllung der Referenz-DB aus der eigenen
-  Musik-Library, automatisierte Threshold-Kalibrierung anhand der
-  AudD-Identifikationen statt des bisherigen (tautologischen)
-  `song_match_log`
-- Deutschsprachige Musik ausblenden (Skip-Filter + manuelles Anlernen
-  per "Deutsch!"-Button)
-- Musik-Library: Enrichment (Cover/Lyrics), Energy-Erkennung/Browse-UI
-- iOS-App (Idee, kein Zeitplan)
-
 ## 2026-09-09
 
+- Deutschsprachige Musik ausblenden: `is_german_language`-Flag auf
+  `song_fingerprints` (kuratierte Interpreten-Liste + manueller
+  "Deutsch!"-Button neben "⚡ ZAPPEN!" + Korrektur-Liste auf der
+  Config-Seite), Skip-Filter über `song_recognition.skip_german_enabled`.
 - Abgelaufenes TLS-Zertifikat behoben (Web-Interface + Icecast-Stream waren dadurch unerreichbar/stumm); automatische tägliche Erneuerung per `scripts/renew-tls-cert.sh` + systemd-Timer eingerichtet, startet bei Erneuerung beide Container neu.
 
 ## 2026-09-02

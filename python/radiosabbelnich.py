@@ -1914,6 +1914,23 @@ def main():
                         song_cfg["interval_seconds"], song_cfg["similarity_threshold"],
                         song_cfg["cloud_lookup_enabled"],
                     )
+                    # "Deutsch!"-Skip-Filter (siehe README.md/ARCHITECTURE.md,
+                    # "Deutschsprachige Musik ausblenden"): manuell per Button
+                    # oder per kuratierter Namensliste (song_fingerprint.
+                    # guess_is_german()) als deutsch markierte Songs werden
+                    # hier übersprungen, sobald die ASYNCHRONE Erkennung oben
+                    # (läuft in SongRecognizers Hintergrund-Thread) ein
+                    # Ergebnis geliefert hat -- get_current_song() liest nur
+                    # den aktuellen In-Memory-Zustand, rein additiv zu
+                    # maybe_recognize_async() selbst. do_switch() unten ruft
+                    # für jeden geprüften Kandidaten song_recognizer.reset()
+                    # auf (siehe dort) und verhindert dadurch von selbst ein
+                    # wiederholtes Auslösen für denselben Song.
+                    if song_cfg.get("skip_german_enabled"):
+                        recognized = song_recognizer.get_current_song()
+                        if recognized and recognized.get("is_german"):
+                            do_switch("Deutschsprachiger Song übersprungen")
+                            continue
 
             # "and not speech_gate_active": gleicher Grund wie beim
             # Fingerprint-Check oben -- während des engen Sprache-Gate-
