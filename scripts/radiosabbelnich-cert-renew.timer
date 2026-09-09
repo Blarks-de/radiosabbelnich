@@ -1,0 +1,10 @@
+[Unit]
+Description=RadioSabbelNich: täglich TLS-Zertifikat prüfen/erneuern
+
+[Timer]
+OnCalendar=*-*-* 04:17:00
+RandomizedDelaySec=600
+Persistent=true
+
+[Install]
+WantedBy=timers.target

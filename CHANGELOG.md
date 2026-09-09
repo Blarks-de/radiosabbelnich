@@ -42,6 +42,10 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 - Musik-Library: Enrichment (Cover/Lyrics), Energy-Erkennung/Browse-UI
 - iOS-App (Idee, kein Zeitplan)
 
+## 2026-09-09
+
+- Abgelaufenes TLS-Zertifikat behoben (Web-Interface + Icecast-Stream waren dadurch unerreichbar/stumm); automatische tägliche Erneuerung per `scripts/renew-tls-cert.sh` + systemd-Timer eingerichtet, startet bei Erneuerung beide Container neu.
+
 ## 2026-09-02
 
 - Fix: Docker-Build brach bei aubio (Schritt 4/43) mit

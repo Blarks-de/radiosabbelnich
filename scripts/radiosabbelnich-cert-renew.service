@@ -1,0 +1,8 @@
+[Unit]
+Description=RadioSabbelNich: Tailscale-TLS-Zertifikat erneuern
+After=network-online.target tailscaled.service docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/docker/radiosabbelnich/scripts/renew-tls-cert.sh

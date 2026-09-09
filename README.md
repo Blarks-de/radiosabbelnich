@@ -1144,7 +1144,17 @@ Mit einem Zertifikat (z.B. per Let's Encrypt/certbot erzeugt, ein
 
 Icecast selbst muss dafür kurz mit Root-Rechten starten (um die
 0600-Zertifikatsdatei lesen zu können) und gibt sie danach intern wieder
-ab — Details dazu in `CLAUDE.md`.
+ab — Details dazu in `ARCHITECTURE.md`.
+
+**Automatische Erneuerung (seit 2026-09-09):** Bei Zertifikaten von
+`tailscale cert` erneuert `scripts/renew-tls-cert.sh` über einen
+täglichen systemd-Timer (`radiosabbelnich-cert-renew.timer`,
+`/etc/systemd/system/`) das Zertifikat rechtzeitig vor Ablauf und
+startet bei tatsächlicher Erneuerung automatisch **beide** Container
+neu (`radiosabbelnich` + `icecast` — beide lesen ihr Zertifikat nur
+beim eigenen Start, siehe `ARCHITECTURE.md`). Ohne diesen Timer läuft
+das Zertifikat nach ~90 Tagen kommentarlos ab: Web-Interface meldet
+dann "Verbindung zum Server verloren", der Stream bleibt stumm.
 
 ## Deploy-Befehle
 

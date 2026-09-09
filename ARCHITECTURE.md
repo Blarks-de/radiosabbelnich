@@ -1602,6 +1602,23 @@ Beide Dienste bekommen bei Bedarf HTTPS, aber auf grundverschiedene Art:
   ist auf jedem Host ein gültiges Bind-Mount-Ziel und liefert 0 Byte,
   genau das, was die jeweiligen "ist überhaupt ein Zertifikat
   da?"-Prüfungen erwarten.
+- **Zertifikatserneuerung erfordert Neustart BEIDER Container, nicht
+  nur eines** — nachweislich am 2026-09-09 live so aufgetreten: das
+  Web-Interface liest sein Zertifikat nur beim eigenen Start (siehe
+  oben), Icecast baut sein kombiniertes `icecast-tls.pem` ebenfalls nur
+  beim eigenen Containerstart zusammen. Ein erneuertes Host-Zertifikat
+  wirkt auf keinen der beiden Dienste, solange nicht *beide* neu
+  gestartet wurden — sonst bleibt z.B. der Icecast-Stream (Browser
+  verbindet sich per HTTPS zum SSL-Port) mit dem alten, ggf.
+  abgelaufenen Zertifikat hängen, während das frisch neu gestartete
+  Web-Interface schon wieder normal antwortet (Symptom war ein
+  grauer/stummer `<audio>`-Player trotz korrekter Backend-Statusanzeige
+  "spielt", weil Letztere unabhängig vom tatsächlichen Audio-Stream
+  ist). Seit demselben Tag läuft deshalb `scripts/renew-tls-cert.sh`
+  (`tailscale cert --min-validity 720h`, Hash-Vergleich, Neustart nur
+  bei tatsächlicher Änderung) über einen täglichen systemd-Timer
+  (`radiosabbelnich-cert-renew.timer`) und startet bei einer Erneuerung
+  explizit `radiosabbelnich` **und** `icecast` neu.
 
 ## Sicherheitsmodell
 
