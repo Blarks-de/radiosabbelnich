@@ -23,15 +23,26 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 - Automatische Sender-Sprach-Erkennung (`vosk_language_check.py`)
 - Vosk-Sprachmodelle per WebUI herunterladen (kein Konsolenzugriff mehr nötig)
 - STT-Sprache pro Sender überschreibbar (statt nur pro Kategorie)
-- Song-Erkennung Phase 2: AudD-Cloud-Lookup für unbekannte Songs
-  (`song_recognition.cloud_lookup_enabled` + `AUDD_API_TOKEN`), Live-Anzeige
-  von Titel/Interpret im Radio-Modus
+- Song-Erkennung Phase 2: AcoustID-Cloud-Lookup für unbekannte Songs
+  (`song_recognition.acoustid_lookup_enabled` + `ACOUSTID_API_KEY`,
+  ursprünglich AudD, seit 2026-09 ersetzt), Live-Anzeige von Titel/Interpret
+  im Radio-Modus
 - Automatische Update-Prüfung für die Docker-Installation
   (`update_check.py`, git-pull-Hinweis im Web-Interface, Default AN)
 - Song-Erkennung Phase 1 (lokaler Chromaprint-Cache) + Kalibrierungs-
   Logging/-Skript (`check_song_calibration.py`)
 - Werbeblock-Vorbuffering + Sprache-Gate für die Nachrichten-Pause
 - GPLv3-Lizenzierung, Inhaltsverzeichnisse für README.md/ARCHITECTURE.md
+
+## 2026-09-12
+
+- AudD-Cloud-Fallback (Song-Erkennung Phase 2) durch den dauerhaft
+  kostenlosen AcoustID-Lookup ersetzt (AudD-Kontingent verbraucht, kein
+  Abo mehr) — Settings-Key `cloud_lookup_enabled` → `acoustid_lookup_enabled`,
+  ENV-Variable `AUDD_API_TOKEN` → `ACOUSTID_API_KEY`, `audd_request_log`
+  zu `song_cloud_request_log` migriert (historische Zeilen bleiben als
+  `audd_legacy` erhalten), keine Kostenschätzung mehr in der Statistik-
+  Sektion.
 
 ## 2026-09-09
 

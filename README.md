@@ -673,10 +673,12 @@ normal weiter. Ein Absturz der Engine bei einem einzelnen Sample
 ## Song-Erkennung
 
 Erkennt laufende Musik per lokalem Chromaprint-Fingerprint-Cache (Phase 1)
-und identifiziert unbekannte Songs optional per AudD-Cloud-Lookup (Phase 2,
-[audd.io](https://audd.io), kostenloses Kontingent verfügbar). Default AUS
-wie jedes neue Feature, nur über `settings.json`/die `/api/config`-API
-aktivierbar (kein Schalter auf der Config-Seite).
+und identifiziert unbekannte Songs optional per AcoustID-Cloud-Lookup
+(Phase 2, [acoustid.org](https://acoustid.org), dauerhaft kostenlos —
+ersetzt seit 2026-09 das frühere AudD, dessen Kontingent verbraucht war und
+für das es kein Abo mehr gab). Default AUS wie jedes neue Feature, nur über
+`settings.json`/die `/api/config`-API aktivierbar (kein Schalter auf der
+Config-Seite).
 
 Läuft nur im Radio-Modus, während gerade Musik erkannt wird: alle
 `interval_seconds` wird ein `snippet_seconds` langes Sample per `fpcalc`
@@ -684,18 +686,15 @@ Läuft nur im Radio-Modus, während gerade Musik erkannt wird: alle
 geprüft — Songwechsel-Erkennung vergleicht zuerst gegen den zuletzt
 gesehenen Song desselben Senders, ein DB-Abgleich läuft nur bei
 tatsächlichem Wechsel. Kennt der lokale Cache den Song noch nicht UND ist
-`cloud_lookup_enabled` (siehe unten) aktiv, identifiziert AudD ihn per
-Snippet-Upload; bei Erfolg landen Titel/Interpret UND — falls von AudD
+`acoustid_lookup_enabled` (siehe unten) aktiv, identifiziert AcoustID ihn
+anhand desselben Chromaprint-Fingerprints (in dem für AcoustID nötigen
+Format); bei Erfolg landen Titel/Interpret UND — falls von AcoustID
 mitgeliefert — Album/Erscheinungsjahr/Länge sowohl im lokalen Cache als
 auch — solange der Song weiterläuft — in der "Jetzt läuft"-Anzeige auf der
 Player-Seite (zweite Zeile, "Album (Jahr) · m:ss", gleiches Anzeigeformat
 wie bei News-Pause/Musiksammlung, dort ohne die Längenangabe). Album/Jahr/
-Länge sind optional — nicht jeder AudD-Treffer liefert alle drei, die
-Anzeige zeigt dann nur, was vorhanden ist. Die Länge kommt NICHT aus
-AudDs Kernantwort (die liefert sie nicht), sondern aus zusätzlich
-angeforderten Spotify-/Apple-Music-Zusatzdaten (`return=apple_music,
-spotify`) — kostet keinen zusätzlichen Request, nur mehr Felder in
-derselben Antwort.
+Länge sind optional — nicht jeder AcoustID-Treffer liefert alle drei, die
+Anzeige zeigt dann nur, was vorhanden ist.
 
 ```json
 "song_recognition": {
@@ -703,7 +702,7 @@ derselben Antwort.
   "interval_seconds": 45.0,
   "snippet_seconds": 11.0,
   "similarity_threshold": 0.65,
-  "cloud_lookup_enabled": false,
+  "acoustid_lookup_enabled": false,
   "skip_german_enabled": false
 }
 ```
@@ -722,20 +721,21 @@ derselben Antwort.
   Methode wie beim STT-Schwellwert oben: einige Samples desselben Songs
   UND verschiedener Songs sammeln, den beobachteten Abstand in den Logs
   prüfen.
-- **`cloud_lookup_enabled`** — AudD-Cloud-Lookup bei Cache-Miss an/aus
-  (Phase 2). Eigener Schalter, UNABHÄNGIG von `enabled` oben — Cloud-Lookups
-  kosten AudD-Kontingent, lokales Fingerprinting nicht. Greift nur,
-  zusätzlich zu `enabled=true`, wenn auch `AUDD_API_TOKEN` in `.env` gesetzt
-  ist (kostenloser Token unter [audd.io](https://audd.io)) — fehlt der
-  Token, bleibt es bei Phase 1 (kein Absturz). Ein fester interner
-  Mindestabstand zwischen Cloud-Anfragen (60s) schützt zusätzlich vor
-  Kontingent-Verbrauch, falls `similarity_threshold` in der Praxis zu
-  locker/streng greift.
+- **`acoustid_lookup_enabled`** — AcoustID-Cloud-Lookup bei Cache-Miss
+  an/aus (Phase 2). Eigener Schalter, UNABHÄNGIG von `enabled` oben — auch
+  wenn AcoustID kostenlos ist, sollen Cloud-Requests nicht überraschend
+  starten, nur weil Phase 1 schon läuft. Greift nur, zusätzlich zu
+  `enabled=true`, wenn auch `ACOUSTID_API_KEY` in `.env` gesetzt ist
+  (kostenloser Key unter [acoustid.org/new-application](https://acoustid.org/new-application))
+  — fehlt der Key, bleibt es bei Phase 1 (kein Absturz). Ein fester
+  interner Mindestabstand zwischen Cloud-Anfragen (60s) hält zusätzlich
+  Distanz zu AcoustIDs Fair-Use-Limit (3 Anfragen/Sekunde), falls
+  `similarity_threshold` in der Praxis zu locker/streng greift.
 - **`skip_german_enabled`** — überspringt automatisch als deutschsprachig
   markierte Songs (siehe "Deutschsprachige Musik ausblenden" unten).
-  Eigener Schalter, UNABHÄNGIG von `enabled`/`cloud_lookup_enabled` oben —
-  wer nur die Wiedererkennung/Anzeige nutzen will, soll nicht überraschend
-  Sender übersprungen bekommen. Wie `enabled`/`cloud_lookup_enabled`
+  Eigener Schalter, UNABHÄNGIG von `enabled`/`acoustid_lookup_enabled` oben
+  — wer nur die Wiedererkennung/Anzeige nutzen will, soll nicht überraschend
+  Sender übersprungen bekommen. Wie `enabled`/`acoustid_lookup_enabled`
   bislang nur über `settings.json`/die `/api/config`-API steuerbar, keine
   eigene Checkbox auf der Config-Seite.
 
@@ -745,12 +745,12 @@ wertet das aus (Similarity-Verteilung für Treffer/Nicht-Treffer). **Achtung**:
 diese Auswertung ist rein tautologisch (Hit/Miss wird direkt aus dem
 Vergleich mit dem aktuellen `similarity_threshold` abgeleitet, keine
 unabhängige Ground Truth) — für eine echte Kalibrierung eignen sich die
-AudD-Identifikationen aus Phase 2 besser, da AudD eine externe, vom
+AcoustID-Identifikationen aus Phase 2 besser, da AcoustID eine externe, vom
 Threshold unabhängige Referenz liefert.
 
 **Hörer-Gate**: Song-Erkennung (lokales Fingerprinting UND Cloud-Lookup)
 stoppt automatisch, solange niemand den Restream hört — kostet sonst CPU
-bzw. AudD-Kontingent für ein Publikum, das nicht existiert. Prüft alle 60s
+bzw. unnötige AcoustID-Anfragen für ein Publikum, das nicht existiert. Prüft alle 60s
 über Icecasts Admin-API (`ICECAST_ADMIN_URL`/`_USER`/`_PASSWORD`/`_MOUNT`,
 dieselben Werte wie für die Hörerzahl-Anzeige) die aktuelle Hörerzahl auf
 dem Restream-Mount; ohne konfigurierte Admin-API oder bei einem Abfrage-
@@ -773,12 +773,12 @@ bisher komplett leer.
 Funktioniert Cloud-Lookup gerade nicht, ersetzt genau diese Zeile den
 neutralen "🔍 noch nicht erkannt"-Platzhalter durch den konkreten Grund,
 statt für den Betreiber ununterscheidbar auszusehen von "läuft normal, hat
-den Song nur noch nicht gefunden": "⚠️ AudD-Kontingent aufgebraucht" (AudD-
-Fehlercodes #900/#901/#902, siehe `song_fingerprint.py`), "⚠️ AudD nicht
-erreichbar" (Netzwerk/Timeout) oder "⚠️ AudD-Fehler (Code X)" (jeder andere,
-nicht gesondert dokumentierte AudD-Fehlercode). Fehlt nur der API-Token
-oder ist `cloud_lookup_enabled` aus, bleibt es beim neutralen "🔍
-noch nicht erkannt" — das ist kein Fehlerzustand.
+den Song nur noch nicht gefunden": "⚠️ AcoustID-Rate-Limit erreicht",
+"⚠️ AcoustID nicht erreichbar" (Netzwerk/Timeout) oder "⚠️ AcoustID-Fehler
+(Code X)" (jeder andere AcoustID-Fehlercode — AcoustID dokumentiert kein
+festes Fehlercode-Schema). Fehlt nur der API-Key oder ist
+`acoustid_lookup_enabled` aus, bleibt es beim neutralen "🔍 noch nicht
+erkannt" — das ist kein Fehlerzustand.
 
 **Statistik-Sektion auf der Config-Seite** ("🎵 Song-Erkennung –
 Statistik", direkt unterhalb von "🗑 Fingerprint-Datenbank"): zeigt Kennzahlen
@@ -786,14 +786,14 @@ aus den bestehenden Tabellen, rein informativ zum Beobachten/Kalibrieren —
 Einträge in der lokalen DB, Sammelzeitraum, Hit-Rate samt Similarity-
 Perzentilen/Histogramm für Hits vs. Misses (dieselbe Auswertung wie
 `check_song_calibration.py`, jetzt zusätzlich hier), Top-Sender und
-meistgespielte erkannte Songs. Für den AudD-Cloud-Fallback zusätzlich:
-Token konfiguriert ja/nein, letzter Status (siehe oben), sowie Requests
-heute/letzte 7 Tage/gesamt samt Erfolgsquote und einer groben
-Kostenschätzung ($5 pro 1.000 Requests nach dem 300er-Freikontingent) —
-letztere zählt AUSSCHLIESSLICH ab Einführung dieser Statistik-Sektion,
-nicht den tatsächlichen AudD-Kontostand (AudD liefert dafür weder ein
-Antwort-Feld noch einen Abfrage-Endpoint). Erscheint nur, solange
-`song_recognition.enabled` an ist.
+meistgespielte erkannte Songs. Für den AcoustID-Cloud-Fallback zusätzlich:
+API-Key konfiguriert ja/nein, letzter Status (siehe oben), sowie Requests
+heute/letzte 7 Tage/gesamt samt Erfolgsquote — AcoustID ist dauerhaft
+kostenlos (nur ein Fair-Use-Limit von 3 Anfragen/Sekunde), es gibt hier
+also anders als früher bei AudD keine Kostenschätzung. Historische Requests
+von vor der Umstellung von AudD auf AcoustID bleiben in der Datenbank
+erhalten, fließen aber nicht mehr in diese Zahlen ein. Erscheint nur,
+solange `song_recognition.enabled` an ist.
 
 ### Deutschsprachige Musik ausblenden
 
@@ -805,11 +805,11 @@ eines Songs — dafür ist dieses Feature gedacht. Jede Zeile in
 
 - **Kuratierte Interpreten-Liste**: eine kleine, nicht vollständige
   Handliste bekannter deutschsprachiger Interpreten wird automatisch
-  angewendet, sobald AudD (Phase 2) Titel/Interpret liefert — reiner
+  angewendet, sobald AcoustID (Phase 2) Titel/Interpret liefert — reiner
   Kaltstart-Vorteil, keine externe Datenquelle, kein zusätzliches Caching.
 - **Manuell per "Deutsch!"-Button**: direkt neben "⚡ ZAPPEN!" auf der
   Player-Seite, markiert den gerade laufenden Song — schon bedienbar,
-  bevor (oder ganz ohne dass) AudD ihn identifiziert hat. Ein manueller
+  bevor (oder ganz ohne dass) AcoustID ihn identifiziert hat. Ein manueller
   Klick gewinnt immer gegen die kuratierte Liste.
 - **Korrektur-Liste auf der Config-Seite**: in der Song-Statistik
   ("Meistgespielte erkannte Songs") lässt sich jeder der Top-10-Songs
@@ -1153,7 +1153,7 @@ Trefferzahl (schlankere Variante desselben Checks aus `check`).
 | `VOSK_MODEL_FOLDER` | Host-Ordner mit einem entpackten deutschen Vosk-Modell für den STT-Sprachfilter (optional, siehe eigener Abschnitt) |
 | `VOSK_MODELS_FOLDER` | Beschreibbarer Sammel-Ordner für per WebUI heruntergeladene Vosk-Modelle (optional, Default `./data/vosk-models`, siehe "STT-Sprachfilter") |
 | `UI_LANGUAGE` | Startsprache des Web-Interfaces: `en` (Basissprache) oder der Code eines Sprachpakets unter `language/` wie `de` (optional, Default `en` — siehe "Sprache des Web-Interfaces") |
-| `AUDD_API_TOKEN` | API-Token für AudD, aktiviert Song-Erkennung Phase 2 (optional, kostenloses Kontingent unter [audd.io](https://audd.io) — siehe "Song-Erkennung") |
+| `ACOUSTID_API_KEY` | Persönlicher API-Key für AcoustID, aktiviert Song-Erkennung Phase 2 (optional, dauerhaft kostenlos unter [acoustid.org/new-application](https://acoustid.org/new-application) — siehe "Song-Erkennung") |
 
 ### HTTPS/TLS (optional)
 
@@ -1391,20 +1391,18 @@ Tech-Stack: Python, mutagen, SQLite, ggf. FastAPI für Query-API.
 Referenz: Beets (Library-Manager) als Inspiration für
 Datenmodell/Query-Sprache, kein 1:1-Einsatz.
 
-### Automatische Song-Erkennung: Cloud-Erweiterung (geplant)
+### Automatische Song-Erkennung: Vorbefüllung aus der Musiksammlung (geplant)
 
 Phase 1 (lokaler Chromaprint-Fingerprint-Cache, erkennt Songwiederholungen
-ohne Online-Dienst) ist bereits umgesetzt, siehe eigener Abschnitt
-[Song-Erkennung](#song-erkennung) weiter oben. Geplant als Phase 2:
+ohne Online-Dienst) und Phase 2 (optionaler AcoustID-Cloud-Fallback bei
+Cache-Miss) sind bereits umgesetzt, siehe eigener Abschnitt
+[Song-Erkennung](#song-erkennung) weiter oben. Weiterhin nur eine Idee:
 
 - **Vorbefüllung aus der eigenen Musiksammlung**: die `song_fingerprints`-
   Referenz-DB wird aus den beim Musik-Scan (`music_scan.py`) bereits
   ausgelesenen ID3-Tags (Titel/Interpret) vorbefüllt — kein zweiter
   Scan-Mechanismus, keine Online-Anbindung nötig, um Songs der eigenen
   Sammlung im Radio wiederzuerkennen.
-- **AudD als optionaler Online-Fallback**: nur für Songs, die weder im
-  lokalen Cache noch in der eigenen Musiksammlung-Referenz auftauchen.
-  Bewusst optional, kein Zwang zu einem externen API-Key.
 
 ### iOS-App (Idee, noch nicht terminiert)
 
@@ -1438,12 +1436,13 @@ eigenen Lizenz genutzt, nicht modifiziert:
 | Kotlin/[ExoPlayer](https://github.com/androidx/media) (AndroidX Media3) | Audio-Wiedergabe in der eigenständigen Android-App (`android-app/`) | Apache-2.0 |
 | [Vosk Android-Bindings](https://github.com/alphacep/vosk-api) (alphacep, Kotlin) | Offline-Spracherkennung in der Android-App (`android-app/`) | Apache-2.0 |
 
-**AudD ist keine Open-Source-Komponente:** Die optionale Song-Erkennung
+**AcoustID ist keine Open-Source-Komponente:** Die optionale Song-Erkennung
 Phase 2 (siehe [Song-Erkennung](#song-erkennung)) nutzt bei aktivierter
-Konfiguration die kommerzielle externe API von
-[AudD](https://audd.io/) — ein externer, kostenpflichtiger
-Cloud-Dienst, kein im Projekt enthaltener oder eingebundener
-Open-Source-Code, und daher bewusst nicht Teil obiger Tabelle.
+Konfiguration den externen Cloud-Dienst
+[AcoustID](https://acoustid.org/) — dauerhaft kostenlos (anders als das
+zuvor genutzte, kostenpflichtige AudD), aber weiterhin ein externer Dienst,
+kein im Projekt enthaltener oder eingebundener Open-Source-Code, und daher
+bewusst nicht Teil obiger Tabelle.
 
 ## Lizenz
 
@@ -2032,27 +2031,27 @@ sample, not the main process.
 ## Song recognition
 
 Recognizes playing music via a local Chromaprint fingerprint cache (phase 1)
-and optionally identifies unknown songs via an AudD cloud lookup (phase 2,
-[audd.io](https://audd.io), free tier available). Off by default like every
-new feature, only enable it via `settings.json`/the `/api/config` API (no
-toggle on the config page).
+and optionally identifies unknown songs via an AcoustID cloud lookup
+(phase 2, [acoustid.org](https://acoustid.org), permanently free — replaces
+the previous AudD as of 2026-09, whose quota was exhausted and which had no
+subscription option anymore). Off by default like every new feature, only
+enable it via `settings.json`/the `/api/config` API (no toggle on the
+config page).
 
 Only runs in radio mode while music is currently detected: every
 `interval_seconds`, a `snippet_seconds`-long sample is fingerprinted via
 `fpcalc` (Chromaprint, see the Dockerfile) and checked against the local
 cache — song-change detection first compares against the last song seen on
 the same station, a full cache lookup only runs on an actual change. If the
-local cache doesn't know the song yet AND `cloud_lookup_enabled` (see below)
-is on, AudD identifies it from the uploaded snippet; on success, title/artist
-AND — if AudD supplies them — album/release year/duration are written back
-into the local cache and — while that song keeps playing — shown in the
-"now playing" display on the player page (second line, "Album (Year) ·
-m:ss", same display format as news break/music library, minus the duration
-there). Album/year/duration are optional — not every AudD match returns
-all three, the display then just shows whatever is available. Duration
-does NOT come from AudD's core response (it doesn't provide it), but from
-additionally requested Spotify/Apple Music data (`return=apple_music,
-spotify`) — no extra request, just more fields in the same response.
+local cache doesn't know the song yet AND `acoustid_lookup_enabled` (see
+below) is on, AcoustID identifies it from the same Chromaprint fingerprint
+(in the format AcoustID requires); on success, title/artist AND — if
+AcoustID supplies them — album/release year/duration are written back into
+the local cache and — while that song keeps playing — shown in the "now
+playing" display on the player page (second line, "Album (Year) · m:ss",
+same display format as news break/music library, minus the duration
+there). Album/year/duration are optional — not every AcoustID match returns
+all three, the display then just shows whatever is available.
 
 ```json
 "song_recognition": {
@@ -2060,7 +2059,7 @@ spotify`) — no extra request, just more fields in the same response.
   "interval_seconds": 45.0,
   "snippet_seconds": 11.0,
   "similarity_threshold": 0.65,
-  "cloud_lookup_enabled": false,
+  "acoustid_lookup_enabled": false,
   "skip_german_enabled": false
 }
 ```
@@ -2077,19 +2076,21 @@ spotify`) — no extra request, just more fields in the same response.
   `SESSION.md`) — before relying on it in production, the same method as
   for the STT threshold above is recommended: collect a few samples of the
   same song AND of different songs, check the observed gap in the logs.
-- **`cloud_lookup_enabled`** — AudD cloud lookup on cache miss, on/off
-  (phase 2). Own switch, INDEPENDENT of `enabled` above — cloud lookups
-  cost AudD quota, local fingerprinting doesn't. Only takes effect, in
-  addition to `enabled=true`, when `AUDD_API_TOKEN` is also set in `.env`
-  (free token at [audd.io](https://audd.io)) — without a token, it stays at
-  phase 1 (no crash). A fixed internal minimum interval between cloud calls
-  (60s) additionally guards against quota exhaustion in case
+- **`acoustid_lookup_enabled`** — AcoustID cloud lookup on cache miss,
+  on/off (phase 2). Own switch, INDEPENDENT of `enabled` above — even
+  though AcoustID is free, cloud requests shouldn't start unexpectedly just
+  because phase 1 is already running. Only takes effect, in addition to
+  `enabled=true`, when `ACOUSTID_API_KEY` is also set in `.env` (free key
+  at [acoustid.org/new-application](https://acoustid.org/new-application))
+  — without a key, it stays at phase 1 (no crash). A fixed internal minimum
+  interval between cloud calls (60s) additionally keeps distance from
+  AcoustID's fair-use limit (3 requests/second) in case
   `similarity_threshold` is too loose/strict in practice.
 - **`skip_german_enabled`** — automatically skips songs marked as
   German-language (see "Hiding German-language music" below). Own switch,
-  INDEPENDENT of `enabled`/`cloud_lookup_enabled` above — anyone who only
-  wants recognition/display shouldn't get surprise station skips. Like
-  `enabled`/`cloud_lookup_enabled`, only controllable via
+  INDEPENDENT of `enabled`/`acoustid_lookup_enabled` above — anyone who
+  only wants recognition/display shouldn't get surprise station skips. Like
+  `enabled`/`acoustid_lookup_enabled`, only controllable via
   `settings.json`/the `/api/config` API so far, no dedicated checkbox on
   the config page.
 
@@ -2098,13 +2099,14 @@ Every comparison is also logged to `song_match_log`
 analyzes it (similarity distribution for hits/misses). **Note**: this
 analysis is purely tautological (hit/miss is derived directly from the
 comparison against the current `similarity_threshold`, not an independent
-ground truth) — for real calibration, the AudD identifications from phase 2
-are more useful, since AudD provides an external reference independent of
-the threshold.
+ground truth) — for real calibration, the AcoustID identifications from
+phase 2 are more useful, since AcoustID provides an external reference
+independent of the threshold.
 
 **Listener gate**: song recognition (local fingerprinting AND cloud lookup)
 automatically stops whenever nobody is listening to the restream — it would
-otherwise cost CPU/AudD quota for an audience that doesn't exist. Checks the
+otherwise cost CPU/unnecessary AcoustID requests for an audience that
+doesn't exist. Checks the
 current listener count on the restream mount every 60s via Icecast's admin
 API (`ICECAST_ADMIN_URL`/`_USER`/`_PASSWORD`/`_MOUNT`, the same values used
 for the listener count display); without a configured admin API or on a
@@ -2126,11 +2128,11 @@ completely empty as before.
 If cloud lookup currently isn't working, this same line replaces the neutral
 "🔍 not recognized yet" placeholder with the concrete reason instead of
 looking indistinguishable from "running fine, just hasn't found the song
-yet": "⚠️ AudD quota exhausted" (AudD error codes #900/#901/#902, see
-`song_fingerprint.py`), "⚠️ AudD unreachable" (network/timeout), or "⚠️ AudD
-error (code X)" (any other, not specifically documented AudD error code).
-If only the API token is missing or `cloud_lookup_enabled` is off, it stays
-at the neutral "🔍 not recognized yet" — that's not an error state.
+yet": "⚠️ AcoustID rate limit reached", "⚠️ AcoustID unreachable"
+(network/timeout), or "⚠️ AcoustID error (code X)" (any other AcoustID
+error code — AcoustID doesn't document a fixed error code scheme). If only
+the API key is missing or `acoustid_lookup_enabled` is off, it stays at the
+neutral "🔍 not recognized yet" — that's not an error state.
 
 **Statistics section on the config page** ("🎵 Song recognition –
 statistics", right below "🗑 Fingerprint database"): shows metrics from
@@ -2138,13 +2140,13 @@ the existing tables, purely informational for observing/calibrating —
 entries in the local DB, collection period, hit rate with similarity
 percentiles/histogram for hits vs. misses (the same analysis as
 `check_song_calibration.py`, now also here), top stations, and most-played
-recognized songs. For the AudD cloud fallback, additionally: token
+recognized songs. For the AcoustID cloud fallback, additionally: API key
 configured yes/no, last status (see above), and requests today/last 7
-days/total with a success rate and a rough cost estimate ($5 per 1,000
-requests after the 300-request free tier) — the latter counts ONLY since
-this statistics section was introduced, not the actual AudD account
-balance (AudD provides neither a response field nor a lookup endpoint for
-that). Only shown while `song_recognition.enabled` is on.
+days/total with a success rate — AcoustID is permanently free (only a
+fair-use limit of 3 requests/second), so unlike the earlier AudD there's
+no cost estimate here. Historical requests from before the switch from
+AudD to AcoustID remain in the database but no longer count toward these
+numbers. Only shown while `song_recognition.enabled` is on.
 
 ### Hiding German-language music
 
@@ -2155,13 +2157,13 @@ gets an `is_german_language` flag (unclassified/German/not German), filled
 three ways:
 
 - **Curated artist list**: a small, non-exhaustive hand list of known
-  German-language artists is applied automatically as soon as AudD (phase
-  2) supplies title/artist — a pure cold-start convenience, no external
-  data source, no extra caching.
+  German-language artists is applied automatically as soon as AcoustID
+  (phase 2) supplies title/artist — a pure cold-start convenience, no
+  external data source, no extra caching.
 - **Manually via the "German!" button**: right next to "⚡ ZAP!" on the
   player page, marks the currently playing song — usable before (or
-  entirely without) AudD ever identifying it. A manual click always wins
-  over the curated list.
+  entirely without) AcoustID ever identifying it. A manual click always
+  wins over the curated list.
 - **Correction list on the config page**: in the song statistics
   ("Most-played recognized songs"), each of the top-10 songs can be
   marked/corrected as German/not German afterwards.
@@ -2493,7 +2495,7 @@ leaner version of the same check from `check`).
 | `VOSK_MODEL_FOLDER` | Host folder with an unpacked German Vosk model for the STT speech filter (optional, see its own section) |
 | `VOSK_MODELS_FOLDER` | Writable shared folder for Vosk models downloaded via the WebUI (optional, default `./data/vosk-models`, see "STT speech filter") |
 | `UI_LANGUAGE` | Starting language of the web interface: `en` (base language) or the code of a language pack under `language/` such as `de` (optional, default `en` — see "Web interface language") |
-| `AUDD_API_TOKEN` | API token for AudD, enables song recognition phase 2 (optional, free tier at [audd.io](https://audd.io) — see "Song recognition") |
+| `ACOUSTID_API_KEY` | Personal API key for AcoustID, enables song recognition phase 2 (optional, permanently free at [acoustid.org/new-application](https://acoustid.org/new-application) — see "Song recognition") |
 
 ### HTTPS/TLS (optional)
 
@@ -2719,22 +2721,19 @@ Tech stack: Python, mutagen, SQLite, possibly FastAPI for the query API.
 Reference: Beets (library manager) as inspiration for the data
 model/query language, not a 1:1 adoption.
 
-### Automatic song recognition: cloud extension (planned)
+### Automatic song recognition: pre-population from the music library (planned)
 
 Phase 1 (local Chromaprint fingerprint cache, detects song repeats without
-an online service) is already implemented, see the
-[Song recognition](#song-recognition) section further above. Planned as
-phase 2:
+an online service) and phase 2 (optional AcoustID cloud fallback on cache
+miss) are already implemented, see the
+[Song recognition](#song-recognition) section further above. Still just an
+idea:
 
 - **Pre-population from the user's own music library**: the
   `song_fingerprints` reference DB gets pre-populated from the ID3 tags
   (title/artist) already read during the music scan (`music_scan.py`) —
   no second scan mechanism, no online connection needed to recognize songs
   from the user's own collection on the radio.
-- **AudD as an optional online fallback**: only for songs that show up
-  neither in the local cache nor in the user's own music library
-  reference. Deliberately optional, no requirement for an external API
-  key.
 
 ### iOS app (idea, not yet scheduled)
 
@@ -2768,11 +2767,12 @@ included unmodified — depending on the component, via subprocess call
 | Kotlin/[ExoPlayer](https://github.com/androidx/media) (AndroidX Media3) | Audio playback in the standalone Android app (`android-app/`) | Apache-2.0 |
 | [Vosk Android bindings](https://github.com/alphacep/vosk-api) (alphacep, Kotlin) | Offline speech recognition in the Android app (`android-app/`) | Apache-2.0 |
 
-**AudD is not an open-source component:** the optional song
-recognition phase 2 (see [Song recognition](#song-recognition)) uses
-[AudD](https://audd.io/)'s commercial external API when enabled — a
-paid external cloud service, not open-source code included or
-bundled in this project, and therefore deliberately excluded from the
+**AcoustID is not an open-source component:** the optional song
+recognition phase 2 (see [Song recognition](#song-recognition)) uses the
+external cloud service [AcoustID](https://acoustid.org/) when enabled —
+permanently free (unlike the previously used, paid AudD), but still an
+external service, not open-source code included or bundled in this
+project, and therefore deliberately excluded from the
 table above.
 
 ## License

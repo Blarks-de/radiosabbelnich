@@ -1519,7 +1519,7 @@ def _build_status(state: SwitcherState, icecast_cfg: dict, host_paths: dict = No
         now_playing_tags = music["tags"]
     else:
         now_playing = _fetch_now_playing(current) if current else None
-        # Song-Erkennung Phase 2 (song_fingerprint.py, AudD-Cloud-Lookup):
+        # Song-Erkennung Phase 2 (song_fingerprint.py, AcoustID-Cloud-Lookup):
         # dritter Fall, in dem now_playing_tags gesetzt wird (Kommentar oben
         # bezog sich nur auf News-Break/Musiksammlung, bevor es diesen Fall
         # gab). Ergänzt den ICY-now_playing-Text oben, ersetzt ihn nicht.
@@ -1552,7 +1552,7 @@ def _build_status(state: SwitcherState, icecast_cfg: dict, host_paths: dict = No
                 # "song_id"/"is_german" (seit dem "Deutsch!"-Button, siehe
                 # README.md) gehen in BEIDEN Zweigen mit raus, nicht nur bei
                 # bekanntem Titel: der Button muss schon bedienbar sein,
-                # bevor AudD (falls überhaupt aktiv) den Song identifiziert
+                # bevor AcoustID (falls überhaupt aktiv) den Song identifiziert
                 # hat -- recognized selbst ist bereits ab einer bekannten
                 # song_id gesetzt (siehe SongRecognizer._set_current_song()).
                 if recognized and recognized.get("title"):
@@ -1567,17 +1567,18 @@ def _build_status(state: SwitcherState, icecast_cfg: dict, host_paths: dict = No
                                          "song_id": recognized.get("song_id") if recognized else None,
                                          "is_german": recognized.get("is_german") if recognized else None}
                     # Statt des neutralen "🔍 noch nicht erkannt"-Platzhalters
-                    # zeigt die Player-Seite hier den konkreten AudD-Grund an,
-                    # falls Cloud-Lookup aktiv ist, aber gerade nicht
-                    # funktioniert (Kontingent/Netzwerk/AudD-Fehler) -- sonst
-                    # sähe das für den Betreiber ununterscheidbar von "läuft,
-                    # hat den Song nur noch nicht gefunden" aus (Nutzer-Wunsch,
-                    # siehe SESSION.md). "not_configured" wird hier bewusst
-                    # NICHT angezeigt, siehe get_audd_status()-Docstring.
-                    audd_status = song_fingerprint.get_audd_status()
-                    if audd_status and audd_status["state"] in ("quota", "network_error", "audd_error"):
-                        now_playing_tags["audd_problem"] = audd_status["state"]
-                        now_playing_tags["audd_error_code"] = audd_status.get("error_code")
+                    # zeigt die Player-Seite hier den konkreten AcoustID-Grund
+                    # an, falls Cloud-Lookup aktiv ist, aber gerade nicht
+                    # funktioniert (Rate-Limit/Netzwerk/AcoustID-Fehler) --
+                    # sonst sähe das für den Betreiber ununterscheidbar von
+                    # "läuft, hat den Song nur noch nicht gefunden" aus
+                    # (Nutzer-Wunsch, siehe SESSION.md). "not_configured" wird
+                    # hier bewusst NICHT angezeigt, siehe
+                    # get_acoustid_status()-Docstring.
+                    acoustid_status = song_fingerprint.get_acoustid_status()
+                    if acoustid_status and acoustid_status["state"] in ("rate_limited", "network_error", "acoustid_error"):
+                        now_playing_tags["acoustid_problem"] = acoustid_status["state"]
+                        now_playing_tags["acoustid_error_code"] = acoustid_status.get("error_code")
     return {
         "current_id": current["id"] if current else None,
         "current_name": current["name"] if current else None,
@@ -2045,12 +2046,12 @@ function applyStatus(data) {
     npTitleText = npTags.artist ? `${npTags.artist} – ${npTags.title}` : npTags.title;
   } else if (npTags && npTags.paused_no_listeners) {
     npTitleText = t('idx_song_paused_no_listeners');
-  } else if (npTags && npTags.audd_problem === 'quota') {
-    npTitleText = t('idx_song_audd_quota');
-  } else if (npTags && npTags.audd_problem === 'network_error') {
-    npTitleText = t('idx_song_audd_network');
-  } else if (npTags && npTags.audd_problem === 'audd_error') {
-    npTitleText = t('idx_song_audd_error', {code: npTags.audd_error_code ?? '?'});
+  } else if (npTags && npTags.acoustid_problem === 'rate_limited') {
+    npTitleText = t('idx_song_acoustid_rate_limited');
+  } else if (npTags && npTags.acoustid_problem === 'network_error') {
+    npTitleText = t('idx_song_acoustid_network');
+  } else if (npTags && npTags.acoustid_problem === 'acoustid_error') {
+    npTitleText = t('idx_song_acoustid_error', {code: npTags.acoustid_error_code ?? '?'});
   } else if (npTags && npTags.pending) {
     npTitleText = t('idx_song_pending');
   }
@@ -2074,7 +2075,7 @@ function applyStatus(data) {
   // ausblenden"): sichtbar, sobald der Hauptloop dem aktuellen Song
   // überhaupt eine song_id zugewiesen hat -- bewusst UNABHÄNGIG davon, ob
   // Titel/Interpret schon bekannt sind (Nutzer kann "das ist deutsch"
-  // hören, lange bevor/ohne dass AudD den Song je identifiziert). Einmal
+  // hören, lange bevor/ohne dass AcoustID den Song je identifiziert). Einmal
   // markiert: disabled statt komplett zu verschwinden, damit sichtbar
   // bleibt, dass die Markierung angekommen ist.
   const markGermanBtn = document.getElementById('btn-mark-german');
@@ -3715,20 +3716,17 @@ _CONFIG_PAGE_HTML = """<!doctype html>
       <table class="stats-table small" id="song-stats-songs-table"></table>
     </details>
 
-    <h3 data-i18n="cfg_songstats_audd_heading">AudD Cloud-Fallback (Phase 2)</h3>
+    <h3 data-i18n="cfg_songstats_acoustid_heading">AcoustID Cloud-Fallback (Phase 2)</h3>
     <table class="stats-table">
-      <tr><td class="label" data-i18n="cfg_songstats_audd_token">API-Token konfiguriert</td><td class="value" id="song-stats-audd-token">–</td></tr>
-      <tr><td class="label" data-i18n="cfg_songstats_audd_laststatus">Letzter Status</td><td class="value" id="song-stats-audd-laststatus">–</td></tr>
-      <tr><td class="label" data-i18n="cfg_songstats_audd_today">Requests heute</td><td class="value" id="song-stats-audd-today">–</td></tr>
-      <tr><td class="label" data-i18n="cfg_songstats_audd_week">Requests letzte 7 Tage</td><td class="value" id="song-stats-audd-week">–</td></tr>
-      <tr><td class="label" data-i18n="cfg_songstats_audd_total">Requests gesamt</td><td class="value" id="song-stats-audd-total">–</td></tr>
-      <tr><td class="label" data-i18n="cfg_songstats_audd_outcomes">Ergebnisse (Treffer/kein Treffer/Kontingent/Fehler/Netzwerk)</td><td class="value" id="song-stats-audd-outcomes">–</td></tr>
-      <tr><td class="label" data-i18n="cfg_songstats_audd_successrate">Erfolgsquote</td><td class="value" id="song-stats-audd-successrate">–</td></tr>
-      <tr><td class="label" data-i18n="cfg_songstats_audd_cost">Geschätzte Kosten</td><td class="value" id="song-stats-audd-cost">–</td></tr>
+      <tr><td class="label" data-i18n="cfg_songstats_acoustid_key">API-Key konfiguriert</td><td class="value" id="song-stats-acoustid-key">–</td></tr>
+      <tr><td class="label" data-i18n="cfg_songstats_acoustid_laststatus">Letzter Status</td><td class="value" id="song-stats-acoustid-laststatus">–</td></tr>
+      <tr><td class="label" data-i18n="cfg_songstats_acoustid_today">Requests heute</td><td class="value" id="song-stats-acoustid-today">–</td></tr>
+      <tr><td class="label" data-i18n="cfg_songstats_acoustid_week">Requests letzte 7 Tage</td><td class="value" id="song-stats-acoustid-week">–</td></tr>
+      <tr><td class="label" data-i18n="cfg_songstats_acoustid_total">Requests gesamt</td><td class="value" id="song-stats-acoustid-total">–</td></tr>
+      <tr><td class="label" data-i18n="cfg_songstats_acoustid_outcomes">Ergebnisse (Treffer/kein Treffer/Rate-Limit/Fehler/Netzwerk)</td><td class="value" id="song-stats-acoustid-outcomes">–</td></tr>
+      <tr><td class="label" data-i18n="cfg_songstats_acoustid_successrate">Erfolgsquote</td><td class="value" id="song-stats-acoustid-successrate">–</td></tr>
     </table>
-    <p class="hint" data-i18n="cfg_songstats_audd_cost_hint">Zählung erst seit Einführung dieser Statistik (siehe
-      "Requests gesamt") -- spiegelt NICHT den tatsächlichen AudD-Kontostand wider, falls das Kontingent schon
-      vorher (teilweise) verbraucht war. AudD liefert dafür weder ein Antwort-Feld noch einen Abfrage-Endpoint.</p>
+    <p class="hint" id="song-stats-acoustid-hint"></p>
   </div>
 </section>
 
@@ -4880,14 +4878,14 @@ function formatPct(x) {
   return x == null ? '–' : (x * 100).toFixed(1) + ' %';
 }
 
-function auddStatusLabel(status) {
-  if (!status || !status.state) return t('cfg_songstats_audd_status_none');
+function acoustidStatusLabel(status) {
+  if (!status || !status.state) return t('cfg_songstats_acoustid_status_none');
   const when = status.checked_at ? new Date(status.checked_at * 1000).toLocaleString() : '';
   const labels = {
-    ok: t('cfg_songstats_audd_status_ok'),
-    quota: t('cfg_songstats_audd_status_quota'),
-    network_error: t('cfg_songstats_audd_status_network'),
-    audd_error: t('cfg_songstats_audd_status_error', {code: status.error_code ?? '?'}),
+    ok: t('cfg_songstats_acoustid_status_ok'),
+    rate_limited: t('cfg_songstats_acoustid_status_rate_limited'),
+    network_error: t('cfg_songstats_acoustid_status_network'),
+    acoustid_error: t('cfg_songstats_acoustid_status_error', {code: status.error_code ?? '?'}),
   };
   const label = labels[status.state] || status.state;
   return when ? `${label} (${when})` : label;
@@ -5009,7 +5007,7 @@ async function loadSongRecognitionStats() {
     document.getElementById('song-stats-content').hidden = !s.enabled;
     if (!s.enabled) return;
 
-    const loc = s.local, aud = s.audd, ml = loc.match_log;
+    const loc = s.local, aud = s.acoustid, ml = loc.match_log;
     document.getElementById('song-stats-entries').textContent =
       `${loc.total_entries} (${loc.with_title} ${t('cfg_songstats_with_title')} / ${loc.without_title} ${t('cfg_songstats_without_title')})`;
     document.getElementById('song-stats-matchlog').textContent = ml.total;
@@ -5043,21 +5041,21 @@ async function loadSongRecognitionStats() {
     );
     renderSongsTable(document.getElementById('song-stats-songs-table'), loc.top_songs);
 
-    document.getElementById('song-stats-audd-token').textContent =
-      aud.token_configured ? t('cfg_songstats_yes') : t('cfg_songstats_no');
-    document.getElementById('song-stats-audd-laststatus').textContent = auddStatusLabel(aud.last_status);
-    document.getElementById('song-stats-audd-today').textContent = aud.requests_today;
-    document.getElementById('song-stats-audd-week').textContent = aud.requests_last_7_days;
-    document.getElementById('song-stats-audd-total').textContent =
-      aud.counting_since ? `${aud.requests_total} (${t('cfg_songstats_audd_since')} ${aud.counting_since})` : '0';
+    document.getElementById('song-stats-acoustid-key').textContent =
+      aud.key_configured ? t('cfg_songstats_yes') : t('cfg_songstats_no');
+    document.getElementById('song-stats-acoustid-laststatus').textContent = acoustidStatusLabel(aud.last_status);
+    document.getElementById('song-stats-acoustid-today').textContent = aud.requests_today;
+    document.getElementById('song-stats-acoustid-week').textContent = aud.requests_last_7_days;
+    document.getElementById('song-stats-acoustid-total').textContent =
+      aud.counting_since ? `${aud.requests_total} (${t('cfg_songstats_acoustid_since')} ${aud.counting_since})` : '0';
     const o = aud.outcomes;
-    document.getElementById('song-stats-audd-outcomes').textContent =
-      `${o.hit} / ${o.no_match} / ${o.quota} / ${o.audd_error} / ${o.network_error}`;
-    document.getElementById('song-stats-audd-successrate').textContent = formatPct(aud.success_rate);
-    document.getElementById('song-stats-audd-cost').textContent =
-      aud.estimated_cost_usd > 0
-        ? `~$${aud.estimated_cost_usd.toFixed(2)}`
-        : t('cfg_songstats_audd_cost_free', {quota: aud.free_quota});
+    document.getElementById('song-stats-acoustid-outcomes').textContent =
+      `${o.hit} / ${o.no_match} / ${o.rate_limited} / ${o.acoustid_error} / ${o.network_error}`;
+    document.getElementById('song-stats-acoustid-successrate').textContent = formatPct(aud.success_rate);
+    document.getElementById('song-stats-acoustid-hint').textContent =
+      aud.legacy_audd_requests_total > 0
+        ? t('cfg_songstats_acoustid_hint_legacy', {legacy: aud.legacy_audd_requests_total})
+        : t('cfg_songstats_acoustid_hint');
   } catch (e) {
     // Rein informatives Panel, gleiches Muster wie loadResources() oben.
   }

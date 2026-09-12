@@ -36,7 +36,6 @@ Funktionsprinzip hinter Chromaprint-basiertem Matching.
 """
 
 import base64
-import io
 import json
 import logging
 import os
@@ -46,8 +45,9 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.parse
 import urllib.request
-import uuid
 import wave
 import xml.etree.ElementTree as ET
 from collections import deque
@@ -60,75 +60,78 @@ log = logging.getLogger("song_fingerprint")
 FPCALC_BIN = "fpcalc"
 FPCALC_TIMEOUT = 15  # Sekunden -- ein hängender fpcalc darf den Analyse-Thread nicht für immer blockieren
 
-# Phase 2: AudD-Cloud-Lookup bei Cache-Miss (siehe on_unknown_fingerprint()
-# unten). Token kommt bewusst aus der Umgebung, nicht aus settings.json --
-# das Web-Interface hat keine Auth (siehe CLAUDE.md, "Kein Auth, nur hinter
-# VPN"), ein API-Token gehört da nicht rein. Gleiches Muster wie
-# ICECAST_SOURCE_PASSWORD: .env -> docker-compose.yml-Passthrough -> hier
-# nur gelesen. Einmal beim Modul-Import gelesen (wie TLS_CERT_FILE); ein
-# geänderter Token braucht wie andere Umgebungsvariablen einen Container-
-# Neustart.
-AUDD_API_TOKEN = os.environ.get("AUDD_API_TOKEN", "").strip() or None
-AUDD_URL = "https://api.audd.io/recognize/"
-AUDD_TIMEOUT = 15  # Sekunden, gleiche Größenordnung wie FPCALC_TIMEOUT
+# Phase 2: AcoustID-Cloud-Lookup bei Cache-Miss (siehe
+# on_unknown_fingerprint() unten). Ersetzt seit 2026-09 das bisherige AudD
+# (Kontingent verbraucht, kein Abo mehr) -- AcoustID ist ein dauerhaft
+# kostenloses Pendant auf derselben Chromaprint-Basis, siehe
+# acoustid_lookup() unten. Key kommt bewusst aus der Umgebung, nicht aus
+# settings.json -- das Web-Interface hat keine Auth (siehe CLAUDE.md, "Kein
+# Auth, nur hinter VPN"), ein API-Key gehört da nicht rein. Gleiches Muster
+# wie ICECAST_SOURCE_PASSWORD: .env -> docker-compose.yml-Passthrough ->
+# hier nur gelesen. Einmal beim Modul-Import gelesen (wie TLS_CERT_FILE);
+# ein geänderter Key braucht wie andere Umgebungsvariablen einen
+# Container-Neustart.
+ACOUSTID_API_KEY = os.environ.get("ACOUSTID_API_KEY", "").strip() or None
+ACOUSTID_URL = "https://api.acoustid.org/v2/lookup"
+ACOUSTID_TIMEOUT = 15  # Sekunden, gleiche Größenordnung wie FPCALC_TIMEOUT
 
-# Sicherheitsnetz gegen Kontingent-Verbrauch: similarity_threshold ist
-# laut ARCHITECTURE.md/README noch ein unkalibrierter Platzhalter -- greift
-# er in der Praxis zu locker/streng, könnte match_or_learn() denselben Song
-# wiederholt als "neu" einstufen und bei JEDEM Intervall einen bezahlten
-# AudD-Request auslösen. Fester Mindestabstand statt Nutzer-Einstellung,
+# Cooldown gegen wiederholte Cloud-Requests: ein zu locker/streng
+# kalibrierter similarity_threshold (siehe ARCHITECTURE.md/README, noch
+# unkalibrierter Platzhalter) könnte match_or_learn() denselben Song
+# wiederholt als "neu" einstufen und bei JEDEM Intervall einen Request
+# auslösen. AcoustID ist zwar kostenlos, dokumentiert aber ein
+# Fair-Use-Limit von 3 Requests/Sekunde (siehe acoustid.org/webservice) --
+# unnötige Last auf einen kostenlosen, spendenfinanzierten Dienst bleibt
+# trotzdem vermeidenswert. Fester Mindestabstand statt Nutzer-Einstellung,
 # gleiche Kategorie wie MAX_OFFSET/MIN_OVERLAP unten -- interne Leitplanke,
 # keine Fachentscheidung.
-AUDD_MIN_INTERVAL_SECONDS = 60.0
-_audd_lock = threading.Lock()
-_audd_last_call_at = 0.0
+ACOUSTID_MIN_INTERVAL_SECONDS = 60.0
+_acoustid_lock = threading.Lock()
+_acoustid_last_call_at = 0.0
 
-# Nur ~7 von AudDs ~40 Fehlercodes sind öffentlich dokumentiert (siehe
-# docs.audd.io) -- #900/#901 sind die einzigen zwei DOKUMENTIERTEN, die auf
-# ein Token-/Kontingent-Problem hindeuten ("invalid token" bzw. "no
-# api_token passed, and the limit was reached"). #902 ist NICHT
-# dokumentiert, aber live beobachtet (siehe SESSION.md) genau in dem
-# Moment, als das reale Kontingent mit einem GÜLTIGEN Token aufgebraucht
-# war -- passt exakt ins Namensschema von #900/#901 (900=Token ungültig,
-# 901=Limit ohne Token, 902=Limit MIT Token) und wird deshalb ebenfalls als
-# Kontingent-Fall behandelt. Alles andere landet als generischer
-# "audd_error" (Code sichtbar in get_audd_status()) statt geraten zu
-# werden.
-_AUDD_QUOTA_ERROR_CODES = {900, 901, 902}
+# AcoustID dokumentiert (Stand acoustid.org/webservice) KEINE Fehlercode-
+# Liste wie AudDs #900/#901/#902 -- jede AcoustID-eigene Fehlerantwort
+# landet deshalb als generischer "acoustid_error" mit sichtbarem Code/
+# Message statt geraten zu werden. Die einzige dokumentierte Einschränkung
+# (das Rate-Limit oben) wird separat über den HTTP-Status erkannt, siehe
+# acoustid_lookup().
+_ACOUSTID_RATE_LIMIT_HTTP_STATUS = 429
 
-# Letzter AudD-Aufrufstatus für die Live-Anzeige (webui.py, now_playing_tags
-# im "pending"-Fall) -- siehe get_audd_status()/_record_audd_status(). Reines
-# In-Memory-Live-Signal wie _audd_last_call_at, bewusst NICHT in
-# settings.json persistiert: ein Neustart braucht dafür keine besondere
-# Behandlung, der nächste tatsächliche AudD-Aufruf (spätestens nach
-# AUDD_MIN_INTERVAL_SECONDS) setzt den Status ohnehin sofort neu.
-_audd_last_status: dict = {"state": None, "error_code": None, "error_message": None, "checked_at": None}
+# Letzter AcoustID-Aufrufstatus für die Live-Anzeige (webui.py,
+# now_playing_tags im "pending"-Fall) -- siehe
+# get_acoustid_status()/_record_acoustid_status(). Reines In-Memory-Live-
+# Signal wie _acoustid_last_call_at, bewusst NICHT in settings.json
+# persistiert: ein Neustart braucht dafür keine besondere Behandlung, der
+# nächste tatsächliche AcoustID-Aufruf (spätestens nach
+# ACOUSTID_MIN_INTERVAL_SECONDS) setzt den Status ohnehin sofort neu.
+_acoustid_last_status: dict = {"state": None, "error_code": None, "error_message": None, "checked_at": None}
 
 
-def _record_audd_status(state: str, error_code: Optional[int] = None, error_message: Optional[str] = None):
-    with _audd_lock:
-        _audd_last_status.update({
+def _record_acoustid_status(state: str, error_code: Optional[int] = None, error_message: Optional[str] = None):
+    with _acoustid_lock:
+        _acoustid_last_status.update({
             "state": state, "error_code": error_code,
             "error_message": error_message, "checked_at": time.time(),
         })
 
 
-def get_audd_status() -> Optional[dict]:
-    """Letzter AudD-Aufrufstatus ({"state", "error_code", "error_message",
-    "checked_at"}) -- state ist "ok"/"quota"/"network_error"/"audd_error",
-    oder None, solange noch kein AudD-Aufruf versucht wurde (z.B. Cloud-
-    Lookup deaktiviert, oder seit dem Start noch kein Cache-Miss). Wird
-    NUR von audd_lookup() gesetzt, nicht vom "cloud_lookup_enabled=false"-
-    Fall in on_unknown_fingerprint() -- sonst würde die Live-Anzeige für
-    jeden, der Cloud-Lookup bewusst aus gelassen hat, dauerhaft einen
-    "nicht konfiguriert"-Hinweis zeigen statt des neutralen Pending-Texts."""
-    with _audd_lock:
-        return dict(_audd_last_status) if _audd_last_status["state"] is not None else None
+def get_acoustid_status() -> Optional[dict]:
+    """Letzter AcoustID-Aufrufstatus ({"state", "error_code", "error_message",
+    "checked_at"}) -- state ist "ok"/"rate_limited"/"network_error"/
+    "acoustid_error", oder None, solange noch kein AcoustID-Aufruf versucht
+    wurde (z.B. Cloud-Lookup deaktiviert, oder seit dem Start noch kein
+    Cache-Miss). Wird NUR von acoustid_lookup() gesetzt, nicht vom
+    "acoustid_lookup_enabled=false"-Fall in on_unknown_fingerprint() --
+    sonst würde die Live-Anzeige für jeden, der Cloud-Lookup bewusst aus
+    gelassen hat, dauerhaft einen "nicht konfiguriert"-Hinweis zeigen statt
+    des neutralen Pending-Texts."""
+    with _acoustid_lock:
+        return dict(_acoustid_last_status) if _acoustid_last_status["state"] is not None else None
 
 
 # Hörer-Gate (Nutzer-Wunsch, siehe SESSION.md): Song-Erkennung -- lokales
-# Fingerprinting UND Cloud-Lookup -- kostet CPU/AudD-Kontingent, ist aber
-# wertlos, solange niemand den Restream hört (die Live-Anzeige, für die
+# Fingerprinting UND Cloud-Lookup -- kostet CPU bzw. unnötige AcoustID-
+# Anfragen, ist aber wertlos, solange niemand den Restream hört (die Live-Anzeige, für die
 # identifiziert wird, hat dann kein Publikum). Gepollt statt live geprüft:
 # eine Icecast-Admin-Abfrage im Hauptloop-Thread könnte bis zu mehreren
 # Sekunden blockieren (Netzwerk-I/O) -- exakt das, was der ganze
@@ -171,7 +174,7 @@ class ListenerGate:
     fast ausschließlich veraltetes Vor-Pause-Audio enthalten (nur ein
     einzelnes frisches Fenster kommt pro feed()-Aufruf dazu) -- die erste
     Analyse nach der Rückkehr liefe dann auf einem Frankenstein-Schnipsel,
-    potenziell ein sinnloser/falscher Fingerprint samt unnötigem AudD-Call.
+    potenziell ein sinnloser/falscher Fingerprint samt unnötigem AcoustID-Call.
     "Stop" statt "Pause", wie vom Nutzer gewünscht."""
 
     def __init__(self, admin_url: Optional[str], user: Optional[str],
@@ -288,172 +291,210 @@ def compute_fingerprint(pcm_int16: np.ndarray, sample_rate: int) -> Optional[lis
                 pass
 
 
-def _multipart_encode(fields: dict, file_field: str, filename: str, file_bytes: bytes):
-    """Baut einen `multipart/form-data`-Request-Body von Hand (KEINE
-    zusätzliche pip-Abhängigkeit wie `requests` -- gleiche Begründung wie
-    beim Rest des Projekts, siehe update_check.py/station_import.py, die
-    beide nur urllib.request nutzen). Gibt (body_bytes, content_type)
-    zurück."""
-    boundary = uuid.uuid4().hex
-    parts = []
-    for name, value in fields.items():
-        parts.append(
-            f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n".encode()
-        )
-    parts.append(
-        f"--{boundary}\r\nContent-Disposition: form-data; name=\"{file_field}\"; "
-        f"filename=\"{filename}\"\r\nContent-Type: audio/wav\r\n\r\n".encode()
-        + file_bytes + b"\r\n"
-    )
-    parts.append(f"--{boundary}--\r\n".encode())
-    return b"".join(parts), f"multipart/form-data; boundary={boundary}"
-
-
-def _parse_release_year(release_date) -> Optional[int]:
-    """AudDs `release_date` ist ein Datumsstring wie "1983-04-01" (oder
-    fehlt/ist leer) -- nur das Jahr interessiert hier, gleiches Format
-    (`int | None`) wie audio_tags.extract_year() für die Musiksammlung."""
-    if not release_date:
-        return None
+def _compute_acoustid_submission(pcm_int16: np.ndarray, sample_rate: int) -> Optional[tuple]:
+    """Wie compute_fingerprint(), aber OHNE `-raw` -- AcoustID erwartet den
+    komprimierten Base64-Fingerprint (fpcalcs Standardausgabe), nicht die
+    rohen Integer-Werte, die der lokale Sliding-Offset-Vergleich in
+    similarity() braucht (siehe Moduldocstring/ARCHITECTURE.md, Abschnitt
+    "Song-Erkennung": zwei unterschiedliche Verwendungszwecke desselben
+    Ausgangssignals, keine Möglichkeit, das eine aus dem anderen ohne die
+    Chromaprint-Kompressionslogik selbst zurückzurechnen). Deshalb ein
+    zweiter, separater fpcalc-Aufruf auf einer eigenen Temp-WAV -- nur im
+    Cache-Miss-Pfad (on_unknown_fingerprint()), kein Einfluss auf den
+    Hot-Path (jedes Fenster während laufender Musik). Gibt
+    (fingerprint_base64, duration_seconds) oder None zurück."""
+    tmp_path = None
     try:
-        return int(str(release_date)[:4])
-    except ValueError:
-        return None
-
-
-def _parse_duration_seconds(result: dict) -> Optional[int]:
-    """AudDs Kernantwort liefert KEINE Songlänge -- nur mit `return=
-    apple_music,spotify` (siehe audd_lookup()) kommen zwei zusätzliche,
-    verschachtelte Objekte mit je einem Millisekunden-Feld mit
-    (live geprüft, siehe SESSION.md): `result["spotify"]["duration_ms"]`
-    bzw. `result["apple_music"]["durationInMillis"]` -- beide praktisch
-    identisch (Rundungsdifferenz im Bereich 1ms), Spotify bevorzugt, weil
-    zuerst im Response-JSON. Keins von beiden ist garantiert vorhanden
-    (nicht jeder Song hat einen Spotify-/Apple-Music-Treffer)."""
-    spotify = result.get("spotify") or {}
-    apple_music = result.get("apple_music") or {}
-    duration_ms = spotify.get("duration_ms") or apple_music.get("durationInMillis")
-    if not duration_ms:
-        return None
-    try:
-        return round(int(duration_ms) / 1000)
-    except (TypeError, ValueError):
-        return None
-
-
-def audd_lookup(pcm_int16: np.ndarray, sample_rate: int, api_token: str,
-                 station_id: str = None,
-                 log_request: Optional[Callable[[str, str], None]] = None) -> Optional[dict]:
-    """Schickt `pcm_int16` als WAV an AudD (https://audd.io) und gibt bei
-    einer erfolgreichen Identifikation {"title", "artist", "album", "year",
-    "duration_seconds"} zurück (alle außer title/artist können None sein,
-    falls AudD sie nicht mitliefert), sonst None -- sowohl bei "AudD kennt
-    den Song nicht" als auch bei jedem
-    Netzwerk-/Timeout-/Parse-Fehler (gleiches defensives Muster wie
-    compute_fingerprint(): ein Cloud-Lookup darf den Analyse-Thread nie
-    mitreißen). Respektiert AUDD_MIN_INTERVAL_SECONDS als Sicherheitsnetz
-    gegen Kontingent-Verbrauch (siehe Modul-Kommentar oben) -- bei aktivem
-    Cooldown wird gar nicht erst eine Verbindung aufgebaut (und
-    get_audd_status() unverändert gelassen, siehe dort).
-
-    Setzt bei jedem tatsächlich versuchten Aufruf den Live-Status für
-    get_audd_status(): "ok" bei einer normalen AudD-Antwort (auch wenn der
-    Song darin nicht erkannt wurde -- das ist kein AudD-Fehler), "quota"/
-    "audd_error" bei einer AudD-eigenen Fehlerantwort (HTTP bleibt dabei
-    laut AudD-Doku immer 200, der Fehler steckt im JSON-Body als
-    {"status":"error","error":{"error_code":...}}), "network_error" bei
-    Verbindungs-/Timeout-/Parse-Problemen.
-
-    `log_request(station_id, outcome)` (optional, Callback statt direktem
-    SongFingerprintDB-Import -- gleiches Muster wie
-    update_check.UpdateChecker.on_result, hält diese Funktion isoliert
-    testbar) wird bei GENAU demselben tatsächlich versuchten Aufruf
-    zusätzlich zu get_audd_status() aufgerufen, aber mit feinerem
-    `outcome`: "hit"/"no_match" statt beide unter "ok" (Statistik-Sektion
-    Config-Seite braucht die Erfolgsquote, get_audd_status() fürs Live-
-    Banner nur "läuft/läuft nicht"). Ein Cooldown-Skip ruft `log_request`
-    NICHT auf -- das war kein tatsächlicher AudD-Request, würde die
-    Request-Zählung sonst künstlich aufblähen.
-
-    WAV wird in-memory gebaut (io.BytesIO), kein Temp-File wie bei
-    compute_fingerprint() -- fpcalc braucht zwingend einen Dateipfad,
-    urllib dagegen nimmt die Bytes direkt."""
-    global _audd_last_call_at
-    with _audd_lock:
-        now = time.time()
-        if now - _audd_last_call_at < AUDD_MIN_INTERVAL_SECONDS:
-            log.info("🎵 AudD-Cooldown aktiv (< %.0fs seit letztem Call) -- "
-                      "Anfrage übersprungen.", AUDD_MIN_INTERVAL_SECONDS)
-            return None
-        _audd_last_call_at = now
-
-    try:
-        buf = io.BytesIO()
-        with wave.open(buf, "wb") as wf:
+        fd, tmp_path = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        with wave.open(tmp_path, "wb") as wf:
             wf.setnchannels(1)
             wf.setsampwidth(2)  # int16
             wf.setframerate(sample_rate)
             wf.writeframes(pcm_int16.astype(np.int16).tobytes())
 
-        body, content_type = _multipart_encode(
-            # "return=apple_music,spotify" NUR wegen der Songlänge (siehe
-            # _parse_duration_seconds()) -- AudDs Kernantwort liefert sie
-            # nicht. Kostet keine zusätzliche Anfrage, nur mehr Felder in
-            # derselben Antwort.
-            {"api_token": api_token, "return": "apple_music,spotify"},
-            "file", "snippet.wav", buf.getvalue()
+        result = subprocess.run(
+            [FPCALC_BIN, "-json", tmp_path],
+            capture_output=True, text=True, timeout=FPCALC_TIMEOUT,
         )
-        req = urllib.request.Request(
-            AUDD_URL, data=body, method="POST",
-            headers={"Content-Type": content_type},
-        )
-        with urllib.request.urlopen(req, timeout=AUDD_TIMEOUT) as resp:
+        if result.returncode != 0:
+            log.warning("⚠ fpcalc (AcoustID-Format) lieferte Exit-Code %d: %s",
+                        result.returncode, result.stderr.strip())
+            return None
+        data = json.loads(result.stdout)
+        fp, duration = data.get("fingerprint"), data.get("duration")
+        if not fp or not duration:
+            return None
+        return fp, int(round(duration))
+    except Exception as e:
+        # Gleiches breites Fangen wie compute_fingerprint() -- ein
+        # fpcalc-Absturz/Timeout/kaputtes JSON darf nie den Analyse-Thread
+        # mitreißen.
+        log.warning("⚠ AcoustID-Fingerprint-Berechnung fehlgeschlagen: %s", e)
+        return None
+    finally:
+        if tmp_path is not None:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+
+
+def _parse_acoustid_result(result: dict) -> Optional[dict]:
+    """Ein Element aus AcoustID-`results[]` (bereits nach höchstem `score`
+    ausgewählt, siehe acoustid_lookup()) -> {"title","artist","album","year",
+    "duration_seconds"}, oder None, falls nicht mal Titel+Interpret
+    ermittelbar sind. Struktur laut AcoustID-Doku bei
+    `meta=recordings+releasegroups+releases`: `result["recordings"][0]`
+    enthält title/duration/artists[], darunter
+    releasegroups[0].releases[0].date fürs Jahr -- alles best-effort mit
+    .get()/try, ein von der Doku abweichender Verschachtelungsgrad darf hier
+    nie eine Exception werfen (gleiches defensives Muster wie der Rest
+    dieses Moduls), sondern liefert nur weniger Metadaten."""
+    recordings = result.get("recordings") or []
+    if not recordings:
+        return None
+    recording = recordings[0]
+    title = recording.get("title")
+    artists = recording.get("artists") or []
+    artist = artists[0].get("name") if artists else None
+    if not title or not artist:
+        return None
+
+    album, year = None, None
+    try:
+        releasegroups = recording.get("releasegroups") or []
+        if releasegroups:
+            album = releasegroups[0].get("title")
+            releases = releasegroups[0].get("releases") or []
+            if releases:
+                year = (releases[0].get("date") or {}).get("year")
+    except (AttributeError, IndexError, TypeError):
+        pass  # unerwartete Antwortstruktur -- Album/Jahr bleiben None, kein Absturz
+
+    duration = recording.get("duration")
+    return {
+        "title": title, "artist": artist, "album": album, "year": year,
+        "duration_seconds": int(duration) if duration else None,
+    }
+
+
+def acoustid_lookup(pcm_int16: np.ndarray, sample_rate: int, api_key: str,
+                     station_id: str = None,
+                     log_request: Optional[Callable[[str, str, str], None]] = None) -> Optional[dict]:
+    """Identifiziert `pcm_int16` per AcoustID (https://acoustid.org) und
+    gibt bei Erfolg {"title", "artist", "album", "year", "duration_seconds"}
+    zurück (album/year können None sein, falls AcoustID sie nicht
+    mitliefert), sonst None -- sowohl bei "AcoustID kennt den Song nicht"
+    als auch bei jedem Netzwerk-/Timeout-/Parse-Fehler (gleiches defensives
+    Muster wie compute_fingerprint(): ein Cloud-Lookup darf den
+    Analyse-Thread nie mitreißen). Respektiert ACOUSTID_MIN_INTERVAL_SECONDS
+    als Cooldown (siehe Modul-Kommentar oben) -- bei aktivem Cooldown wird
+    gar nicht erst eine Verbindung aufgebaut (und get_acoustid_status()
+    unverändert gelassen, siehe dort).
+
+    Anders als das frühere AudD (Datei-Upload) schickt AcoustID nur den
+    bereits lokal berechneten Chromaprint-Fingerprint als Formularfeld --
+    braucht dafür aber die komprimierte Base64-Variante statt der rohen
+    Integer-Sequenz aus compute_fingerprint(), siehe
+    _compute_acoustid_submission().
+
+    Setzt bei jedem tatsächlich versuchten Aufruf den Live-Status für
+    get_acoustid_status(): "ok" bei einer normalen Antwort (auch wenn der
+    Song darin nicht erkannt wurde -- das ist kein AcoustID-Fehler),
+    "rate_limited" bei HTTP 429 (siehe ACOUSTID_MIN_INTERVAL_SECONDS-
+    Kommentar oben), "acoustid_error" bei jeder anderen AcoustID-eigenen
+    Fehlerantwort (Code sichtbar), "network_error" bei sonstigen
+    Verbindungs-/Timeout-/Parse-Problemen (inkl. gescheiterter lokaler
+    Fingerprint-Berechnung für die Submission).
+
+    `log_request(station_id, source, outcome)` (optional, Callback statt
+    direktem SongFingerprintDB-Import -- gleiches Muster wie
+    update_check.UpdateChecker.on_result, hält diese Funktion isoliert
+    testbar) wird bei GENAU demselben tatsächlich versuchten Aufruf
+    zusätzlich zu get_acoustid_status() aufgerufen, mit `source="acoustid"`
+    fest (siehe SongFingerprintDB.log_cloud_request() -- die Spalte
+    unterscheidet das von historischen, vor der Umstellung geschriebenen
+    "audd_legacy"-Zeilen) und feinerem `outcome`: "hit"/"no_match" statt
+    beide unter "ok". Ein Cooldown-Skip ruft `log_request` NICHT auf -- das
+    war kein tatsächlicher AcoustID-Request, würde die Request-Zählung
+    sonst künstlich aufblähen."""
+    global _acoustid_last_call_at
+    with _acoustid_lock:
+        now = time.time()
+        if now - _acoustid_last_call_at < ACOUSTID_MIN_INTERVAL_SECONDS:
+            log.info("🎵 AcoustID-Cooldown aktiv (< %.0fs seit letztem Call) -- "
+                      "Anfrage übersprungen.", ACOUSTID_MIN_INTERVAL_SECONDS)
+            return None
+        _acoustid_last_call_at = now
+
+    submission = _compute_acoustid_submission(pcm_int16, sample_rate)
+    if submission is None:
+        _record_acoustid_status("network_error", error_message="Fingerprint-Berechnung für AcoustID fehlgeschlagen")
+        if log_request:
+            log_request(station_id, "acoustid", "network_error")
+        return None
+    fingerprint_b64, duration = submission
+
+    body = urllib.parse.urlencode({
+        "client": api_key, "fingerprint": fingerprint_b64, "duration": duration,
+        "meta": "recordings+releasegroups+releases", "format": "json",
+    }).encode()
+    req = urllib.request.Request(ACOUSTID_URL, data=body, method="POST")
+
+    try:
+        with urllib.request.urlopen(req, timeout=ACOUSTID_TIMEOUT) as resp:
             data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        if e.code == _ACOUSTID_RATE_LIMIT_HTTP_STATUS:
+            log.warning("⚠ AcoustID-Rate-Limit erreicht (HTTP %d).", e.code)
+            _record_acoustid_status("rate_limited")
+            if log_request:
+                log_request(station_id, "acoustid", "rate_limited")
+        else:
+            log.warning("⚠ AcoustID-Lookup fehlgeschlagen (HTTP %s): %s", e.code, e)
+            _record_acoustid_status("network_error", error_message=str(e))
+            if log_request:
+                log_request(station_id, "acoustid", "network_error")
+        return None
     except Exception as e:
         # Breiter Fang wie bei compute_fingerprint() -- ein Cloud-Lookup
         # (Netzwerk, Timeout, kaputtes JSON, unerwartete Antwortstruktur)
         # darf den Analyse-Thread nie mitreißen, egal welcher Fehler genau
         # auftritt.
-        log.warning("⚠ AudD-Lookup fehlgeschlagen (Netzwerk/Zeitüberschreitung/Parsing): %s", e)
-        _record_audd_status("network_error", error_message=str(e))
+        log.warning("⚠ AcoustID-Lookup fehlgeschlagen (Netzwerk/Zeitüberschreitung/Parsing): %s", e)
+        _record_acoustid_status("network_error", error_message=str(e))
         if log_request:
-            log_request(station_id, "network_error")
+            log_request(station_id, "acoustid", "network_error")
         return None
 
-    if data.get("status") == "error":
-        # AudD meldet den Fehler im JSON-Body, nicht per HTTP-Status (siehe
-        # Docstring) -- #900/#901 sind die einzigen zwei dokumentierten
-        # Codes für ein Token-/Kontingent-Problem, alles andere bleibt ein
-        # generischer "audd_error" mit sichtbarem Code statt geraten zu
-        # werden (siehe _AUDD_QUOTA_ERROR_CODES oben).
+    if data.get("status") != "ok":
+        # AcoustID dokumentiert kein festes Fehlercode-Schema (anders als
+        # AudDs #900/#901) -- Code/Message landen deshalb ungefiltert als
+        # generischer "acoustid_error" in get_acoustid_status(), siehe
+        # Modul-Kommentar oben zu _ACOUSTID_RATE_LIMIT_HTTP_STATUS.
         err = data.get("error") or {}
-        code, msg = err.get("error_code"), err.get("error_message")
-        log.warning("⚠ AudD meldet einen API-Fehler (Code %s): %s", code, msg)
-        outcome = "quota" if code in _AUDD_QUOTA_ERROR_CODES else "audd_error"
-        _record_audd_status(outcome, error_code=code, error_message=msg)
+        code, msg = err.get("code"), err.get("message")
+        log.warning("⚠ AcoustID meldet einen API-Fehler (Code %s): %s", code, msg)
+        _record_acoustid_status("acoustid_error", error_code=code, error_message=msg)
         if log_request:
-            log_request(station_id, outcome)
+            log_request(station_id, "acoustid", "acoustid_error")
         return None
 
-    _record_audd_status("ok")
-    if not data.get("result"):
+    _record_acoustid_status("ok")
+    results = sorted(data.get("results") or [], key=lambda r: r.get("score") or 0, reverse=True)
+    parsed = None
+    for r in results:
+        parsed = _parse_acoustid_result(r)
+        if parsed:
+            break
+    if parsed is None:
         if log_request:
-            log_request(station_id, "no_match")
-        return None  # AudD hat den Song nicht erkannt -- kein Fehler
-    result = data["result"]
-    title, artist = result.get("title"), result.get("artist")
-    if not title or not artist:
-        if log_request:
-            log_request(station_id, "no_match")
-        return None
+            log_request(station_id, "acoustid", "no_match")
+        return None  # AcoustID hat den Song nicht erkannt -- kein Fehler
     if log_request:
-        log_request(station_id, "hit")
-    return {
-        "title": title, "artist": artist,
-        "album": result.get("album") or None,
-        "year": _parse_release_year(result.get("release_date")),
-        "duration_seconds": _parse_duration_seconds(result),
-    }
+        log_request(station_id, "acoustid", "hit")
+    return parsed
 
 
 def similarity(fp_a: list[int], fp_b: list[int]) -> float:
@@ -514,7 +555,7 @@ def guess_is_german(artist: Optional[str]) -> Optional[bool]:
     das würde bei der (kurzen, nicht vollständigen) Liste sonst
     reihenweise falsch-negative is_german_language=0 erzeugen. Eine echte
     Verneinung bleibt der manuellen Klassifizierung (set_language()) oder
-    einem künftigen AudD-Genre-Signal vorbehalten."""
+    einem künftigen Genre-Signal aus der Cloud-Anbindung vorbehalten."""
     if not artist:
         return None
     lowered = artist.lower()
@@ -600,20 +641,39 @@ class SongFingerprintDB:
                     play_count INTEGER
                 )
             """)
-            # AudD-Request-Log (Nutzer-Wunsch, Statistik-Sektion Config-
+            # Cloud-Request-Log (Nutzer-Wunsch, Statistik-Sektion Config-
             # Seite, siehe SESSION.md): EIN Zeile pro tatsächlich
-            # versuchtem audd_lookup()-Aufruf (Cooldown-Skips zählen NICHT
+            # versuchtem Cloud-Lookup-Aufruf (Cooldown-Skips zählen NICHT
             # mit, siehe dort) -- ohne das gab es für "Requests heute/diese
             # Woche/gesamt" und eine echte Erfolgsquote keine Datenquelle,
             # nur unzuverlässige, schnell rotierende Logfile-Zeilen
             # (DEBUG-Level, ~1-2 Tage Retention). Gleiches Muster wie
             # song_match_log oben: rein additiv, kein Einfluss auf
             # Matching/Cloud-Lookup selbst.
+            #
+            # Migration von der AudD-Ära (Tabelle hieß damals
+            # audd_request_log, ausschließlich AudD-Requests) auf AcoustID:
+            # bestehende Zeilen bleiben erhalten (keine Historie löschen),
+            # bekommen aber rückwirkend eine neue Spalte `source =
+            # 'audd_legacy'` -- ab jetzt schreibt nur noch acoustid_lookup()
+            # mit source='acoustid' hier hinein. Prüfung per sqlite_master
+            # (SQLite kennt kein "ALTER TABLE ... RENAME TO ... IF NOT
+            # EXISTS"), Migration läuft dadurch nur einmal.
+            tables = {row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )}
+            if "audd_request_log" in tables and "song_cloud_request_log" not in tables:
+                conn.execute("ALTER TABLE audd_request_log RENAME TO song_cloud_request_log")
+                conn.execute("ALTER TABLE song_cloud_request_log ADD COLUMN source TEXT")
+                conn.execute("UPDATE song_cloud_request_log SET source = 'audd_legacy' WHERE source IS NULL")
+                log.info("🎵 Song-Fingerprint-DB-Schema migriert: audd_request_log -> "
+                         "song_cloud_request_log (bestehende Zeilen als 'audd_legacy' markiert).")
             conn.execute("""
-                CREATE TABLE IF NOT EXISTS audd_request_log (
+                CREATE TABLE IF NOT EXISTS song_cloud_request_log (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     ts TEXT NOT NULL,
                     station_id TEXT,
+                    source TEXT NOT NULL DEFAULT 'acoustid',
                     outcome TEXT NOT NULL
                 )
             """)
@@ -708,8 +768,9 @@ class SongFingerprintDB:
                             album: Optional[str] = None, year: Optional[int] = None,
                             duration_seconds: Optional[int] = None):
         """Trägt Titel/Interpret (+ optional Album/Jahr/Länge, siehe
-        audd_lookup()) aus einem erfolgreichen AudD-Lookup (Phase 2, siehe
-        on_unknown_fingerprint() unten) in die Zeile nach, die
+        acoustid_lookup()) aus einem erfolgreichen Cloud-Lookup (Phase 2,
+        aktuell AcoustID, siehe on_unknown_fingerprint() unten) in die Zeile
+        nach, die
         match_or_learn() beim Cache-Miss mit title/artist=NULL angelegt hat
         -- Zuordnung über denselben fingerprint_hash-Text, den
         match_or_learn() dafür schreibt. Eigene kurzlebige Connection,
@@ -722,7 +783,7 @@ class SongFingerprintDB:
         ARCHITECTURE.md, "Deutschsprachige Musik ausblenden") -- per
         COALESCE aber NUR, falls is_german_language noch NULL ist. Ein
         manueller "Deutsch!"-Klick (set_language()) kann diese Zeile
-        theoretisch schon VOR der AudD-Antwort erreicht haben (Nutzer
+        theoretisch schon VOR der AcoustID-Antwort erreicht haben (Nutzer
         reagiert schneller als der Cloud-Lookup) und darf dadurch nicht
         wieder überschrieben werden."""
         is_german_guess = guess_is_german(artist)
@@ -759,19 +820,23 @@ class SongFingerprintDB:
         finally:
             conn.close()
 
-    def log_audd_request(self, station_id: str, outcome: str):
-        """Protokolliert EINEN tatsächlich versuchten `audd_lookup()`-Aufruf
-        in `audd_request_log` -- `outcome` ist eines von "hit"/"no_match"/
-        "quota"/"audd_error"/"network_error" (siehe audd_lookup()). Wird von
-        dort per `log_request`-Callback aufgerufen, nicht direkt importiert
-        -- gleiches Callback-Muster wie update_check.UpdateChecker.on_result,
-        damit audd_lookup() selbst von SongFingerprintDB/SQLite unwissend
-        und leicht isoliert testbar bleibt (siehe dortige Tests)."""
+    def log_cloud_request(self, station_id: str, source: str, outcome: str):
+        """Protokolliert EINEN tatsächlich versuchten Cloud-Lookup-Aufruf
+        (aktuell nur acoustid_lookup(), das immer `source="acoustid"`
+        übergibt) in `song_cloud_request_log` -- `outcome` ist eines von
+        "hit"/"no_match"/"rate_limited"/"acoustid_error"/"network_error"
+        (siehe acoustid_lookup()). Wird von dort per `log_request`-Callback
+        aufgerufen, nicht direkt importiert -- gleiches Callback-Muster wie
+        update_check.UpdateChecker.on_result, damit acoustid_lookup() selbst
+        von SongFingerprintDB/SQLite unwissend und leicht isoliert testbar
+        bleibt. Historische, vor der Umstellung von AudD auf AcoustID
+        geschriebene Zeilen tragen `source='audd_legacy'` (einmalige
+        Migration, siehe _init_schema()) und werden hier nie mehr erzeugt."""
         conn = sqlite3.connect(self.db_path)
         try:
             conn.execute(
-                "INSERT INTO audd_request_log (ts, station_id, outcome) VALUES (?, ?, ?)",
-                (time.strftime("%Y-%m-%d %H:%M:%S"), station_id, outcome),
+                "INSERT INTO song_cloud_request_log (ts, station_id, source, outcome) VALUES (?, ?, ?, ?)",
+                (time.strftime("%Y-%m-%d %H:%M:%S"), station_id, source, outcome),
             )
             conn.commit()
         finally:
@@ -852,16 +917,9 @@ def _separation_gap(hits: list[float], misses: list[float]) -> Optional[dict]:
     }
 
 
-# AudDs kostenloses Startkontingent -- siehe README/AudD-Doku. Rein
-# informativ für die Kostenschätzung unten, KEINE echte Abrechnungsgrenze,
-# die dieses Programm irgendwo durchsetzt.
-_AUDD_FREE_QUOTA = 300
-_AUDD_COST_PER_1000_USD = 5.0
-
-
 def build_recognition_stats(db_path: str, current_threshold: float) -> dict:
     """Aggregiert Kennzahlen aus song_fingerprints/song_match_log/
-    audd_request_log für die Config-Seite ("🎵 Song-Erkennung –
+    song_cloud_request_log für die Config-Seite ("🎵 Song-Erkennung –
     Statistik", Nutzer-Wunsch, siehe SESSION.md) -- reiner Lesezugriff,
     alles per SQL on-demand berechnet, kein Caching nötig (bei den hier
     üblichen Zeilenzahlen -- Größenordnung tausend -- für SQLite trivial
@@ -869,13 +927,14 @@ def build_recognition_stats(db_path: str, current_threshold: float) -> dict:
     check_song_calibration.py (siehe _percentiles()/_histogram()/
     _separation_gap() oben).
 
-    Die AudD-"Requests"/"Kosten"-Werte zählen AUSSCHLIESSLICH ab Einführung
-    von audd_request_log (siehe dort) -- sie sind NICHT der tatsächliche
-    AudD-Kontostand: falls das Kontingent schon VOR diesem Logging
-    (teilweise) verbraucht war, wissen wir das nicht, AudD liefert dafür
-    weder ein Antwort-Feld noch einen Abfrage-Endpoint (siehe SESSION.md/
-    ARCHITECTURE.md). Der Aufrufer (webui.py) muss diese Einschränkung in
-    der Anzeige transparent machen, nicht nur die Zahl zeigen."""
+    Die AcoustID-"Requests"-Werte zählen NUR Zeilen mit `source='acoustid'`
+    (siehe song_cloud_request_log-Migration in _init_schema()) -- die
+    historischen `source='audd_legacy'`-Zeilen aus der AudD-Ära fließen
+    NICHT in Erfolgsquote/Requests-Zählung ein (anderer Anbieter, andere
+    Fehlersemantik), tauchen aber separat als reiner Transparenz-Zähler auf.
+    Anders als bei AudD gibt es hier kein Kostenmodell -- AcoustID ist
+    dauerhaft kostenlos, nur durch ein Fair-Use-Rate-Limit begrenzt (siehe
+    song_fingerprint.py-Modulkommentar)."""
     conn = sqlite3.connect(db_path)
     try:
         c = conn.cursor()
@@ -899,17 +958,26 @@ def build_recognition_stats(db_path: str, current_threshold: float) -> dict:
 
         today_start = time.strftime("%Y-%m-%d 00:00:00")
         week_start = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 7 * 86400))
-        audd_total = c.execute("SELECT COUNT(*) FROM audd_request_log").fetchone()[0]
-        audd_today = c.execute(
-            "SELECT COUNT(*) FROM audd_request_log WHERE ts >= ?", (today_start,)
+        acoustid_total = c.execute(
+            "SELECT COUNT(*) FROM song_cloud_request_log WHERE source = 'acoustid'"
         ).fetchone()[0]
-        audd_week = c.execute(
-            "SELECT COUNT(*) FROM audd_request_log WHERE ts >= ?", (week_start,)
+        acoustid_today = c.execute(
+            "SELECT COUNT(*) FROM song_cloud_request_log WHERE source = 'acoustid' AND ts >= ?", (today_start,)
+        ).fetchone()[0]
+        acoustid_week = c.execute(
+            "SELECT COUNT(*) FROM song_cloud_request_log WHERE source = 'acoustid' AND ts >= ?", (week_start,)
         ).fetchone()[0]
         outcome_counts = dict(c.execute(
-            "SELECT outcome, COUNT(*) FROM audd_request_log GROUP BY outcome"
+            "SELECT outcome, COUNT(*) FROM song_cloud_request_log WHERE source = 'acoustid' GROUP BY outcome"
         ).fetchall())
-        audd_first_ts = c.execute("SELECT MIN(ts) FROM audd_request_log").fetchone()[0]
+        acoustid_first_ts = c.execute(
+            "SELECT MIN(ts) FROM song_cloud_request_log WHERE source = 'acoustid'"
+        ).fetchone()[0]
+        # Rein informativ (siehe Docstring oben): wie viele Zeilen noch aus
+        # der AudD-Ära stammen -- fließt in keine der Zahlen oben ein.
+        legacy_audd_total = c.execute(
+            "SELECT COUNT(*) FROM song_cloud_request_log WHERE source = 'audd_legacy'"
+        ).fetchone()[0]
     finally:
         conn.close()
 
@@ -918,23 +986,15 @@ def build_recognition_stats(db_path: str, current_threshold: float) -> dict:
 
     hit_count = outcome_counts.get("hit", 0)
     no_match_count = outcome_counts.get("no_match", 0)
-    quota_count = outcome_counts.get("quota", 0)
-    audd_error_count = outcome_counts.get("audd_error", 0)
+    rate_limited_count = outcome_counts.get("rate_limited", 0)
+    acoustid_error_count = outcome_counts.get("acoustid_error", 0)
     network_error_count = outcome_counts.get("network_error", 0)
     # Erfolgsquote NUR über tatsächlich abgeschlossene Erkennungsversuche
-    # (hit/no_match) -- Requests, die an einem AudD-Fehler scheiterten,
-    # sagen nichts über "erkennt AudD den Song" aus, würden die Quote sonst
-    # künstlich verwässern.
+    # (hit/no_match) -- Requests, die an einem AcoustID-Fehler scheiterten,
+    # sagen nichts über "erkennt AcoustID den Song" aus, würden die Quote
+    # sonst künstlich verwässern.
     completed = hit_count + no_match_count
     success_rate = (hit_count / completed) if completed else None
-    # Für die Kostenschätzung zählen alle Requests, die AudD tatsächlich
-    # erreicht haben (auch ein abgelehnter Kontingent-/Fehler-Request lief
-    # über die Leitung) -- NUR network_error ausgenommen, da dort nie eine
-    # AudD-Antwort ankam, sich also nicht sagen lässt, ob AudD ihn überhaupt
-    # verarbeitet/gezählt hat.
-    billable_requests = hit_count + no_match_count + quota_count + audd_error_count
-    billable_overage = max(0, billable_requests - _AUDD_FREE_QUOTA)
-    estimated_cost_usd = round(billable_overage / 1000 * _AUDD_COST_PER_1000_USD, 2)
 
     return {
         "local": {
@@ -964,53 +1024,52 @@ def build_recognition_stats(db_path: str, current_threshold: float) -> dict:
                 "separation": _separation_gap(hits, misses),
             },
         },
-        "audd": {
-            "token_configured": AUDD_API_TOKEN is not None,
-            "last_status": get_audd_status(),
-            "requests_today": audd_today,
-            "requests_last_7_days": audd_week,
-            "requests_total": audd_total,
-            "counting_since": audd_first_ts,
+        "acoustid": {
+            "key_configured": ACOUSTID_API_KEY is not None,
+            "last_status": get_acoustid_status(),
+            "requests_today": acoustid_today,
+            "requests_last_7_days": acoustid_week,
+            "requests_total": acoustid_total,
+            "counting_since": acoustid_first_ts,
             "outcomes": {
-                "hit": hit_count, "no_match": no_match_count, "quota": quota_count,
-                "audd_error": audd_error_count, "network_error": network_error_count,
+                "hit": hit_count, "no_match": no_match_count, "rate_limited": rate_limited_count,
+                "acoustid_error": acoustid_error_count, "network_error": network_error_count,
             },
             "success_rate": success_rate,
-            "estimated_cost_usd": estimated_cost_usd,
-            "free_quota": _AUDD_FREE_QUOTA,
+            "legacy_audd_requests_total": legacy_audd_total,
         },
     }
 
 
 def on_unknown_fingerprint(db: "SongFingerprintDB", pcm_int16: np.ndarray, fingerprint: list[int],
                             sample_rate: int, station_id: str, cloud_lookup_enabled: bool) -> Optional[dict]:
-    """Bei Cache-Miss (Phase 1): identifiziert den Song per AudD, wenn
-    sowohl `cloud_lookup_enabled` (song_recognition.cloud_lookup_enabled)
-    ALS AUCH AUDD_API_TOKEN gesetzt sind -- fehlt eine der beiden
+    """Bei Cache-Miss (Phase 1): identifiziert den Song per AcoustID, wenn
+    sowohl `cloud_lookup_enabled` (song_recognition.acoustid_lookup_enabled)
+    ALS AUCH ACOUSTID_API_KEY gesetzt sind -- fehlt eine der beiden
     Voraussetzungen, unverändertes Phase-1-Verhalten (reines Logging, kein
     Netzwerk-Call). Schreibt Titel/Interpret/Album/Jahr/Länge bei Erfolg
     über SongFingerprintDB.set_cloud_metadata() in die von match_or_learn()
     gerade angelegte Zeile zurück und gibt {"title","artist","album","year",
     "duration_seconds"} zurück (für SongRecognizers aktuellen "jetzt
     läuft"-Zustand, siehe dort) -- sonst None."""
-    if not cloud_lookup_enabled or not AUDD_API_TOKEN:
+    if not cloud_lookup_enabled or not ACOUSTID_API_KEY:
         log.info("🎵 Unbekannter Song auf Sender '%s' (%d Fingerprint-Werte) -- Cloud-Lookup %s.",
                  station_id, len(fingerprint),
-                 "deaktiviert (song_recognition.cloud_lookup_enabled=false)" if not cloud_lookup_enabled
-                 else "kein AUDD_API_TOKEN gesetzt (.env)")
+                 "deaktiviert (song_recognition.acoustid_lookup_enabled=false)" if not cloud_lookup_enabled
+                 else "kein ACOUSTID_API_KEY gesetzt (.env)")
         return None
 
-    result = audd_lookup(pcm_int16, sample_rate, AUDD_API_TOKEN,
-                          station_id=station_id, log_request=db.log_audd_request)
+    result = acoustid_lookup(pcm_int16, sample_rate, ACOUSTID_API_KEY,
+                              station_id=station_id, log_request=db.log_cloud_request)
     if result is None:
-        log.info("🎵 AudD kennt den Song auf Sender '%s' nicht (oder Anfrage fehlgeschlagen/im Cooldown).",
+        log.info("🎵 AcoustID kennt den Song auf Sender '%s' nicht (oder Anfrage fehlgeschlagen/im Cooldown).",
                  station_id)
         return None
 
     fingerprint_hash = ",".join(str(v) for v in fingerprint)
     db.set_cloud_metadata(fingerprint_hash, result["title"], result["artist"],
                            result.get("album"), result.get("year"), result.get("duration_seconds"))
-    log.info("🎵 AudD-Identifikation auf Sender '%s': '%s' – '%s' (Album: %s, Jahr: %s, Länge: %s)",
+    log.info("🎵 AcoustID-Identifikation auf Sender '%s': '%s' – '%s' (Album: %s, Jahr: %s, Länge: %s)",
              station_id, result["artist"], result["title"],
              result.get("album") or "unbekannt", result.get("year") or "unbekannt",
              result.get("duration_seconds") or "unbekannt")
@@ -1050,7 +1109,7 @@ class SongRecognizer:
         # gesetzt (reine Songwechsel-Erkennung), _current_song nur bei
         # bekannter `song_id` (seit der "Deutsch!"-Button-Erweiterung --
         # vorher nur bei bekanntem Titel, siehe SESSION.md: der Button
-        # muss aber schon VOR einer AudD-Identifikation bedienbar sein).
+        # muss aber schon VOR einer AcoustID-Identifikation bedienbar sein).
         self._current_song: Optional[dict] = None
 
     def feed(self, pcm_int16: np.ndarray):
@@ -1128,7 +1187,7 @@ class SongRecognizer:
                     result = on_unknown_fingerprint(
                         self.db, snapshot, fp, self.sample_rate, station_id, cloud_lookup_enabled
                     )
-                    # guess_is_german() lief bei einem AudD-Treffer schon in
+                    # guess_is_german() lief bei einem AcoustID-Treffer schon in
                     # set_cloud_metadata() gegen die DB-Zeile -- hier
                     # zusätzlich direkt auf `result` angewendet, damit der
                     # laufende "jetzt läuft"-Zustand (_current_song) nicht

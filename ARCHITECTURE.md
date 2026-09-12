@@ -297,10 +297,14 @@ thread-übergreifend sicher sind — dasselbe Muster wie bei
 ## Song-Erkennung (song_fingerprint.py)
 
 Phase 1: erkennt WIEDERHOLTE Musikstücke per lokalem Chromaprint-
-Fingerprint-Cache. Phase 2 (seit diesem Abschnitt): identifiziert einen bei
-Phase 1 unbekannten Song optional per AudD-Cloud-Lookup
-(`song_recognition.cloud_lookup_enabled` UND `AUDD_API_TOKEN` gesetzt, siehe
-unten) — `on_unknown_fingerprint()` ist dafür kein reiner Logging-Stub mehr.
+Fingerprint-Cache. Phase 2: identifiziert einen bei Phase 1 unbekannten
+Song optional per AcoustID-Cloud-Lookup
+(`song_recognition.acoustid_lookup_enabled` UND `ACOUSTID_API_KEY` gesetzt,
+siehe unten) — `on_unknown_fingerprint()` ist dafür kein reiner
+Logging-Stub mehr. Phase 2 lief bis 2026-09 über AudD; dessen kostenloses
+Kontingent war verbraucht und es gab kein Abo mehr, seitdem übernimmt das
+dauerhaft kostenlose AcoustID (dieselbe Chromaprint-Technik, siehe unten)
+dieselbe Rolle an derselben Stelle der Kette.
 Komplett getrennt von `fingerprint.py`/`fingerprints.db` oben: andere
 Domäne (Musikstücke statt wiederkehrende Sprache-Clips/Jingles), eigene
 DB-Datei (`song_fingerprints.db`), eigenes Matching-Verfahren.
@@ -335,16 +339,17 @@ flowchart LR
     Cmp -->|nein| DB["SongFingerprintDB.match_or_learn()<br/>Sliding-Offset-Vergleich gegen alle Songs"]
     DB -->|Treffer| Hit["play_count++, last_seen/station_id aktualisieren<br/>_current_song aus title/artist (falls bekannt)"]
     DB -->|kein Treffer| Miss["neuer Eintrag (title/artist NULL)"]
-    Miss --> Gate{"cloud_lookup_enabled UND<br/>AUDD_API_TOKEN gesetzt?"}
+    Miss --> Gate{"acoustid_lookup_enabled UND<br/>ACOUSTID_API_KEY gesetzt?"}
     Gate -->|nein| Stub["nur Logging (Phase-1-Verhalten)"]
-    Gate -->|ja| Cooldown{"AUDD_MIN_INTERVAL_SECONDS<br/>seit letztem Call verstrichen?"}
+    Gate -->|ja| Cooldown{"ACOUSTID_MIN_INTERVAL_SECONDS<br/>seit letztem Call verstrichen?"}
     Cooldown -->|nein| Skip2["Anfrage übersprungen, geloggt"]
-    Cooldown -->|ja| AudD["AudD-Upload (multipart POST)"]
-    AudD -->|Treffer| SetMeta["set_cloud_metadata()<br/>+ _current_song aktualisieren"]
-    AudD -->|kein Treffer| None2["_current_song bleibt leer<br/>Status: ok"]
-    AudD -->|"Kontingent (#900/#901/#902)"| Quota["Status: quota"]
-    AudD -->|sonstiger AudD-Fehler| AuddErr["Status: audd_error"]
-    AudD -->|Netzwerk/Timeout| NetErr["Status: network_error"]
+    Cooldown -->|ja| FP2["fpcalc -json (ohne -raw)<br/>Base64-Fingerprint + duration"]
+    FP2 --> AcoustID["AcoustID-Lookup (Formular-POST)"]
+    AcoustID -->|Treffer| SetMeta["set_cloud_metadata()<br/>+ _current_song aktualisieren"]
+    AcoustID -->|kein Treffer| None2["_current_song bleibt leer<br/>Status: ok"]
+    AcoustID -->|"HTTP 429 (Rate-Limit)"| RateLimited["Status: rate_limited"]
+    AcoustID -->|sonstiger AcoustID-Fehler| AcoustidErr["Status: acoustid_error"]
+    AcoustID -->|Netzwerk/Timeout| NetErr["Status: network_error"]
 ```
 
 Warum Chromaprint statt desselben Constellation-Map-Eigenbaus wie
@@ -407,21 +412,32 @@ Hauptloop komplett (siehe "Radio-/Musik-Modus" unten), der Hook-Punkt
 (`else`-Zweig bei `label != "speech"`) wird im Library-Modus dadurch nie
 erreicht, kein Extra-Gate nötig.
 
-**AudD-Cloud-Lookup (Phase 2, `audd_lookup()`/`on_unknown_fingerprint()`):**
-läuft NUR bei einem lokalen Cache-Miss (Phase 1 hat bereits eine neue,
-title/artist=NULL-Zeile angelegt) UND nur, wenn sowohl
-`song_recognition.cloud_lookup_enabled` als auch `AUDD_API_TOKEN` (aus der
-Umgebung, einmal beim Modul-Import gelesen — Grund: keine Secrets in
-`settings.json`, das Web-Interface hat keine Auth, siehe CLAUDE.md) gesetzt
-sind — fehlt eine der beiden Voraussetzungen, unverändertes Phase-1-
-Verhalten (reines Logging). Kein neuer pip-Dependency: das WAV wird per
-`wave`-Modul in einen `io.BytesIO` geschrieben (kein Temp-File nötig wie bei
-`compute_fingerprint()`, da `urllib` kein Dateisystem-Objekt braucht), der
-`multipart/form-data`-Body für den Datei-Upload wird von Hand gebaut
-(`_multipart_encode()`) statt einer zusätzlichen Abhängigkeit wie
-`requests` — gleiche Begründung wie beim Rest des Projekts
-(`update_check.py`/`station_import.py` nutzen ebenfalls nur
-`urllib.request`). Bei Erfolg schreibt `SongFingerprintDB.set_cloud_metadata()`
+**AcoustID-Cloud-Lookup (Phase 2, `acoustid_lookup()`/
+`on_unknown_fingerprint()`):** läuft NUR bei einem lokalen Cache-Miss
+(Phase 1 hat bereits eine neue, title/artist=NULL-Zeile angelegt) UND nur,
+wenn sowohl `song_recognition.acoustid_lookup_enabled` als auch
+`ACOUSTID_API_KEY` (aus der Umgebung, einmal beim Modul-Import gelesen —
+Grund: keine Secrets in `settings.json`, das Web-Interface hat keine Auth,
+siehe CLAUDE.md) gesetzt sind — fehlt eine der beiden Voraussetzungen,
+unverändertes Phase-1-Verhalten (reines Logging).
+
+Anders als das frühere AudD (Datei-Upload) sendet AcoustID nur den
+Fingerprint selbst als Formularfeld — braucht dafür aber ein ANDERES
+Fingerprint-Format als das, was `compute_fingerprint()` für den lokalen
+Sliding-Offset-Vergleich erzeugt: AcoustID erwartet den komprimierten,
+Base64-kodierten Fingerprint-String (fpcalcs Standardausgabe OHNE `-raw`),
+nicht die rohe Integer-Sequenz. `_compute_acoustid_submission()` ruft
+deshalb `fpcalc -json` (ohne `-raw`) ein zweites Mal auf einer eigenen
+Temp-WAV auf — nur im seltenen Cache-Miss-Pfad, kein Einfluss auf den
+Hot-Path. Aus derselben fpcalc-Antwort kommt auch `duration` (von AcoustID
+als Pflichtparameter verlangt: "Dauer der eingereichten Audiodatei in
+Sekunden" — bei einem ~11s-Snippet entsprechend klein, nicht die volle
+Songlänge). Kein neuer pip-Dependency: `urllib.parse.urlencode()` reicht
+für den Formular-POST, kein Datei-Upload wie bei AudD nötig, damit entfällt
+auch der frühere handgebaute `multipart/form-data`-Body
+(`_multipart_encode()`, jetzt entfernt).
+
+Bei Erfolg schreibt `SongFingerprintDB.set_cloud_metadata()`
 Titel/Interpret/Album/Jahr über den `fingerprint_hash`-Text in die von
 `match_or_learn()` angelegte Zeile zurück. `title`/`artist` existierten als
 Spalten bereits (waren nur immer `NULL`); `album`/`year` sind neu (Nutzer-
@@ -429,34 +445,39 @@ Wunsch, siehe SESSION.md) — Migration per `PRAGMA table_info()` +
 `ALTER TABLE ... ADD COLUMN` in `_init_schema()`, identisches Muster wie
 die `bpm`-Spalte in `music_scan.py` (SQLite kennt kein "ADD COLUMN IF NOT
 EXISTS", `CREATE TABLE IF NOT EXISTS` allein reicht bei einer schon
-bestehenden Tabelle nicht). Von AudD zusätzlich gelieferte Felder
-(Streaming-Links, Label) werden weiterhin NICHT persistiert — kein
-Anwendungsfall dafür. `match_or_learn()` liefert Album/Jahr/Länge auch bei
-einem lokalen Hit mit (aus der DB, nicht erneut von AudD abgefragt) — ein
+bestehenden Tabelle nicht). `match_or_learn()` liefert Album/Jahr/Länge
+auch bei einem lokalen Hit mit (aus der DB, nicht erneut abgefragt) — ein
 einmal per Cloud identifizierter Song zeigt sie deshalb bei jeder
 Wiederholung weiter an, auch ganz ohne erneuten Cloud-Call.
 
-**Songlänge (`duration_seconds`, Nutzer-Wunsch nachträglich ergänzt)**:
-AudDs Kernantwort liefert KEINE Länge — nur mit dem zusätzlichen
-Multipart-Feld `return=apple_music,spotify` (kostet keinen separaten
-Request, nur mehr Felder in derselben Antwort) kommen zwei verschachtelte
-Objekte mit je einem Millisekunden-Feld (live geprüft, siehe SESSION.md):
-`result["spotify"]["duration_ms"]` bzw.
-`result["apple_music"]["durationInMillis"]` — beide praktisch identisch
-(Rundungsdifferenz im Bereich 1ms), Spotify bevorzugt, weil zuerst im
-Response-JSON. `_parse_duration_seconds()` rundet auf ganze Sekunden.
-Keins von beiden ist garantiert vorhanden (nicht jeder Song hat einen
-Spotify-/Apple-Music-Treffer) — `duration_seconds` bleibt dann `None`,
-genau wie Album/Jahr in diesem Fall.
+**Response-Format (`meta=recordings+releasegroups+releases`,
+`_parse_acoustid_result()`)**: AcoustID verschachtelt Titel/Interpret/
+Songlänge unter `results[].recordings[0]` (`title`/`duration`/
+`artists[0].name`), Album unter `recordings[0].releasegroups[0].title` und
+das Erscheinungsjahr noch eine Ebene tiefer unter
+`releasegroups[0].releases[0].date.year` — Letzteres kommt nur mit,
+`releases` explizit in `meta` mitanzufordern (per Live-Test gegen
+`acoustid.org/webservice` verifiziert: `meta=recordings+releasegroups`
+allein liefert Album, aber KEIN Jahr). Bei mehreren `results[]` wird das
+mit dem höchsten `score` gewählt. Alles per `.get()`/`try` statt fester
+Indizierung — eine von der Doku abweichende Verschachtelung liefert
+lediglich weniger Metadaten statt einer Exception (gleiches defensives
+Muster wie der Rest des Moduls). Songlänge kommt seitdem direkt aus
+`recordings[0].duration` (ein einzelnes Integer-Feld) — deutlich einfacher
+als AudDs frühere verschachtelte `spotify`/`apple_music`-Felder.
 
-**Sicherheitsnetz gegen Kontingent-Verbrauch**: `similarity_threshold` ist
+**Cooldown gegen wiederholte Cloud-Requests**: `similarity_threshold` ist
 weiterhin ein unkalibrierter Platzhalter (siehe unten) — greift er in der
 Praxis zu locker/streng, könnte `match_or_learn()` denselben Song
-wiederholt als "neu" einstufen und bei JEDEM Intervall einen bezahlten
-AudD-Request auslösen. `AUDD_MIN_INTERVAL_SECONDS` (60s, Modulkonstante,
-kein Settings-Wert — gleiche Kategorie wie `MAX_OFFSET`/`MIN_OVERLAP`)
-erzwingt einen Mindestabstand zwischen Cloud-Calls, unabhängig davon, wie
-oft `on_unknown_fingerprint()` aufgerufen wird.
+wiederholt als "neu" einstufen und bei JEDEM Intervall einen Request
+auslösen. `ACOUSTID_MIN_INTERVAL_SECONDS` (60s, Modulkonstante, kein
+Settings-Wert — gleiche Kategorie wie `MAX_OFFSET`/`MIN_OVERLAP`) erzwingt
+einen Mindestabstand zwischen Cloud-Calls, unabhängig davon, wie oft
+`on_unknown_fingerprint()` aufgerufen wird. AcoustID ist zwar kostenlos,
+dokumentiert aber ein Fair-Use-Limit von 3 Requests/Sekunde — der Cooldown
+bleibt trotzdem bestehen (unnötige Last auf einen kostenlosen,
+spendenfinanzierten Dienst ist weiterhin vermeidenswert, auch ohne
+Kontingent-Risiko wie bei AudD).
 
 **Live-Anzeige (`_current_song`, `SongRecognizer.get_current_song()`)**:
 gesetzt, sobald `match_or_learn()` eine `song_id` liefert (sowohl bei
@@ -484,59 +505,73 @@ das über zwei neue i18n-Keys (`idx_song_pending`/
 `idx_song_paused_no_listeners`) in dieselbe Titel-Zeile, statt eines echten
 Songtitels.
 
-**AudD-Statusanzeige (`get_audd_status()`/`_record_audd_status()`,
-Nutzer-Wunsch, siehe SESSION.md)**: bis hierhin landeten "AudD kennt den
-Song nicht" (`status: "success"` ohne Treffer) UND jede AudD-eigene
-Fehlerantwort (`status: "error"`, siehe unten) in derselben Rückgabe
-(`None`) — für den Betreiber ununterscheidbar von "läuft normal, hat den
-Song nur noch nicht gefunden". `audd_lookup()` unterscheidet jetzt explizit
-und merkt sich den letzten Aufrufstatus (`"ok"`/`"quota"`/`"network_error"`/
-`"audd_error"` + Fehlercode) als reines In-Memory-Modulfeld, ANALOG zu
-`_audd_last_call_at` — bewusst NICHT in `settings.json` persistiert: das ist
-Live-Betriebszustand, kein Setting, und ein Neustart braucht dafür keine
-Sonderbehandlung, der nächste tatsächliche Aufruf (spätestens nach
-`AUDD_MIN_INTERVAL_SECONDS`) setzt ihn ohnehin sofort neu. AudD meldet
-eigene Fehler laut Doku IMMER mit HTTP 200, der Fehler steckt im JSON-Body
-(`{"status":"error","error":{"error_code":...}}`) — nur `#900`/`#901`
-("invalid token" bzw. "no api_token passed, and the limit was reached")
-sind offiziell dokumentiert, dazu kommt `#902` (live beobachtet bei
-aufgebrauchtem Kontingent MIT gültigem Token, Fehlertext "authorization
-failed: the limit was reached" — passt exakt ins Namensschema der beiden
-dokumentierten Codes, ist aber selbst nicht offiziell dokumentiert). Alle
-drei zählen als Kontingent-Fall (`"quota"`); jeder andere `error_code`
-bleibt ein generischer `"audd_error"` mit sichtbarem Code statt geraten zu
-werden — bei nur 7 von AudDs ~40 Fehlercodes öffentlich dokumentiert lässt
-sich der Rest nicht zuverlässig kategorisieren.
+**AcoustID-Statusanzeige (`get_acoustid_status()`/`_record_acoustid_status()`,
+Nutzer-Wunsch, siehe SESSION.md, ursprünglich für AudD gebaut)**: ohne das
+wäre "AcoustID kennt den Song nicht" (`status: "ok"` ohne Treffer) UND jede
+AcoustID-eigene Fehlerantwort (`status: "error"`, siehe unten) in derselben
+Rückgabe (`None`) gelandet — für den Betreiber ununterscheidbar von "läuft
+normal, hat den Song nur noch nicht gefunden". `acoustid_lookup()`
+unterscheidet deshalb explizit und merkt sich den letzten Aufrufstatus
+(`"ok"`/`"rate_limited"`/`"network_error"`/`"acoustid_error"` + Fehlercode)
+als reines In-Memory-Modulfeld, ANALOG zu `_acoustid_last_call_at` —
+bewusst NICHT in `settings.json` persistiert: das ist Live-Betriebszustand,
+kein Setting, und ein Neustart braucht dafür keine Sonderbehandlung, der
+nächste tatsächliche Aufruf (spätestens nach
+`ACOUSTID_MIN_INTERVAL_SECONDS`) setzt ihn ohnehin sofort neu.
 
-`_build_status()` zeigt `"quota"`/`"network_error"`/`"audd_error"` anstelle
-des neutralen `pending`-Platzhalters an (drei neue `now_playing_tags`-Felder
-`audd_problem`/`audd_error_code`, drei neue i18n-Keys) — ABER NUR, wenn
-Cloud-Lookup gerade aktiv ist UND weder ein Titel erkannt noch das
-Hörer-Gate aktiv ist. `"not_configured"` (fehlender Token/Cloud-Lookup aus)
-wird hier bewusst NICHT angezeigt: sonst sähe das für jeden, der Cloud-
-Lookup nie aktiviert hat, dauerhaft nach einem Fehler aus, statt einer
-bewussten Konfigurationsentscheidung.
+Anders als AudD (das über `#900`/`#901`/`#902` ein dokumentiertes, wenn
+auch unvollständiges Fehlercode-Schema für Token-/Kontingent-Probleme
+hatte) dokumentiert AcoustID laut `acoustid.org/webservice` KEINERLEI
+Fehlercode-Liste. Per Live-Test verifiziert (siehe SESSION.md): ein
+ungültiger `client`-Key liefert `{"status":"error","error":{"code":4,
+"message":"invalid API key"}}` — Code/Message landen deshalb ungefiltert
+als generischer `"acoustid_error"` statt geraten zu werden. Das einzige
+dokumentierte Limit (3 Requests/Sekunde) wird separat über den HTTP-Status
+429 als `"rate_limited"` erkannt, falls AcoustID das so signalisiert.
 
-**Statistik-Sektion Config-Seite (`audd_request_log`,
+`_build_status()` zeigt `"rate_limited"`/`"network_error"`/
+`"acoustid_error"` anstelle des neutralen `pending`-Platzhalters an (drei
+`now_playing_tags`-Felder `acoustid_problem`/`acoustid_error_code`, drei
+i18n-Keys) — ABER NUR, wenn Cloud-Lookup gerade aktiv ist UND weder ein
+Titel erkannt noch das Hörer-Gate aktiv ist. `"not_configured"` (fehlender
+Key/Cloud-Lookup aus) wird hier bewusst NICHT angezeigt: sonst sähe das für
+jeden, der Cloud-Lookup nie aktiviert hat, dauerhaft nach einem Fehler aus,
+statt einer bewussten Konfigurationsentscheidung.
+
+**Statistik-Sektion Config-Seite (`song_cloud_request_log`,
 `build_recognition_stats()`, Nutzer-Wunsch, siehe SESSION.md)**: bis
-hierhin gab es für "wie viele AudD-Requests heute/gesamt", eine echte
-Erfolgsquote (Treffer vs. kein Treffer, getrennt von Kontingent-/sonstigen
-Fehlern) und eine Kostenschätzung KEINE Datenquelle — nur unzuverlässige,
-schnell rotierende Logfile-Zeilen (DEBUG-Level, bei aktuellem
-Verkehrsaufkommen ~1-2 Tage Retention, siehe SESSION.md). Neue Tabelle
-`audd_request_log` (gleiches additives Muster wie `song_match_log`): EINE
-Zeile pro tatsächlich versuchtem `audd_lookup()`-Aufruf mit `outcome`
-(`"hit"`/`"no_match"`/`"quota"`/`"audd_error"`/`"network_error"`) —
-Cooldown-Skips zählen bewusst NICHT mit (kein tatsächlicher Request, würde
-die Zählung sonst künstlich aufblähen). `audd_lookup()` bekommt dafür einen
-`log_request(station_id, outcome)`-Callback (Parameter, kein Import von
-`SongFingerprintDB` in der Funktion selbst) — GENAU dasselbe
-Callback-Muster wie `update_check.UpdateChecker.on_result`, damit
-`audd_lookup()` weiterhin isoliert mit einem simplen Stub statt einer
-echten DB testbar bleibt (siehe SESSION.md-Tests). `outcome` ist dabei
-feiner als `get_audd_status()`s `state`: "hit"/"no_match" statt beide unter
-"ok" -- das Live-Banner oben braucht nur "läuft/läuft nicht", die
-Statistik-Sektion explizit die Erfolgsquote.
+hierhin gab es für "wie viele Cloud-Requests heute/gesamt" und eine echte
+Erfolgsquote (Treffer vs. kein Treffer, getrennt von sonstigen Fehlern)
+KEINE Datenquelle — nur unzuverlässige, schnell rotierende Logfile-Zeilen
+(DEBUG-Level, bei aktuellem Verkehrsaufkommen ~1-2 Tage Retention, siehe
+SESSION.md). Tabelle `song_cloud_request_log` (gleiches additives Muster
+wie `song_match_log`, hieß bis zur AcoustID-Umstellung `audd_request_log`
+— siehe Migrationshinweis unten): EINE Zeile pro tatsächlich versuchtem
+`acoustid_lookup()`-Aufruf mit `source` (`"acoustid"`, historische Zeilen
+`"audd_legacy"`) und `outcome`
+(`"hit"`/`"no_match"`/`"rate_limited"`/`"acoustid_error"`/
+`"network_error"`) — Cooldown-Skips zählen bewusst NICHT mit (kein
+tatsächlicher Request, würde die Zählung sonst künstlich aufblähen).
+`acoustid_lookup()` bekommt dafür einen `log_request(station_id, source,
+outcome)`-Callback (Parameter, kein Import von `SongFingerprintDB` in der
+Funktion selbst) — GENAU dasselbe Callback-Muster wie
+`update_check.UpdateChecker.on_result`, damit `acoustid_lookup()`
+weiterhin isoliert mit einem simplen Stub statt einer echten DB testbar
+bleibt. `outcome` ist dabei feiner als `get_acoustid_status()`s `state`:
+"hit"/"no_match" statt beide unter "ok" -- das Live-Banner oben braucht
+nur "läuft/läuft nicht", die Statistik-Sektion explizit die Erfolgsquote.
+
+**Migration von `audd_request_log` (seit der AcoustID-Umstellung)**:
+`_init_schema()` benennt eine bestehende `audd_request_log`-Tabelle per
+`ALTER TABLE ... RENAME TO song_cloud_request_log` um und ergänzt eine
+neue Spalte `source`, rückwirkend auf `'audd_legacy'` gesetzt für alle
+Bestandszeilen (Prüfung über `sqlite_master`, da SQLite kein
+`RENAME TO ... IF NOT EXISTS` kennt) — Historie bleibt erhalten
+(CLAUDE.md: keine SESSION.md-/Daten-Historie rückwirkend verfälschen),
+`build_recognition_stats()` filtert für die aktuelle Erfolgsquote/
+Requests-Zählung explizit auf `source = 'acoustid'` und zeigt die Zahl der
+`audd_legacy`-Zeilen nur noch als reinen Transparenz-Hinweis
+(`legacy_audd_requests_total`).
 
 `build_recognition_stats()` (`song_fingerprint.py`) berechnet ALLES on-
 demand per SQL (kein Caching -- bei Zeilenzahlen im Tausenderbereich für
@@ -550,22 +585,16 @@ diese Funktion sonst versehentlich mitreißen könnte. Der DB-Pfad kommt aus
 `host_paths`/`args` nötig, der laufende `SongRecognizer` hält die
 `SongFingerprintDB`-Instanz ohnehin schon.
 
-**Kostenschätzung ist explizit KEIN echter Kontostand**: `requests_total`
-zählt ausschließlich ab Einführung von `audd_request_log` -- ein zuvor
-(auch schon vor diesem Feature) verbrauchtes Kontingent bleibt unsichtbar,
-weil AudDs API laut Doku weder ein Kontingent-Feld in der Antwort noch
-einen separaten Abfrage-Endpoint liefert (siehe SESSION.md). Die Anzeige
-macht das explizit ("Requests gesamt (seit Zählbeginn X)"), rundet
-`network_error`-Anfragen bewusst NICHT in die Kostenschätzung ein (dort kam
-nie eine AudD-Antwort an, unklar ob AudD den Request selbst verarbeitet/
-gezählt hat), zählt `quota`/`audd_error`-Antworten aber mit (das war ein
-echter, beantworteter Request an AudD, auch wenn abgelehnt).
+**Kein Kostenmodell mehr**: anders als AudD (Kontingent + Kostenschätzung,
+siehe SESSION.md-Historie) ist AcoustID dauerhaft kostenlos, begrenzt nur
+durch das Fair-Use-Rate-Limit oben — die Statistik-Sektion zeigt deshalb
+keine Kostenschätzung mehr, nur noch Requests/Erfolgsquote/Status.
 
 **Hörer-Gate (`ListenerGate`, Nutzer-Wunsch)**: Song-Erkennung (lokales
 Fingerprinting UND Cloud-Lookup) läuft nur, solange
 `ListenerGate.has_listeners()` `True` liefert — ohne Publikum auf dem
-Restream-Mount kostet die Analyse CPU (fpcalc) bzw. AudD-Kontingent ohne
-Gegenwert. Gate sitzt im Hauptloop VOR `song_recognizer.feed()` (siehe
+Restream-Mount kostet die Analyse CPU (fpcalc) bzw. unnötige AcoustID-
+Anfragen ohne Gegenwert. Gate sitzt im Hauptloop VOR `song_recognizer.feed()` (siehe
 `radiosabbelnich.py`), nicht in `song_fingerprint.py` selbst — spart damit
 auch das Auffüllen des Ringpuffers, nicht nur den teuren Analyse-Schritt.
 Pollt Icecasts `/admin/listclients`-Route (dieselbe Route/dieselben
@@ -594,7 +623,8 @@ Puffer dann fast ausschließlich veraltetes Vor-Pause-Audio (nur ein
 einzelnes frisches Fenster kommt pro `feed()`-Aufruf dazu, der Puffer
 braucht `snippet_seconds`, um sich komplett zu erneuern) — die erste
 Analyse nach der Rückkehr liefe auf einem Frankenstein-Schnipsel aus zwei
-Zeiträumen, potenziell ein sinnloser Fingerprint samt unnötigem AudD-Call.
+Zeiträumen, potenziell ein sinnloser Fingerprint samt unnötigem
+AcoustID-Call.
 `ListenerGate` bekommt deshalb einen optionalen `on_change`-Callback,
 aufgerufen bei JEDEM tatsächlichen Wechsel des Hörer-Zustands (nicht bei
 jedem Poll, nur beim Flip) — `radiosabbelnich.py` verdrahtet ihn so, dass
@@ -633,9 +663,9 @@ wird direkt aus `best_score >= similarity_threshold` abgeleitet (siehe
 unabhängige Ground Truth. Sie zeigt zwangsläufig eine "perfekte Lücke"
 exakt am aktuellen Threshold, egal wie lange gesammelt wird — das
 bestätigt nur, dass der Code tut, was er soll, sagt aber nichts darüber
-aus, ob der Threshold richtig sitzt. Der AudD-Cloud-Lookup oben liefert
-eine echte externe Referenz (AudD sagt unabhängig vom lokalen Threshold,
-welcher Song es ist) und ist der bessere Weg zu einer fundierten
+aus, ob der Threshold richtig sitzt. Der AcoustID-Cloud-Lookup oben liefert
+eine echte externe Referenz (AcoustID sagt unabhängig vom lokalen
+Threshold, welcher Song es ist) und ist der bessere Weg zu einer fundierten
 Kalibrierung — bislang aber nicht dafür automatisiert ausgewertet, siehe
 "Offene Punkte".
 
@@ -656,17 +686,18 @@ klassifiziert. Drei Wege, wie eine Zeile klassifiziert wird:
    Genre-Filter in `music_query.py`) — liefert absichtlich NUR `True`
    oder `None`, NIE `False`: ein fehlender Listentreffer heißt nicht
    "garantiert nicht deutsch", nur "unbekannt". Läuft automatisch in
-   `SongRecognizer._run()` (sobald ein `artist` aus einem AudD-Treffer
+   `SongRecognizer._run()` (sobald ein `artist` aus einem AcoustID-Treffer
    bekannt wird, direkt für die Live-Anzeige) UND in
    `set_cloud_metadata()` (schreibt die DB-Zeile) — dort per
    `COALESCE(is_german_language, ?)`, damit eine bereits VORHER manuell
-   gesetzte Klassifizierung (Nutzer war schneller als AudD, siehe Punkt 2)
+   gesetzte Klassifizierung (Nutzer war schneller als AcoustID, siehe Punkt 2)
    nicht überschrieben wird.
 2. **Manuell per "Deutsch!"-Button** (Player-Seite, direkt neben "⚡
    ZAPPEN!"): markiert den GERADE laufenden, erkannten Song. Bewusst schon
    sichtbar/klickbar, sobald `now_playing_tags.song_id` existiert — NICHT
    erst ab bekanntem Titel: der Hörer erkennt "das ist deutsch" oft am
-   Klang, lange bevor (oder ganz ohne dass) AudD den Song je identifiziert.
+   Klang, lange bevor (oder ganz ohne dass) AcoustID den Song je
+   identifiziert.
    Dafür musste `match_or_learn()` seinen Rückgabewert ändern: liefert
    seit dieser Erweiterung IMMER ein dict (auch bei Cache-Miss, mit der
    frisch per `INSERT`/`c.lastrowid` vergebenen `song_id`, `new: True`)
@@ -1714,22 +1745,33 @@ hat vollen Zugriff.
   weiterhin ein Platzhalter, noch nicht gegen echtes Stream-Audio
   kalibriert — das bisherige `song_match_log`-Kalibrierungs-Logging ist
   dafür ungeeignet (tautologisch, siehe Abschnitt "Song-Erkennung" oben);
-  die seit Phase 2 verfügbaren AudD-Identifikationen wären die bessere
+  die seit Phase 2 verfügbaren AcoustID-Identifikationen wären die bessere
   Datenquelle, werden dafür aber noch nicht automatisiert ausgewertet.
-  AudD-Cloud-Lookup (Phase 2) selbst ist implementiert (inkl. Album/Jahr
-  seit dem entsprechenden Nutzer-Wunsch, siehe SESSION.md), aber: keine
-  Vorbefüllung der Referenz-DB aus eigenen ID3-Tags (separates, größeres
-  Vorhaben, siehe README-Roadmap-Notiz), und der feste 60s-Cooldown
-  (`AUDD_MIN_INTERVAL_SECONDS`) ist eine grobe
-  Sicherheitsleitplanke, kein echtes Kontingent-Limit-Durchsetzen. Seit der
-  Statistik-Sektion (Config-Seite, `audd_request_log`) gibt es zwar eine
-  Requests-heute/-Woche/-gesamt-Zählung UND `get_audd_status()`/die
-  Live-Anzeige machen ein bereits AUFGEBRAUCHTES Kontingent sichtbar
-  (reaktiv, anhand von AudDs Fehlercode) — was weiterhin fehlt: eine
-  PROAKTIVE Warnung ("noch X von 300 übrig, bei diesem Tempo in Y Tagen
-  aufgebraucht") VOR dem tatsächlichen Ausfall, und die Zählung kennt nur
-  den eigenen Start, nicht den echten AudD-Kontostand (siehe
-  "Song-Erkennung" oben, Kostenschätzungs-Absatz). Das Hörer-Gate (`ListenerGate`) pollt ebenfalls nur
+  AcoustID-Cloud-Lookup (Phase 2, bis 2026-09 AudD, seitdem AcoustID) selbst
+  ist implementiert (inkl. Album/Jahr), aber: keine Vorbefüllung der
+  Referenz-DB aus eigenen ID3-Tags (separates, größeres Vorhaben, siehe
+  README-Roadmap-Notiz), und der feste 60s-Cooldown
+  (`ACOUSTID_MIN_INTERVAL_SECONDS`) ist eine grobe Sicherheitsleitplanke
+  gegen unnötige Requests, kein an AcoustIDs dokumentiertes 3-req/s-Limit
+  angepasster Backoff-Mechanismus. Anders als bei AudD gibt es bei AcoustID
+  kein Kontingent, das aufgebraucht werden kann (dauerhaft kostenlos) — die
+  Statistik-Sektion (Config-Seite, `song_cloud_request_log`) zeigt deshalb
+  auch keine Kostenschätzung mehr, nur noch Requests/Erfolgsquote/Status.
+  **Trefferquote bei kurzen Snippets unklar (manuell getestet, siehe
+  SESSION.md 2026-09-12)**: ein voller Track-Fingerprint (volle Länge) traf
+  im Test zuverlässig (Score 1.0) und das offizielle Doku-Beispiel ebenso —
+  die Anfrage-Mechanik ist also nachweislich korrekt. Kurze, radiotypische
+  Snippets (11-120s, exakt das, was `SongRecognizer` tatsächlich sendet)
+  blieben dagegen in 5 von 6 manuellen Tests ohne Treffer, ohne erkennbares
+  "länger=besser"-Muster (15/60/90/120s ab Songanfang: kein Treffer, 30s ab
+  Songanfang: Treffer) — deutet auf einen für Voll-Track-Fingerprints (wie
+  MusicBrainz Picard sie erzeugt) optimierten Such-Index hin, nicht auf
+  kurze Clip-Erkennung wie bei AudD/Shazam. Noch keine belastbare
+  Datenbasis für eine Reaktion (z.B. `snippet_seconds` erhöhen) — bewusst
+  NICHT spekulativ geändert, sondern auf eine tagelange Live-Beobachtung
+  über die Statistik-Sektion verschoben, sobald der Nutzer das Feature
+  aktiviert.
+  Das Hörer-Gate (`ListenerGate`) pollt ebenfalls nur
   alle 60s (`LISTENER_CHECK_INTERVAL_SECONDS`) — nach einem frischen
   Hörer-Zulauf kann es dadurch bis zu 60s dauern, bis Song-Erkennung
   überhaupt wieder anspringt, PLUS danach `snippet_seconds`, bis der beim

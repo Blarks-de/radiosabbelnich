@@ -701,8 +701,9 @@ def main():
             song_db, SAMPLE_RATE, WINDOW_SECONDS,
             state.song_recognition_cfg["snippet_seconds"],
         )
-        # Song-Erkennung kostet CPU/AudD-Kontingent, ist aber wertlos, wenn
-        # niemand den Restream hört -- siehe song_fingerprint.ListenerGate.
+        # Song-Erkennung kostet CPU bzw. unnötige AcoustID-Anfragen, ist
+        # aber wertlos, wenn niemand den Restream hört -- siehe
+        # song_fingerprint.ListenerGate.
         # Dieselben ICECAST_ADMIN_*-Werte, die webui.py schon für die
         # Hörer-Anzeige nutzt (args statt icecast_cfg, weil das hier VOR
         # dem "if args.webui_port"-Block unten läuft und unabhängig davon
@@ -731,6 +732,19 @@ def main():
         log.info("🎵 Song-Erkennung: %s",
                  "aktiv" if state.song_recognition_cfg["enabled"]
                  else "inaktiv (settings.json: song_recognition.enabled=false)")
+        # Eigene Zeile für den Cloud-Fallback (Phase 2, siehe
+        # song_fingerprint.py) -- "Song-Erkennung: aktiv" oben sagt nichts
+        # darüber aus, ob Cache-Misses zusätzlich per AcoustID identifiziert
+        # werden, das hängt an ZWEI unabhängigen Voraussetzungen
+        # (acoustid_lookup_enabled UND ACOUSTID_API_KEY, siehe
+        # on_unknown_fingerprint()).
+        acoustid_active = (state.song_recognition_cfg["acoustid_lookup_enabled"]
+                           and song_fingerprint.ACOUSTID_API_KEY is not None)
+        log.info("🎵 AcoustID-Cloud-Fallback: %s",
+                 "aktiv" if acoustid_active
+                 else "inaktiv (settings.json: song_recognition.acoustid_lookup_enabled=false)"
+                 if not state.song_recognition_cfg["acoustid_lookup_enabled"]
+                 else "inaktiv (kein ACOUSTID_API_KEY gesetzt, siehe .env)")
 
     httpd = None
     if args.webui_port:
@@ -1903,8 +1917,9 @@ def main():
                 # fingerprint.py-Moduldocstring). Zusätzliches Gate: ohne
                 # Hörer (listener_gate.has_listeners(), zwischengespeichert
                 # -- kein Netzwerk-Call im Hauptloop-Thread) wird weder
-                # gefüttert noch analysiert, spart CPU/AudD-Kontingent für
-                # ein Publikum, das gerade nicht existiert.
+                # gefüttert noch analysiert, spart CPU bzw. unnötige
+                # AcoustID-Anfragen für ein Publikum, das gerade nicht
+                # existiert.
                 song_cfg = state.song_recognition_cfg
                 if (song_recognizer and song_cfg["enabled"]
                         and (not listener_gate or listener_gate.has_listeners())):
@@ -1912,7 +1927,7 @@ def main():
                     song_recognizer.maybe_recognize_async(
                         now, current["id"],
                         song_cfg["interval_seconds"], song_cfg["similarity_threshold"],
-                        song_cfg["cloud_lookup_enabled"],
+                        song_cfg["acoustid_lookup_enabled"],
                     )
                     # "Deutsch!"-Skip-Filter (siehe README.md/ARCHITECTURE.md,
                     # "Deutschsprachige Musik ausblenden"): manuell per Button

@@ -153,10 +153,10 @@ services:
       - VOSK_MODEL_FOLDER_HOST=${VOSK_MODEL_FOLDER:-./data/vosk-model-de}
       - VOSK_MODELS_FOLDER_HOST=${VOSK_MODELS_FOLDER:-./data/vosk-models}
       - MUSIC_LIBRARY_FOLDER_HOST=${MUSIC_LIBRARY_FOLDER:-./data/music_library}
-      # Song-Erkennung Phase 2 (song_fingerprint.py, AudD-Cloud-Lookup) --
+      # Song-Erkennung Phase 2 (song_fingerprint.py, AcoustID-Cloud-Lookup) --
       # leer/nicht gesetzt lässt Phase 2 inaktiv, kein Absturz, siehe
       # env.example.
-      - AUDD_API_TOKEN=${AUDD_API_TOKEN}
+      - ACOUSTID_API_KEY=${ACOUSTID_API_KEY}
     ports:
       - "${WEBUI_PORT:-5000}:5000"
     volumes:

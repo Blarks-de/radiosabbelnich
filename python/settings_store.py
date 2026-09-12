@@ -121,18 +121,21 @@ DEFAULTS = {
     },
     # Song-Erkennung (siehe ARCHITECTURE.md, Abschnitt "Song-Erkennung",
     # und python/song_fingerprint.py): lokaler Chromaprint-Fingerprint-
-    # Cache (Phase 1) + optionaler AudD-Cloud-Lookup bei Cache-Miss
-    # (Phase 2). Default AUS wie jedes neue Feature.
+    # Cache (Phase 1) + optionaler AcoustID-Cloud-Lookup bei Cache-Miss
+    # (Phase 2, bis 2026-09 AudD -- Kontingent verbraucht, kein Abo mehr,
+    # seitdem durch das dauerhaft kostenlose AcoustID ersetzt). Default AUS
+    # wie jedes neue Feature.
     "song_recognition": {
         "enabled": False,
         "interval_seconds": 45.0,
-        "snippet_seconds": 11.0,  # < AudDs 12s-Limit
+        "snippet_seconds": 11.0,  # kurzes Snippet reicht für einen Fingerprint, spart CPU/Bandbreite
         # Eigener Schalter, UNABHÄNGIG von "enabled" oben: lokales
-        # Fingerprinting kostet nichts, ein Cloud-Lookup schon (AudD-
-        # Kontingent) -- wer Phase 1 schon nutzt, soll nicht überraschend
-        # anfangen, für jeden neuen Song Cloud-Requests abzusetzen. Greift
-        # nur, wenn zusätzlich AUDD_API_TOKEN gesetzt ist (siehe .env).
-        "cloud_lookup_enabled": False,
+        # Fingerprinting kostet nichts, ein Cloud-Lookup zumindest unnötige
+        # Anfragen an einen fremden Dienst -- wer Phase 1 schon nutzt, soll
+        # nicht überraschend anfangen, für jeden neuen Song Cloud-Requests
+        # abzusetzen. Greift nur, wenn zusätzlich ACOUSTID_API_KEY gesetzt
+        # ist (siehe .env).
+        "acoustid_lookup_enabled": False,
         # Platzhalter, NICHT empirisch kalibriert (siehe SESSION.md-Muster
         # bei stt_filter.confidence_threshold 0.75) -- vor produktivem
         # Einsatz gegen echtes Stream-Audio nachjustieren.
@@ -145,7 +148,7 @@ DEFAULTS = {
         # Schalter, UNABHÄNGIG von "enabled" oben -- wer nur Phase 1
         # (Wiedererkennung/Anzeige) nutzt, soll nicht überraschend anfangen,
         # Sender zu überspringen. Bewusst wie "enabled"/
-        # "cloud_lookup_enabled" NUR über settings.json/die generische
+        # "acoustid_lookup_enabled" NUR über settings.json/die generische
         # /api/config/settings-Route erreichbar, noch ohne eigene Checkbox
         # auf der Config-Seite (gleiches Muster wie /api/library/scan --
         # bewusst noch ohne UI-Anschluss in dieser Phase, siehe SESSION.md).
@@ -383,7 +386,7 @@ def update(prebuffer_seconds=None, prebuffer_count=None, import_url=None,
            song_recognition_interval_seconds=None,
            song_recognition_snippet_seconds=None,
            song_recognition_similarity_threshold=None,
-           song_recognition_cloud_lookup_enabled=None,
+           song_recognition_acoustid_lookup_enabled=None,
            song_recognition_skip_german_enabled=None,
            update_check_enabled=None,
            night_scan_enabled=None, night_scan_enabled_hours=UNSET,
@@ -594,8 +597,8 @@ def update(prebuffer_seconds=None, prebuffer_count=None, import_url=None,
             if not (lo <= song_recognition_similarity_threshold <= hi):
                 raise ValueError(f"song_recognition_similarity_threshold muss zwischen {lo} und {hi} liegen.")
             sr["similarity_threshold"] = song_recognition_similarity_threshold
-        if song_recognition_cloud_lookup_enabled is not None:
-            sr["cloud_lookup_enabled"] = bool(song_recognition_cloud_lookup_enabled)
+        if song_recognition_acoustid_lookup_enabled is not None:
+            sr["acoustid_lookup_enabled"] = bool(song_recognition_acoustid_lookup_enabled)
         if song_recognition_skip_german_enabled is not None:
             sr["skip_german_enabled"] = bool(song_recognition_skip_german_enabled)
 
