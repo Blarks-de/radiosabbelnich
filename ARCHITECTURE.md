@@ -731,12 +731,56 @@ zusätzlicher State fürs "nicht doppelt für denselben Song auslösen" nötig:
 oben), das leert `_current_song` von selbst. Eigener Schalter,
 UNABHÄNGIG von `song_recognition.enabled`/`cloud_lookup_enabled` — wer nur
 Phase 1 (Wiedererkennung/Anzeige) oder nur das manuelle Anlernen nutzen
-will, soll nicht überraschend anfangen, Sender zu überspringen. Bewusst
-NUR über `settings.json`/die generische `/api/config/settings`-Route
-erreichbar, noch OHNE eigene Checkbox auf der Config-Seite — gleiches
-Muster wie `/api/library/scan` ("bewusst noch ohne UI-Anschluss in dieser
-Phase"): `song_recognition.enabled`/`cloud_lookup_enabled` selbst haben
-bis heute ebenfalls keine UI-Checkbox, nur die generische Settings-API.
+will, soll nicht überraschend anfangen, Sender zu überspringen. Seit
+2026-09-17 eigene Checkbox in `#song-stats-section` auf der Config-Seite
+(eigenes kleines `<form>` + Save-Button, gleiches Muster wie `tls-form`/
+`update-check-form` — bewusst NICHT als sofortiger `change`-Listener, um
+konsistent mit dem Rest der Seite zu bleiben) sowie eine eigene
+Startup-Logzeile ("🇩🇪 Deutsch-Skip: aktiv/inaktiv", direkt neben der
+AcoustID-Statuszeile in `main()`). `song_recognition.enabled`/
+`cloud_lookup_enabled` selbst haben weiterhin keine UI-Checkbox, nur die
+generische Settings-API (gleiches Muster wie `/api/library/scan`) — dieser
+eine Schalter ist die bewusste Ausnahme, weil er im Gegensatz zu den
+beiden anderen unmittelbar hörbares Verhalten (Sender-Wechsel) auslöst.
+
+**Manuelle Song-Kennzeichnung (`source`-Spalte, "✏️ Manuell benennen"-
+Button, seit 2026-09-17)**: Ergänzung zur automatischen Erkennung, kein
+Ersatz — löst das Problem, dass Chromaprint/AcoustID manchmal falsch liegen
+oder gar nichts liefern. Neue, nullable `source TEXT`-Spalte auf
+`song_fingerprints` (gleiches Migrationsmuster wie `is_german_language`
+oben), Werte `NULL` (unklassifiziert), `'acoustid'`, `'manual'`. Einmaliger
+Backfill in derselben Migration: `UPDATE ... SET source = 'acoustid' WHERE
+source IS NULL AND title IS NOT NULL` — vor dieser Spalte konnte ein
+gesetzter Titel nur von AcoustID stammen, das ist also im Gegensatz zu
+einer Rate-Migration eindeutig ableitbar (gleiches Prinzip wie die
+`audd_legacy`-Backfill-Migration bei `song_cloud_request_log`).
+
+Button-Gating identisch zum "Deutsch!"-Button: sichtbar, sobald
+`now_playing_tags.song_id` existiert, unabhängig von bekanntem Titel.
+`POST /api/song/manual-edit` (`{song_id, title, artist, year}`) →
+`SongFingerprintDB.set_manual_metadata()` — direktes UPDATE (`title`,
+`artist`, `year`, `source='manual'`), überschreibt auch eine bereits per
+AcoustID gefüllte Zeile (explizit gewünscht). Validierung serverseitig
+(Titel/Interpret nicht-leer, Jahr `None` oder vierstellig 1000-9999) UND
+clientseitig fürs sofortige Feedback ohne Roundtrip.
+
+Die eigentliche Vorrang-Garantie sitzt NICHT im neuen Endpoint, sondern in
+`set_cloud_metadata()` (dem bestehenden AcoustID-Schreibpfad): dessen
+WHERE-Klausel wurde um `AND (source IS NULL OR source != 'manual')`
+ergänzt, plus `source = 'acoustid'` im SET. Ein späterer oder parallel
+laufender AcoustID-Treffer für denselben Song kann eine `source='manual'`-
+Zeile dadurch nie mehr überschreiben — unabhängig von der zeitlichen
+Reihenfolge zwischen Button-Klick und Cloud-Antwort, exakt dasselbe Muster
+wie der bestehende `COALESCE`-Schutz bei `is_german_language` (Punkt 1
+respektiert Punkt 2, nicht andersrum), nur als direkter WHERE-Ausschluss
+statt `COALESCE`, weil hier — anders als beim Deutsch-Flag — eine
+vorhandene AcoustID-Identifikation vollständig überschrieben statt nur
+ergänzt werden muss.
+
+`source` wird zusätzlich durch `match_or_learn()`/`_set_current_song()`/
+`now_playing_tags` bis in den Player-JS durchgereicht (gleicher Signalweg
+wie `is_german`), damit der Button sein Label wechseln kann ("✏️ Manuell
+benennen" → "✏️ Bearbeiten", sobald `source === 'manual'`).
 
 ## Logging
 

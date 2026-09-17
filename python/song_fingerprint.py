@@ -623,6 +623,23 @@ class SongFingerprintDB:
             if "is_german_language" not in columns:
                 conn.execute("ALTER TABLE song_fingerprints ADD COLUMN is_german_language INTEGER")
                 log.info("🎵 Song-Fingerprint-DB-Schema migriert: Spalte 'is_german_language' ergänzt.")
+            # Manuelle Song-Kennzeichnung (siehe README.md/ARCHITECTURE.md,
+            # "Manuelle Song-Kennzeichnung"): NULL = unklassifiziert (reine
+            # Fingerprint-Wiedererkennung ohne Titel/Interpret-Quelle),
+            # 'acoustid' = per Cloud-Lookup identifiziert, 'manual' = per
+            # "Manuell benennen"-Button gesetzt -- gewinnt immer gegen einen
+            # späteren AcoustID-Treffer, siehe set_cloud_metadata() unten.
+            # Backfill in derselben Migration: vor dieser Spalte konnte ein
+            # gesetzter Titel nur von AcoustID stammen (manuelle Eingabe gab
+            # es noch nicht), also eindeutig nachtragbar -- gleiches Prinzip
+            # wie die audd_legacy-Backfill-Migration weiter unten.
+            if "source" not in columns:
+                conn.execute("ALTER TABLE song_fingerprints ADD COLUMN source TEXT")
+                conn.execute(
+                    "UPDATE song_fingerprints SET source = 'acoustid' WHERE source IS NULL AND title IS NOT NULL"
+                )
+                log.info("🎵 Song-Fingerprint-DB-Schema migriert: Spalte 'source' ergänzt "
+                         "(bestehende Zeilen mit Titel rückwirkend als 'acoustid' markiert).")
             # Kalibrierungs-Logging für similarity_threshold (siehe
             # SESSION.md, Eintrag zu diesem Zwischenschritt): ein Ähnlichkeit-
             # Skalarwert taugt nichts, eine ganze Verteilung von Hit- vs.
@@ -709,20 +726,20 @@ class SongFingerprintDB:
             c = conn.cursor()
             rows = c.execute(
                 "SELECT id, fingerprint_hash, title, artist, play_count, album, year, "
-                "duration_seconds, is_german_language FROM song_fingerprints"
+                "duration_seconds, is_german_language, source FROM song_fingerprints"
             ).fetchall()
 
             best_id, best_score, best_row = None, 0.0, None
-            for row_id, fp_text, title, artist, play_count, album, year, duration_seconds, is_german_language in rows:
+            for row_id, fp_text, title, artist, play_count, album, year, duration_seconds, is_german_language, source in rows:
                 candidate = [int(v) for v in fp_text.split(",")] if fp_text else []
                 score = similarity(fingerprint, candidate)
                 if score > best_score:
                     best_id, best_score, best_row = row_id, score, (
-                        title, artist, play_count, album, year, duration_seconds, is_german_language)
+                        title, artist, play_count, album, year, duration_seconds, is_german_language, source)
 
             now = time.strftime("%Y-%m-%d %H:%M:%S")
             if best_id is not None and best_score >= similarity_threshold:
-                title, artist, play_count, album, year, duration_seconds, is_german_language = best_row
+                title, artist, play_count, album, year, duration_seconds, is_german_language, source = best_row
                 c.execute(
                     "UPDATE song_fingerprints SET play_count = play_count + 1, last_seen = ?, "
                     "station_id = ? WHERE id = ?",
@@ -740,7 +757,7 @@ class SongFingerprintDB:
                         "album": album, "year": year, "duration_seconds": duration_seconds,
                         "play_count": play_count + 1, "similarity": best_score,
                         "is_german": bool(is_german_language) if is_german_language is not None else None,
-                        "new": False}
+                        "source": source, "new": False}
 
             c.execute(
                 "INSERT INTO song_match_log (ts, station_id, similarity, threshold, is_hit, "
@@ -760,7 +777,7 @@ class SongFingerprintDB:
                       "Ähnlichkeit %.2f, Schwelle %.2f)", new_id, best_score, similarity_threshold)
             return {"song_id": new_id, "title": None, "artist": None, "album": None, "year": None,
                     "duration_seconds": None, "play_count": 1, "similarity": best_score,
-                    "is_german": None, "new": True}
+                    "is_german": None, "source": None, "new": True}
         finally:
             conn.close()
 
@@ -785,15 +802,23 @@ class SongFingerprintDB:
         manueller "Deutsch!"-Klick (set_language()) kann diese Zeile
         theoretisch schon VOR der AcoustID-Antwort erreicht haben (Nutzer
         reagiert schneller als der Cloud-Lookup) und darf dadurch nicht
-        wieder überschrieben werden."""
+        wieder überschrieben werden.
+
+        Gleiches gilt für eine manuelle Song-Kennzeichnung (siehe README.md/
+        ARCHITECTURE.md, "Manuelle Song-Kennzeichnung"): die WHERE-Klausel
+        schließt Zeilen mit source='manual' komplett aus, ein späterer/
+        parallel laufender AcoustID-Treffer überschreibt eine manuelle
+        Eingabe also nie -- set_manual_metadata() gewinnt immer, unabhängig
+        von der zeitlichen Reihenfolge."""
         is_german_guess = guess_is_german(artist)
         conn = sqlite3.connect(self.db_path)
         try:
             conn.execute(
                 "UPDATE song_fingerprints SET title = ?, artist = ?, album = ?, year = ?, "
                 "duration_seconds = ?, "
-                "is_german_language = COALESCE(is_german_language, ?) "
-                "WHERE fingerprint_hash = ?",
+                "is_german_language = COALESCE(is_german_language, ?), "
+                "source = 'acoustid' "
+                "WHERE fingerprint_hash = ? AND (source IS NULL OR source != 'manual')",
                 (title, artist, album, year, duration_seconds,
                  1 if is_german_guess else None,
                  fingerprint_hash),
@@ -814,6 +839,29 @@ class SongFingerprintDB:
             cur = conn.execute(
                 "UPDATE song_fingerprints SET is_german_language = ? WHERE id = ?",
                 (1 if is_german else 0, song_id),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+        finally:
+            conn.close()
+
+    def set_manual_metadata(self, song_id: int, title: str, artist: str,
+                             year: Optional[int]) -> bool:
+        """Manuelle Song-Kennzeichnung (siehe README.md/ARCHITECTURE.md,
+        "Manuelle Song-Kennzeichnung"): trägt Titel/Interpret/Jahr direkt
+        ein (legt bei Bedarf auch eine bereits per AcoustID identifizierte
+        Zeile neu fest -- "überschreiben" ist ausdrücklich gewünscht) und
+        setzt source='manual'. Gewinnt ab sofort gegen jeden späteren
+        AcoustID-Treffer, siehe WHERE-Schutz in set_cloud_metadata() oben.
+        Eigene kurzlebige Connection, gleiches Muster wie set_language()
+        gleich oberhalb. Gibt zurück, ob eine Zeile mit dieser `song_id`
+        existierte."""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cur = conn.execute(
+                "UPDATE song_fingerprints SET title = ?, artist = ?, year = ?, source = 'manual' "
+                "WHERE id = ?",
+                (title, artist, year, song_id),
             )
             conn.commit()
             return cur.rowcount > 0
@@ -1122,11 +1170,12 @@ class SongRecognizer:
     def _set_current_song(self, song_id: Optional[int], title: Optional[str],
                            artist: Optional[str], album: Optional[str] = None,
                            year: Optional[int] = None, duration_seconds: Optional[int] = None,
-                           is_german: Optional[bool] = None):
+                           is_german: Optional[bool] = None, source: Optional[str] = None):
         with self._lock:
             self._current_song = (
                 {"song_id": song_id, "title": title, "artist": artist, "album": album,
-                 "year": year, "duration_seconds": duration_seconds, "is_german": is_german}
+                 "year": year, "duration_seconds": duration_seconds, "is_german": is_german,
+                 "source": source}
                 if song_id is not None else None
             )
 
@@ -1182,7 +1231,8 @@ class SongRecognizer:
                 if not match["new"]:
                     self._set_current_song(match["song_id"], match.get("title"), match.get("artist"),
                                             match.get("album"), match.get("year"),
-                                            match.get("duration_seconds"), match.get("is_german"))
+                                            match.get("duration_seconds"), match.get("is_german"),
+                                            match.get("source"))
                 else:
                     result = on_unknown_fingerprint(
                         self.db, snapshot, fp, self.sample_rate, station_id, cloud_lookup_enabled
@@ -1192,7 +1242,13 @@ class SongRecognizer:
                     # zusätzlich direkt auf `result` angewendet, damit der
                     # laufende "jetzt läuft"-Zustand (_current_song) nicht
                     # erst auf den nächsten match_or_learn()-Durchlauf
-                    # warten muss, um is_german zu zeigen/zu skippen.
+                    # warten muss, um is_german zu zeigen/zu skippen. Gleicher
+                    # Grund für "acoustid" hier statt eines DB-Rereads: match
+                    # war "new" (gerade erst angelegt), source kann an dieser
+                    # Stelle also nur None (kein AcoustID-Treffer) oder
+                    # 'acoustid' (Treffer, gerade in set_cloud_metadata()
+                    # geschrieben) sein -- 'manual' ist unmöglich, die Zeile
+                    # existierte vor diesem Aufruf noch gar nicht.
                     self._set_current_song(
                         match["song_id"],
                         result.get("title") if result else None,
@@ -1201,6 +1257,7 @@ class SongRecognizer:
                         result.get("year") if result else None,
                         result.get("duration_seconds") if result else None,
                         guess_is_german(result.get("artist")) if result else None,
+                        "acoustid" if result else None,
                     )
             except Exception as e:
                 log.warning("⚠ Song-Erkennungs-Sample übersprungen (Fehler: %s)", e)

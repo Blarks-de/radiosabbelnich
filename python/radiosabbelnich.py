@@ -745,6 +745,15 @@ def main():
                  else "inaktiv (settings.json: song_recognition.acoustid_lookup_enabled=false)"
                  if not state.song_recognition_cfg["acoustid_lookup_enabled"]
                  else "inaktiv (kein ACOUSTID_API_KEY gesetzt, siehe .env)")
+        # Eigene Zeile für den Deutsch-Skip-Schalter (siehe README.md/
+        # ARCHITECTURE.md, "Deutschsprachige Musik ausblenden") --
+        # UNABHÄNGIG von "enabled"/"acoustid_lookup_enabled" oben, siehe
+        # dortige Kommentare: wer nur Wiedererkennung/Anzeige nutzt, soll
+        # nicht erst im Log nach dem Grund suchen müssen, warum plötzlich
+        # Sender übersprungen werden (oder eben nicht).
+        log.info("🇩🇪 Deutsch-Skip: %s",
+                 "aktiv" if state.song_recognition_cfg.get("skip_german_enabled")
+                 else "inaktiv (settings.json: song_recognition.skip_german_enabled=false)")
 
     httpd = None
     if args.webui_port:

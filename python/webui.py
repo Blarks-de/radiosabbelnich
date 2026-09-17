@@ -1560,12 +1560,14 @@ def _build_status(state: SwitcherState, icecast_cfg: dict, host_paths: dict = No
                                          "album": recognized.get("album"), "year": recognized.get("year"),
                                          "duration_seconds": recognized.get("duration_seconds"),
                                          "song_id": recognized.get("song_id"),
-                                         "is_german": recognized.get("is_german")}
+                                         "is_german": recognized.get("is_german"),
+                                         "source": recognized.get("source")}
                 else:
                     now_playing_tags = {"title": None, "artist": None, "album": None, "year": None,
                                          "pending": True, "paused_no_listeners": False,
                                          "song_id": recognized.get("song_id") if recognized else None,
-                                         "is_german": recognized.get("is_german") if recognized else None}
+                                         "is_german": recognized.get("is_german") if recognized else None,
+                                         "source": recognized.get("source") if recognized else None}
                     # Statt des neutralen "🔍 noch nicht erkannt"-Platzhalters
                     # zeigt die Player-Seite hier den konkreten AcoustID-Grund
                     # an, falls Cloud-Lookup aktiv ist, aber gerade nicht
@@ -1673,6 +1675,14 @@ _PAGE_HTML = """<!doctype html>
     font-size: 1.1rem; cursor: pointer; color: inherit; opacity: .7;
   }
   .modal-close:hover { opacity: 1; }
+  .manual-edit-field { text-align: left; margin-bottom: .6rem; }
+  .manual-edit-field label { display: block; font-size: .8rem; color: #888; margin-bottom: .2rem; }
+  .manual-edit-field input {
+    width: 100%; box-sizing: border-box; padding: .4rem; border-radius: .3rem;
+    border: 1px solid #999; background: none; color: inherit; font-size: 1rem;
+  }
+  .manual-edit-error { color: #c0392b; font-size: .8rem; margin: 0 0 .6rem; text-align: left; }
+  .manual-edit-error[hidden] { display: none; }
   #qr-code-container {
     background: #fff; padding: .75rem; border-radius: .4rem; display: inline-block;
   }
@@ -1827,10 +1837,33 @@ _PAGE_HTML = """<!doctype html>
   </div>
 </div>
 
+<div id="manual-edit-modal" class="modal-overlay" hidden>
+  <div class="modal-box">
+    <button id="manual-edit-modal-close" class="modal-close" aria-label="Schließen" data-i18n-aria-label="idx_manual_edit_modal_close_aria">✕</button>
+    <h2 id="manual-edit-modal-title" data-i18n="idx_manual_edit_modal_title">Song manuell benennen</h2>
+    <div class="manual-edit-field">
+      <label for="manual-edit-title" data-i18n="idx_manual_edit_field_title">Titel</label>
+      <input type="text" id="manual-edit-title" required>
+    </div>
+    <div class="manual-edit-field">
+      <label for="manual-edit-artist" data-i18n="idx_manual_edit_field_artist">Interpret</label>
+      <input type="text" id="manual-edit-artist" required>
+    </div>
+    <div class="manual-edit-field">
+      <label for="manual-edit-year" data-i18n="idx_manual_edit_field_year">Erscheinungsjahr (optional)</label>
+      <input type="number" id="manual-edit-year" min="1000" max="9999" step="1">
+    </div>
+    <p id="manual-edit-error" class="manual-edit-error" hidden></p>
+    <button id="manual-edit-save" data-i18n="idx_manual_edit_save_btn">💾 Speichern</button>
+    <button id="manual-edit-cancel" data-i18n="idx_manual_edit_cancel_btn">Abbrechen</button>
+  </div>
+</div>
+
 <div class="action-buttons">
   <button id="btn-zapping-error" title="Letzten fälschlich erkannten Werbe-Clip aus der Datenbank löschen" data-i18n="idx_zapping_error_btn" data-i18n-title="idx_zapping_error_title">🛑 Zapping-Fehler</button>
   <button id="btn-gesabbel" title="Sofort weiterschalten, weil hier gerade geredet wird" data-i18n="idx_gesabbel_btn" data-i18n-title="idx_gesabbel_title">⚡ ZAPPEN!</button>
   <button id="btn-mark-german" title="Aktuell erkannten Song als deutschsprachig markieren (zum künftigen Ausblenden)" data-i18n="idx_mark_german_btn" data-i18n-title="idx_mark_german_title" hidden>🇩🇪 Deutsch!</button>
+  <button id="btn-manual-edit" title="Titel/Interpret/Jahr des aktuellen Songs manuell eintragen oder korrigieren" data-i18n="idx_manual_edit_btn" data-i18n-title="idx_manual_edit_title" hidden>✏️ Manuell benennen</button>
   <button id="btn-news-break-skip" title="Andere MP3 während der Nachrichten-Pause (Pause bleibt aktiv)" data-i18n="idx_news_break_skip_btn" data-i18n-title="idx_news_break_skip_title" disabled>⏭ Andere Pause-MP3</button>
 </div>
 <div class="filter-toggle-row">
@@ -2085,6 +2118,22 @@ function applyStatus(data) {
     markGermanBtn.textContent = npTags.is_german ? t('idx_mark_german_done_btn') : t('idx_mark_german_btn');
   } else {
     markGermanBtn.hidden = true;
+  }
+
+  // "Manuell benennen"-Button (siehe README.md, "Manuelle Song-
+  // Kennzeichnung"): gleiches Gating wie der Deutsch-Button oben -- schon
+  // sichtbar, sobald eine song_id existiert, unabhängig von einem bereits
+  // bekannten Titel (der Nutzer soll auch einen noch komplett
+  // unidentifizierten Song benennen können). Label wechselt auf
+  // "Bearbeiten", sobald die Zeile schon source='manual' trägt, damit
+  // klar ist, dass hier eine bestehende manuelle Eingabe korrigiert wird.
+  const manualEditBtn = document.getElementById('btn-manual-edit');
+  if (npTags && npTags.song_id != null) {
+    manualEditBtn.hidden = false;
+    manualEditBtn.textContent = npTags.source === 'manual'
+      ? t('idx_manual_edit_done_btn') : t('idx_manual_edit_btn');
+  } else {
+    manualEditBtn.hidden = true;
   }
 
   const filterBtn = document.getElementById('btn-filter-toggle');
@@ -2460,6 +2509,77 @@ document.getElementById('btn-mark-german').addEventListener('click', async () =>
     }
   } catch (e) {
     setActionMsg(t('common_error', {msg: e.message}));
+  }
+});
+
+// "Manuell benennen"-Modal: song_id kommt wie beim Deutsch-Button aus dem
+// zuletzt empfangenen /api/status (lastStatus), nicht neu abgefragt -- die
+// Erkennung selbst läuft unverändert im Hintergrund weiter, dieser Dialog
+// überschreibt nur die DB-Zeile zur bereits bekannten song_id.
+function closeManualEditModal() {
+  document.getElementById('manual-edit-modal').hidden = true;
+}
+
+function openManualEditModal() {
+  const npTags = lastStatus && lastStatus.now_playing_tags;
+  const songId = npTags && npTags.song_id;
+  if (songId == null) return;
+  document.getElementById('manual-edit-title').value = npTags.title || '';
+  document.getElementById('manual-edit-artist').value = npTags.artist || '';
+  document.getElementById('manual-edit-year').value = npTags.year != null ? npTags.year : '';
+  const err = document.getElementById('manual-edit-error');
+  err.hidden = true;
+  err.textContent = '';
+  document.getElementById('manual-edit-modal').hidden = false;
+}
+
+document.getElementById('btn-manual-edit').addEventListener('click', openManualEditModal);
+document.getElementById('manual-edit-modal-close').addEventListener('click', closeManualEditModal);
+document.getElementById('manual-edit-cancel').addEventListener('click', closeManualEditModal);
+document.getElementById('manual-edit-modal').addEventListener('click', (ev) => {
+  if (ev.target.id === 'manual-edit-modal') closeManualEditModal();
+});
+document.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape') closeManualEditModal();
+});
+
+document.getElementById('manual-edit-save').addEventListener('click', async () => {
+  const npTags = lastStatus && lastStatus.now_playing_tags;
+  const songId = npTags && npTags.song_id;
+  if (songId == null) return;
+  const errEl = document.getElementById('manual-edit-error');
+  const showErr = (msg) => { errEl.textContent = msg; errEl.hidden = false; };
+  const title = document.getElementById('manual-edit-title').value.trim();
+  const artist = document.getElementById('manual-edit-artist').value.trim();
+  const yearRaw = document.getElementById('manual-edit-year').value.trim();
+  if (!title || !artist) {
+    showErr(t('idx_manual_edit_required_error'));
+    return;
+  }
+  let year = null;
+  if (yearRaw !== '') {
+    year = parseInt(yearRaw, 10);
+    if (!Number.isInteger(year) || yearRaw.length !== 4 || year < 1000 || year > 9999) {
+      showErr(t('idx_manual_edit_year_error'));
+      return;
+    }
+  }
+  try {
+    const res = await fetch('/api/song/manual-edit', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({song_id: songId, title, artist, year}),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      closeManualEditModal();
+      setActionMsg(t('idx_manual_edit_saved'));
+      setTimeout(refresh, 800);
+    } else {
+      showErr(data.error);
+    }
+  } catch (e) {
+    showErr(t('common_error', {msg: e.message}));
   }
 });
 
@@ -3674,7 +3794,15 @@ _CONFIG_PAGE_HTML = """<!doctype html>
 <section id="song-stats-section">
   <h2 style="margin-top:0" data-i18n="cfg_songstats_heading">🎵 Song-Erkennung – Statistik</h2>
   <p class="hint" data-i18n="cfg_songstats_hint">Kennzahlen aus den bestehenden Song-Erkennungs-Tabellen, zum
-    Beobachten/Kalibrieren -- rein informativ, keine Einstellungen hier.</p>
+    Beobachten/Kalibrieren -- der Rest dieser Sektion ist rein informativ, bis auf den Schalter unten.</p>
+
+  <form id="song-skip-german-form">
+    <label class="checkbox">
+      <input type="checkbox" id="song-skip-german-enabled">
+      <span data-i18n="cfg_song_skip_german_label">Als Deutsch markierte Songs überspringen</span>
+    </label>
+    <button type="submit" data-i18n="common_save">Speichern</button>
+  </form>
 
   <p id="song-stats-disabled" data-i18n="cfg_songstats_disabled" hidden>Song-Erkennung ist deaktiviert -- keine
     Statistik verfügbar.</p>
@@ -4518,6 +4646,9 @@ async function loadSettings() {
     renderStationsList();  // Sprache-Dropdown pro Sender braucht lastSttCfg.languages, siehe dort
     if (!voskDownloadPolling) loadVoskCatalog();  // während eines laufenden Downloads nicht überschreiben
 
+    const songRecognition = settings.song_recognition || {};
+    document.getElementById('song-skip-german-enabled').checked = !!songRecognition.skip_german_enabled;
+
     const nightScan = settings.night_scan || {};
     document.getElementById('night-scan-enabled').checked = !!nightScan.enabled;
     const nsHours = nightScan.enabled_hours;
@@ -4609,6 +4740,21 @@ document.getElementById('update-check-form').addEventListener('submit', async (e
       body: JSON.stringify({update_check_enabled}),
     });
     showMsg(t('cfg_update_check_saved'), false);
+  } catch (e) {
+    showMsg(t('common_error', {msg: e.message}), true);
+  }
+});
+
+document.getElementById('song-skip-german-form').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const song_recognition_skip_german_enabled = document.getElementById('song-skip-german-enabled').checked;
+  try {
+    await api('/api/config/settings', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({song_recognition_skip_german_enabled}),
+    });
+    showMsg(t('cfg_song_skip_german_saved'), false);
   } catch (e) {
     showMsg(t('common_error', {msg: e.message}), true);
   }
@@ -5503,6 +5649,8 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                 self._handle_skip()
             elif self.path == "/api/song/mark-german":
                 self._handle_mark_german()
+            elif self.path == "/api/song/manual-edit":
+                self._handle_manual_edit()
             elif self.path == "/api/news-break/skip":
                 self._handle_news_break_skip()
             elif self.path == "/api/filter/toggle":
@@ -5867,6 +6015,51 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                 return
             log.info("🇩🇪 Song #%d manuell als %s markiert.",
                      song_id, "deutsch" if is_german else "nicht deutsch")
+            self._send_json({"ok": True})
+
+        def _handle_manual_edit(self):
+            # "Manuell benennen"-Button auf der Player-Seite (siehe
+            # README.md, "Manuelle Song-Kennzeichnung"): schreibt Titel/
+            # Interpret/Jahr direkt in song_fingerprints und markiert die
+            # Zeile als source='manual' -- gewinnt danach dauerhaft gegen
+            # jeden AcoustID-Treffer (Schutz sitzt in
+            # SongFingerprintDB.set_cloud_metadata(), nicht hier). Gleiches
+            # song_id-Gating wie _handle_mark_german() oben: braucht keine
+            # eigene Fingerprint-Identifikation, song_id kommt bereits aus
+            # der laufenden Erkennung (now_playing_tags.song_id).
+            song_recognizer = getattr(state, "song_recognizer", None)
+            if not song_recognizer:
+                self._send_json({"ok": False, "error": "Song-Erkennung ist nicht aktiv."}, status=400)
+                return
+            payload = self._read_json_body()
+            song_id = payload.get("song_id")
+            title = payload.get("title")
+            artist = payload.get("artist")
+            year = payload.get("year")
+            if not isinstance(song_id, int) or isinstance(song_id, bool):
+                self._send_json({"ok": False, "error": "song_id (int) erforderlich."}, status=400)
+                return
+            title = title.strip() if isinstance(title, str) else ""
+            artist = artist.strip() if isinstance(artist, str) else ""
+            if not title or not artist:
+                self._send_json({"ok": False, "error": "Titel und Interpret sind Pflichtfelder."}, status=400)
+                return
+            if year is not None:
+                if not isinstance(year, int) or isinstance(year, bool) or not (1000 <= year <= 9999):
+                    self._send_json(
+                        {"ok": False, "error": "Jahr muss eine vierstellige Zahl sein (oder leer)."}, status=400)
+                    return
+            try:
+                found = song_recognizer.db.set_manual_metadata(song_id, title, artist, year)
+            except Exception as e:
+                log.exception("⚠ Manuelle Song-Kennzeichnung für Song #%s fehlgeschlagen.", song_id)
+                self._send_json({"ok": False, "error": f"Datenbankfehler: {e}"}, status=500)
+                return
+            if not found:
+                self._send_json({"ok": False, "error": "Unbekannte song_id."}, status=404)
+                return
+            log.info("✏️ Song #%d manuell benannt: '%s' – '%s' (Jahr: %s).",
+                     song_id, artist, title, year if year is not None else "unbekannt")
             self._send_json({"ok": True})
 
         def _handle_import_start(self):

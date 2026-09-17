@@ -20,6 +20,7 @@
   - [Konfiguration im Detail](#konfiguration-im-detail)
 - [Song-Erkennung](#song-erkennung)
   - [Deutschsprachige Musik ausblenden](#deutschsprachige-musik-ausblenden)
+  - [Manuelle Song-Kennzeichnung](#manuelle-song-kennzeichnung)
 - [Sprache des Web-Interfaces](#sprache-des-web-interfaces)
 - [Web-Interface](#web-interface)
   - [Als App installieren (PWA)](#als-app-installieren-pwa)
@@ -52,6 +53,7 @@
   - [Configuration in detail](#configuration-in-detail)
 - [Song recognition](#song-recognition)
   - [Hiding German-language music](#hiding-german-language-music)
+  - [Manual song tagging](#manual-song-tagging)
 - [Web interface language](#web-interface-language)
 - [Web interface](#web-interface-1)
   - [Installing as an app (PWA)](#installing-as-an-app-pwa)
@@ -678,7 +680,7 @@ und identifiziert unbekannte Songs optional per AcoustID-Cloud-Lookup
 ersetzt seit 2026-09 das frühere AudD, dessen Kontingent verbraucht war und
 für das es kein Abo mehr gab). Default AUS wie jedes neue Feature, nur über
 `settings.json`/die `/api/config`-API aktivierbar (kein Schalter auf der
-Config-Seite).
+Config-Seite) — Ausnahme ist `skip_german_enabled`, siehe unten.
 
 Läuft nur im Radio-Modus, während gerade Musik erkannt wird: alle
 `interval_seconds` wird ein `snippet_seconds` langes Sample per `fpcalc`
@@ -735,9 +737,11 @@ Anzeige zeigt dann nur, was vorhanden ist.
   markierte Songs (siehe "Deutschsprachige Musik ausblenden" unten).
   Eigener Schalter, UNABHÄNGIG von `enabled`/`acoustid_lookup_enabled` oben
   — wer nur die Wiedererkennung/Anzeige nutzen will, soll nicht überraschend
-  Sender übersprungen bekommen. Wie `enabled`/`acoustid_lookup_enabled`
-  bislang nur über `settings.json`/die `/api/config`-API steuerbar, keine
-  eigene Checkbox auf der Config-Seite.
+  Sender übersprungen bekommen. Eigene Checkbox in der Statistik-Sektion auf
+  der Config-Seite ("🎵 Song-Erkennung – Statistik", direkt oberhalb der
+  informativen Kennzahlen — der einzige echte Einstellungs-Schalter dort).
+  Aktueller Status steht außerdem als eigene Zeile im Startup-Log
+  ("🇩🇪 Deutsch-Skip: aktiv/inaktiv").
 
 Jeder Vergleich landet zusätzlich in `song_match_log`
 (`data/song_fingerprints.db`) — `python3 check_song_calibration.py`
@@ -819,6 +823,25 @@ Der eigentliche Skip-Filter ist über `song_recognition.skip_german_enabled`
 (siehe oben) an-/abschaltbar — steht die DB noch leer/unklassifiziert da,
 tut der Filter nichts, er wächst mit der Zeit (Button-Nutzung + kuratierte
 Liste) mit.
+
+### Manuelle Song-Kennzeichnung
+
+Automatische Erkennung (lokaler Fingerprint-Cache + AcoustID) liegt
+manchmal daneben oder bleibt ganz stumm — dafür gibt es "✏️ Manuell
+benennen" direkt neben dem "🇩🇪 Deutsch!"-Button auf der Player-Seite.
+Gleiches Sichtbarkeits-Gating wie dieser: erscheint, sobald der laufende
+Song überhaupt eine `song_id` hat (lokaler Fingerprint-Treffer reicht,
+Titel/Interpret müssen noch nicht bekannt sein).
+
+Ein Klick öffnet eine kleine Eingabemaske mit drei Feldern — Titel und
+Interpret sind Pflicht, Erscheinungsjahr optional (falls gesetzt: vierstellige
+Zahl). Beim Speichern wird die per Fingerprint bereits identifizierte
+`song_fingerprints`-Zeile mit den eingetragenen Werten überschrieben und als
+`source = 'manual'` markiert. Dieses Flag gewinnt danach **dauerhaft** gegen
+einen (auch später eintreffenden) AcoustID-Treffer — eine manuelle Korrektur
+wird also nie von einer nachfolgenden automatischen Fehlerkennung wieder
+überschrieben. Schon benannte Songs zeigen den Button stattdessen als
+"✏️ Bearbeiten" an (Werte lassen sich jederzeit erneut korrigieren).
 
 ## Sprache des Web-Interfaces
 
@@ -2036,7 +2059,7 @@ and optionally identifies unknown songs via an AcoustID cloud lookup
 the previous AudD as of 2026-09, whose quota was exhausted and which had no
 subscription option anymore). Off by default like every new feature, only
 enable it via `settings.json`/the `/api/config` API (no toggle on the
-config page).
+config page) — the exception is `skip_german_enabled`, see below.
 
 Only runs in radio mode while music is currently detected: every
 `interval_seconds`, a `snippet_seconds`-long sample is fingerprinted via
@@ -2089,10 +2112,11 @@ all three, the display then just shows whatever is available.
 - **`skip_german_enabled`** — automatically skips songs marked as
   German-language (see "Hiding German-language music" below). Own switch,
   INDEPENDENT of `enabled`/`acoustid_lookup_enabled` above — anyone who
-  only wants recognition/display shouldn't get surprise station skips. Like
-  `enabled`/`acoustid_lookup_enabled`, only controllable via
-  `settings.json`/the `/api/config` API so far, no dedicated checkbox on
-  the config page.
+  only wants recognition/display shouldn't get surprise station skips. Own
+  checkbox in the statistics section on the config page ("🎵 Song
+  recognition – statistics", right above the informational metrics — the
+  only actual settings toggle there). Current status is also shown as its
+  own line in the startup log ("🇩🇪 Deutsch-Skip: aktiv/inaktiv").
 
 Every comparison is also logged to `song_match_log`
 (`data/song_fingerprints.db`) — `python3 check_song_calibration.py`
@@ -2171,6 +2195,24 @@ three ways:
 The actual skip filter is toggled via `song_recognition.skip_german_enabled`
 (see above) — while the DB is still empty/unclassified, the filter does
 nothing; it grows over time (button use + curated list).
+
+### Manual song tagging
+
+Automatic recognition (local fingerprint cache + AcoustID) sometimes gets
+it wrong or stays silent entirely — for that there's "✏️ Name manually"
+right next to the "🇩🇪 German!" button on the player page. Same visibility
+gating as that button: appears as soon as the currently playing song has a
+`song_id` at all (a local fingerprint match is enough, title/artist don't
+need to be known yet).
+
+Clicking it opens a small input form with three fields — title and artist
+are required, release year is optional (if set: a four-digit number). On
+save, the `song_fingerprints` row already identified via fingerprint is
+overwritten with the entered values and flagged `source = 'manual'`. That
+flag then **permanently** wins against a (even later-arriving) AcoustID
+match — a manual correction is therefore never overwritten again by a
+subsequent automatic misidentification. Already-tagged songs show the
+button as "✏️ Edit" instead (values can be corrected again at any time).
 
 ## Web interface language
 

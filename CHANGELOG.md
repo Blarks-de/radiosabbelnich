@@ -18,7 +18,9 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 ## Aktueller Stand
 
 **Zuletzt umgesetzt** (siehe Datumsabschnitte unten für Details):
-- Deutschsprachige Musik ausblenden (kuratierte Liste + "Deutsch!"-Button + Skip-Filter)
+- Manuelle Song-Kennzeichnung ("✏️ Manuell benennen"-Button, gewinnt dauerhaft gegen AcoustID)
+- Deutschsprachige Musik ausblenden (kuratierte Liste + "Deutsch!"-Button + Skip-Filter,
+  jetzt mit eigener Checkbox auf der Config-Seite)
 - Nächtlicher Sender-Scan (Whisper-Sprach-ID, WebUI-integriert, Vorschlag statt Automatik)
 - Automatische Sender-Sprach-Erkennung (`vosk_language_check.py`)
 - Vosk-Sprachmodelle per WebUI herunterladen (kein Konsolenzugriff mehr nötig)
@@ -33,6 +35,18 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
   Logging/-Skript (`check_song_calibration.py`)
 - Werbeblock-Vorbuffering + Sprache-Gate für die Nachrichten-Pause
 - GPLv3-Lizenzierung, Inhaltsverzeichnisse für README.md/ARCHITECTURE.md
+
+## 2026-09-17
+
+- Manuelle Song-Kennzeichnung: neuer "✏️ Manuell benennen"-Button auf der
+  Player-Seite (neben "🇩🇪 Deutsch!"), öffnet ein Modal für Titel/Interpret/
+  Erscheinungsjahr. Neue `source`-Spalte auf `song_fingerprints`
+  (`NULL`/`'acoustid'`/`'manual'`) — eine manuelle Eingabe gewinnt danach
+  dauerhaft gegen jeden späteren AcoustID-Treffer für denselben Song.
+- Deutsch-Skip-Schalter (`song_recognition.skip_german_enabled`) bekommt
+  eine eigene Checkbox in der Song-Erkennung-Statistik-Sektion auf der
+  Config-Seite sowie eine eigene Startup-Logzeile — Backend/Skip-Logik
+  selbst existierten schon seit dem 2026-09-09-Eintrag unten.
 
 ## 2026-09-12
 
