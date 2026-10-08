@@ -94,6 +94,9 @@ Details und Abwägung in `android-app/SESSION.md`.
   Datum/Uhrzeit des Commits nach, bis der Nutzer explizit etwas anderes
   vorgibt (z.B. einen MINOR/MAJOR-Sprung). Vor jedem Commit prüfen/
   nachziehen, wie bei SESSION.md/README.md oben.
+  Das Release-Badge am Kopf der `README.md` (beide Sprachteile, statisches
+  shields.io-Badge) trägt dieselbe Version samt Datum/Uhrzeit und wird bei
+  jedem Bump mitgezogen.
 
 ## Betrieb und Deployment
 

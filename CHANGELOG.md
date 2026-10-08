@@ -36,6 +36,13 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 - Werbeblock-Vorbuffering + Sprache-Gate für die Nachrichten-Pause
 - GPLv3-Lizenzierung, Inhaltsverzeichnisse für README.md/ARCHITECTURE.md
 
+## 2026-10-08
+
+- README: Badge-Zeile am Kopf (Release mit Datum/Uhrzeit aus `VERSION`, Build,
+  Downloads, Lizenz, Docker, Windows/Linux/macOS), in beiden Sprachteilen.
+  Das Release-Badge ist statisch und wird bei jedem Versions-Bump mitgezogen
+  (Regel in `CLAUDE.md`).
+
 ## 2026-09-17
 
 - Manuelle Song-Kennzeichnung: neuer "✏️ Manuell benennen"-Button auf der

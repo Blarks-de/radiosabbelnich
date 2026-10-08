@@ -73,7 +73,16 @@
 - [Third-Party Open Source Components](#third-party-open-source-components)
 - [License](#license)
 
-![License](https://img.shields.io/badge/license-GPLv3-blue.svg)
+<p align="center">
+  <a href="VERSION"><img src="https://img.shields.io/static/v1?label=release&message=v1.2.54%20%C2%B7%202026-10-08%2014:49%20Uhr&color=blue" alt="Release"></a>
+  <img src="https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white" alt="Docker">
+  <img src="https://img.shields.io/badge/build-docker%20compose-2496ED?logo=docker&logoColor=white" alt="Build">
+  <a href="https://github.com/Blarks-de/radiosabbelnich/releases"><img src="https://img.shields.io/github/downloads/Blarks-de/radiosabbelnich/total?label=downloads" alt="Downloads"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPLv3-blue.svg" alt="License"></a>
+  <img src="https://img.shields.io/badge/Windows-Docker%20Desktop-0078D6?logo=windows&logoColor=white" alt="Windows">
+  <img src="https://img.shields.io/badge/Linux-supported-FCC624?logo=linux&logoColor=black" alt="Linux">
+  <img src="https://img.shields.io/badge/macOS-Docker%20Desktop-000000?logo=apple&logoColor=white" alt="macOS">
+</p>
 
 *[🇬🇧 English version further below](#radiosabbelnich-english-version)*
 
@@ -1480,7 +1489,16 @@ Lizenziert unter der GNU General Public License v3.0 (GPLv3), siehe
 
 # RadioSabbelNich (English version)
 
-![License](https://img.shields.io/badge/license-GPLv3-blue.svg)
+<p align="center">
+  <a href="VERSION"><img src="https://img.shields.io/static/v1?label=release&message=v1.2.54%20%C2%B7%202026-10-08%2014:49%20Uhr&color=blue" alt="Release"></a>
+  <img src="https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white" alt="Docker">
+  <img src="https://img.shields.io/badge/build-docker%20compose-2496ED?logo=docker&logoColor=white" alt="Build">
+  <a href="https://github.com/Blarks-de/radiosabbelnich/releases"><img src="https://img.shields.io/github/downloads/Blarks-de/radiosabbelnich/total?label=downloads" alt="Downloads"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPLv3-blue.svg" alt="License"></a>
+  <img src="https://img.shields.io/badge/Windows-Docker%20Desktop-0078D6?logo=windows&logoColor=white" alt="Windows">
+  <img src="https://img.shields.io/badge/Linux-supported-FCC624?logo=linux&logoColor=black" alt="Linux">
+  <img src="https://img.shields.io/badge/macOS-Docker%20Desktop-000000?logo=apple&logoColor=white" alt="macOS">
+</p>
 
 RadioSabbelNich listens to several internet radio stations at once and
 automatically switches away the moment someone starts talking —
