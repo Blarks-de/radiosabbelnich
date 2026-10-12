@@ -1,5 +1,5 @@
 #!/bin/bash
-# Alles-in-einem-Wrapper für RadioSabbelNich: check/start/stop/restart/status
+# Alles-in-einem-Wrapper für RadioSabbelNich: check/start/stop/restart/status/update
 # in einem Kommando, statt sich docker-compose-Aufrufe zu merken oder
 # zwischen mehreren Skripten zu wechseln.
 #
@@ -22,6 +22,10 @@
 #             will, ruft vorher "check" separat auf.
 #   stop    - docker compose stop.
 #   restart - stop, dann start.
+#   update  - git fetch + pull --ff-only gegen den Remote (Default origin,
+#             per RSN_UPDATE_REMOTE überschreibbar), danach Rebuild/Neustart
+#             wie "start". Bricht ab, wenn lokale Änderungen mit den
+#             neu eingehenden kollidieren würden.
 #   status  - Container-Zustand, Erreichbarkeit (inkl. Tailscale/Internet),
 #             MP3-Ordner, RAM/HD, Live-Stand übers Web-Interface (Default
 #             ohne Argument -- häufigster Aufruf: "läuft der Stack gerade?").
@@ -57,11 +61,12 @@ draw_bar() {
 }
 
 usage() {
-    echo "Verwendung: $0 [check|start|stop|restart|status]"
+    echo "Verwendung: $0 [check|start|stop|restart|update|status]"
     echo "  check   - Preflight-Diagnose (Docker/.env/MP3-Ordner/Ports), startet nichts"
     echo "  start   - System-Check + docker compose up -d --build"
     echo "  stop    - Stack anhalten (docker compose stop)"
     echo "  restart - stop, dann start"
+    echo "  update  - neuen Stand per git pull holen, danach Rebuild + Neustart"
     echo "  status  - aktueller Zustand (Default ohne Argument)"
 }
 
@@ -622,6 +627,100 @@ cmd_restart() {
     cmd_start
 }
 
+cmd_update() {
+    local remote="${RSN_UPDATE_REMOTE:-origin}"
+    local branch local_ver remote_ver
+
+    echo "🔄 Update-Prüfung (Remote: $remote)"
+    echo
+
+    if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        echo -e "${RED}❌ Kein Git-Checkout -- Update nur per git clone/pull möglich.${NC}"
+        exit 1
+    fi
+    if ! git remote get-url "$remote" >/dev/null 2>&1; then
+        echo -e "${RED}❌ Git-Remote '$remote' existiert nicht (vorhanden: $(git remote | tr '\n' ' ')).${NC}"
+        exit 1
+    fi
+    branch=$(git rev-parse --abbrev-ref HEAD)
+    if [ "$branch" = "HEAD" ]; then
+        echo -e "${RED}❌ Detached HEAD -- bitte erst einen Branch auschecken.${NC}"
+        exit 1
+    fi
+
+    if ! git fetch --quiet "$remote" "$branch"; then
+        echo -e "${RED}❌ git fetch von '$remote' fehlgeschlagen (Netz/SSH-Key/Tailscale?).${NC}"
+        exit 1
+    fi
+
+    local_ver=$(cat VERSION 2>/dev/null || echo "unbekannt")
+    remote_ver=$(git show "FETCH_HEAD:VERSION" 2>/dev/null || echo "unbekannt")
+
+    if [ -z "$(git rev-list HEAD..FETCH_HEAD)" ]; then
+        echo -e "${GREEN}✅ Bereits aktuell: $local_ver${NC}"
+        return
+    fi
+
+    echo "⬆️  Lokal:  $local_ver"
+    echo "⬆️  Remote: $remote_ver"
+    echo
+
+    # Bewusst NICHT "irgendeine lokale Änderung = Abbruch": data/settings.json
+    # ist getrackt, wird aber vom laufenden Dienst selbst laufend umgeschrieben
+    # (z.B. update_check-Zustand) und wäre damit praktisch immer "dirty". Nur
+    # Dateien, die lokal geändert sind UND im Update ebenfalls vorkommen,
+    # lassen den Pull tatsächlich scheitern bzw. würden überschrieben.
+    local conflicts
+    conflicts=$(comm -12 \
+        <(git diff --name-only HEAD | sort) \
+        <(git diff --name-only HEAD FETCH_HEAD | sort))
+    if [ -n "$conflicts" ]; then
+        echo -e "${RED}❌ Lokale Änderungen kollidieren mit dem Update -- Abbruch, nichts verändert:${NC}"
+        printf '   %s\n' $conflicts
+        echo "   Erst committen oder per 'git stash' zur Seite legen, dann erneut '$0 update'."
+        exit 1
+    fi
+
+    echo "📝 Neue Commits:"
+    git log --oneline HEAD..FETCH_HEAD | sed 's/^/   /'
+    echo
+
+    # --autostash: tolerierte lokale Änderungen (s.o., keine Überschneidung)
+    # bleiben erhalten, ohne dass der Nutzer von Hand stashen muss.
+    if ! git pull --ff-only --autostash "$remote" "$branch"; then
+        echo -e "${RED}❌ git pull --ff-only fehlgeschlagen (lokale Commits, die der Remote nicht kennt?). Von Hand klären.${NC}"
+        exit 1
+    fi
+    echo
+    echo -e "${GREEN}✅ Aktualisiert auf: $(cat VERSION)${NC}"
+    echo
+
+    cmd_start
+
+    # Der Container braucht einen Moment, bis das Web-Interface antwortet.
+    local scheme="http" port i
+    port=$(docker compose config --format json 2>/dev/null | python3 -c "
+import json, sys
+try:
+    print(json.load(sys.stdin)['services']['radiosabbelnich']['ports'][0]['published'])
+except Exception:
+    print('5000')
+" 2>/dev/null)
+    port="${port:-5000}"
+    if [ -f data/settings.json ] && grep -Eq '"tls_enabled": *true' data/settings.json; then
+        scheme="https"
+    fi
+    echo
+    for i in $(seq 1 15); do
+        if curl -sk --max-time 2 "$scheme://localhost:$port/api/status" -o /dev/null 2>/dev/null; then
+            echo -e "${GREEN}✅ Web-Interface antwortet -- Update abgeschlossen.${NC}"
+            return
+        fi
+        sleep 2
+    done
+    echo -e "${YELLOW}⚠️  Web-Interface antwortet nach 30s noch nicht -- '$0 status' bzw. 'docker compose logs radiosabbelnich' prüfen.${NC}"
+}
+
 print_version
 
 case "${1:-status}" in
@@ -629,6 +728,7 @@ case "${1:-status}" in
     start)   cmd_start ;;
     stop)    cmd_stop ;;
     restart) cmd_restart ;;
+    update)  cmd_update ;;
     status)  cmd_status ;;
     -h|--help) usage ;;
     *)

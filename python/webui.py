@@ -3562,9 +3562,9 @@ _CONFIG_PAGE_HTML = """<!doctype html>
   <p class="hint" data-i18n-html="cfg_update_check_hint">Prüft alle 24h per reinem Lesezugriff
     gegen GitHub, ob der <code>main</code>-Branch weiter ist als diese
     Installation. Es gibt für die Docker-Installation aktuell KEIN
-    Image-Registry-Deployment — die einzige Update-Möglichkeit ist
-    <code>git pull</code> im Repo-Verzeichnis, danach
-    <code>docker compose up -d --build radiosabbelnich</code>. Kein
+    Image-Registry-Deployment — das Update läuft über
+    <code>./radiosabbelnich.sh update</code> im Repo-Verzeichnis
+    (git pull plus Rebuild in einem Schritt). Kein
     Auto-Update, keine automatische Installation — bei Verfügbarkeit
     erscheint nur ein Hinweis oben auf dieser Seite und der Player-Seite.</p>
   <label class="checkbox">

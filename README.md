@@ -74,7 +74,7 @@
 - [License](#license)
 
 <p align="center">
-  <a href="VERSION"><img src="https://img.shields.io/static/v1?label=release&message=v1.2.54%20%C2%B7%202026-10-08%2014:49%20Uhr&color=blue" alt="Release"></a>
+  <a href="VERSION"><img src="https://img.shields.io/static/v1?label=release&message=v1.2.55%20%C2%B7%202026-10-12%2008:10%20Uhr&color=blue" alt="Release"></a>
   <img src="https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white" alt="Docker">
   <img src="https://img.shields.io/badge/build-docker%20compose-2496ED?logo=docker&logoColor=white" alt="Build">
   <a href="https://github.com/Blarks-de/radiosabbelnich/releases"><img src="https://img.shields.io/github/downloads/Blarks-de/radiosabbelnich/total?label=downloads" alt="Downloads"></a>
@@ -1103,7 +1103,7 @@ Grafische Gesamtübersicht mit Diagrammen pro Subsystem: `ARCHITECTURE.md`.
 | `data/news_mp3/`, `data/vosk-model-de/`, `data/vosk-models/`, `data/whisper_cache/` | Standard-Mountziele für `NEWS_MP3_FOLDER`/`VOSK_MODEL_FOLDER`/`VOSK_MODELS_FOLDER`/faster-whisper-Cache (überschreibbar in `.env`) |
 | `data/music_library/` | Standard-Mountziel für `MUSIC_LIBRARY_FOLDER` (überschreibbar in `.env`) |
 | `docker-compose.yml` | Icecast + RadioSabbelNich als zwei Services |
-| `radiosabbelnich.sh` | Alles-in-einem-Wrapper: `check`/`start`/`stop`/`restart`/`status` (Default) |
+| `radiosabbelnich.sh` | Alles-in-einem-Wrapper: `check`/`start`/`stop`/`restart`/`update`/`status` (Default) |
 | `CHANGELOG.md` | Verdichtete Versionshistorie, neueste zuerst (Details in `SESSION.md`) |
 
 Wie Prozess-Modell, Audio-Pfad und die einzelnen Module zusammenspielen
@@ -1155,7 +1155,7 @@ Danach `stations.json` nach Belieben anpassen — entweder direkt in der
 Datei oder bequemer über `http://<host>:5000/config`.
 
 Für den laufenden Betrieb danach reicht `./radiosabbelnich.sh` (ohne
-Argument = `status`, sonst `check`/`start`/`stop`/`restart`) statt sich
+Argument = `status`, sonst `check`/`start`/`stop`/`restart`/`update`) statt sich
 `docker compose`-Befehle zu merken — bei jedem Aufruf, egal welches
 Unterkommando, zeigt der Wrapper als Erstes den Inhalt von `VERSION`
 (aktueller Build). `status` zeigt zusätzlich Container-Zustand,
@@ -1269,8 +1269,19 @@ Verfügbarkeit erscheint ein kleiner Hinweis-Banner auf der Player- UND der
 Config-Seite mit einem Link auf den GitHub-CHANGELOG.
 
 **Kein Auto-Update, keine automatische Installation** — der Banner
-verweist nur auf den manuellen Schritt: `git pull` im Repo-Verzeichnis,
-danach `docker compose up -d --build radiosabbelnich`.
+verweist nur auf den manuellen Schritt: `./radiosabbelnich.sh update`
+(oder von Hand `git pull` im Repo-Verzeichnis, danach
+`docker compose up -d --build radiosabbelnich`).
+
+`./radiosabbelnich.sh update` macht diesen Schritt in einem Kommando:
+`git fetch` gegen `origin` (anderen Remote per `RSN_UPDATE_REMOTE=github
+./radiosabbelnich.sh update` wählen), Versionsvergleich, Anzeige der neuen
+Commits, `git pull --ff-only --autostash`, dann Rebuild/Neustart wie bei
+`start` und ein Erreichbarkeitscheck des Web-Interfaces. Ist man schon
+aktuell, passiert nichts. Bricht ab (ohne etwas zu verändern), wenn eine
+lokal geänderte Datei auch im Update vorkommt; Änderungen an anderen
+Dateien (z.B. die vom Dienst selbst umgeschriebene `data/settings.json`)
+stören nicht.
 
 Konfiguriert wird das über den `update_check`-Block in `settings.json`,
 einstellbar über die Formular-Sektion "🔄 Automatische Update-Prüfung" auf
@@ -1490,7 +1501,7 @@ Lizenziert unter der GNU General Public License v3.0 (GPLv3), siehe
 # RadioSabbelNich (English version)
 
 <p align="center">
-  <a href="VERSION"><img src="https://img.shields.io/static/v1?label=release&message=v1.2.54%20%C2%B7%202026-10-08%2014:49%20Uhr&color=blue" alt="Release"></a>
+  <a href="VERSION"><img src="https://img.shields.io/static/v1?label=release&message=v1.2.55%20%C2%B7%202026-10-12%2008:10%20Uhr&color=blue" alt="Release"></a>
   <img src="https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white" alt="Docker">
   <img src="https://img.shields.io/badge/build-docker%20compose-2496ED?logo=docker&logoColor=white" alt="Build">
   <a href="https://github.com/Blarks-de/radiosabbelnich/releases"><img src="https://img.shields.io/github/downloads/Blarks-de/radiosabbelnich/total?label=downloads" alt="Downloads"></a>
@@ -2477,7 +2488,7 @@ beyond the debug signing (see above).
 | `data/news_mp3/`, `data/vosk-model-de/`, `data/vosk-models/`, `data/whisper_cache/` | Default mount targets for `NEWS_MP3_FOLDER`/`VOSK_MODEL_FOLDER`/`VOSK_MODELS_FOLDER`/the faster-whisper cache (overridable in `.env`) |
 | `data/music_library/` | Default mount target for `MUSIC_LIBRARY_FOLDER` (overridable in `.env`) |
 | `docker-compose.yml` | Icecast + RadioSabbelNich as two services |
-| `radiosabbelnich.sh` | All-in-one wrapper: `check`/`start`/`stop`/`restart`/`status` (default) |
+| `radiosabbelnich.sh` | All-in-one wrapper: `check`/`start`/`stop`/`restart`/`update`/`status` (default) |
 | `CHANGELOG.md` | Condensed version history, newest first (details in `SESSION.md`) |
 
 RadioSabbelNich and the web interface run in the same process (web server
@@ -2525,7 +2536,7 @@ Afterwards, adjust `stations.json` as you like — either directly in
 the file or more conveniently via `http://<host>:5000/config`.
 
 For day-to-day operation afterwards, `./radiosabbelnich.sh` (no
-argument = `status`, otherwise `check`/`start`/`stop`/`restart`) saves
+argument = `status`, otherwise `check`/`start`/`stop`/`restart`/`update`) saves
 you from remembering `docker compose` commands — every invocation,
 regardless of the subcommand, prints the `VERSION` file contents
 (current build) first. `status` also shows
@@ -2632,8 +2643,18 @@ banner appears on both the player page AND the config page, with a link
 to the GitHub changelog.
 
 **No auto-update, no automatic installation** — the banner only points to
-the manual step: `git pull` in the repository directory, then
-`docker compose up -d --build radiosabbelnich`.
+the manual step: `./radiosabbelnich.sh update` (or manually `git pull` in
+the repository directory, then
+`docker compose up -d --build radiosabbelnich`).
+
+`./radiosabbelnich.sh update` does this in one command: `git fetch`
+against `origin` (pick another remote with `RSN_UPDATE_REMOTE=github
+./radiosabbelnich.sh update`), version comparison, list of the new
+commits, `git pull --ff-only --autostash`, then rebuild/restart as with
+`start` and a reachability check of the web interface. Nothing happens if
+you are already up to date. It aborts (changing nothing) if a locally
+modified file also appears in the update; changes to other files (e.g.
+`data/settings.json`, which the service rewrites itself) do not interfere.
 
 Configured via the `update_check` block in `settings.json`, adjustable
 via the "🔄 Automatic update check" form section on the config page

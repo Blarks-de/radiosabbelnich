@@ -36,6 +36,14 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 - Werbeblock-Vorbuffering + Sprache-Gate für die Nachrichten-Pause
 - GPLv3-Lizenzierung, Inhaltsverzeichnisse für README.md/ARCHITECTURE.md
 
+## 2026-10-12
+
+- `radiosabbelnich.sh update`: neues Kommando holt den neuen Stand per
+  `git fetch`/`pull --ff-only`, zeigt die neuen Commits, baut neu und prüft
+  danach, ob das Web-Interface antwortet. Bricht ohne Änderung ab, wenn
+  lokale Änderungen mit dem Update kollidieren (Remote per
+  `RSN_UPDATE_REMOTE` wählbar, Default `origin`).
+
 ## 2026-10-08
 
 - README: Badge-Zeile am Kopf (Release mit Datum/Uhrzeit aus `VERSION`, Build,

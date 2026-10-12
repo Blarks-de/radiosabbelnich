@@ -167,9 +167,9 @@ cfg_tls_hint=Verschlüsselt den Zugriff aufs Web-Interface (Player-Seite und die
 cfg_tls_checkbox_label=HTTPS fürs Web-Interface aktiv
 # --- 🔄 Automatische Update-Prüfung ---
 cfg_update_check_heading=🔄 Automatische Update-Prüfung
-cfg_update_check_hint=Prüft alle 24h per reinem Lesezugriff gegen GitHub, ob der <code>main</code>-Branch weiter ist als diese Installation. Es gibt für die Docker-Installation aktuell KEIN Image-Registry-Deployment — die einzige Update-Möglichkeit ist <code>git pull</code> im Repo-Verzeichnis, danach <code>docker compose up -d --build radiosabbelnich</code>. Kein Auto-Update, keine automatische Installation — bei Verfügbarkeit erscheint nur ein Hinweis oben auf dieser Seite und der Player-Seite.
+cfg_update_check_hint=Prüft alle 24h per reinem Lesezugriff gegen GitHub, ob der <code>main</code>-Branch weiter ist als diese Installation. Es gibt für die Docker-Installation aktuell KEIN Image-Registry-Deployment — das Update läuft über <code>./radiosabbelnich.sh update</code> im Repo-Verzeichnis (git pull plus Rebuild in einem Schritt). Kein Auto-Update, keine automatische Installation — bei Verfügbarkeit erscheint nur ein Hinweis oben auf dieser Seite und der Player-Seite.
 cfg_update_check_checkbox=Automatisch nach Updates suchen
-update_banner_text=🔄 Update verfügbar ({version}) — im Repo-Verzeichnis git pull ausführen, danach neu bauen.
+update_banner_text=🔄 Update verfügbar ({version}) — im Repo-Verzeichnis ./radiosabbelnich.sh update ausführen.
 update_banner_changelog_link=Was ist neu?
 # --- ⏱ Puffer-Einstellungen ---
 cfg_buffer_heading=⏱ Puffer-Einstellungen
