@@ -100,9 +100,27 @@ Details und Abwägung in `android-app/SESSION.md`.
 
 ## Betrieb und Deployment
 
-Es gibt **kein Test-Framework, keine Linter-Config, keine CI**. Verifikation
+Es gibt **kein Test-Framework und keine Verhaltens-Tests**. Verifikation
 läuft über die unten beschriebenen manuellen Muster und wird in SESSION.md
 protokolliert.
+
+Seit 2026-10-17 gibt es aber eine **CI** (GitHub Actions,
+`.github/workflows/checks.yml`) mit reinen Build-/Lint-Checks: Python
+(`compileall` + `ruff check --select E9,F63,F7,F82`), Shellcheck
+(`-S warning` auf `radiosabbelnich.sh`/`scripts/*.sh`), Docker-Build und
+Android-`assembleDebug`. Vor einem Commit dieselben Checks lokal laufen
+lassen, soweit sie den geänderten Teil betreffen:
+
+```bash
+python -m compileall -q python check_song_calibration.py
+ruff check --select E9,F63,F7,F82 --target-version py312 python check_song_calibration.py
+shellcheck -S warning radiosabbelnich.sh scripts/*.sh
+docker compose build radiosabbelnich
+(cd android-app && ./gradlew assembleDebug)
+```
+
+Bewusst keine Stil-Regeln in Ruff (kein Formatter im Projekt, wäre nur
+Rauschen). Neue Shell-Warnungen beheben statt `-S` hochzusetzen.
 
 ```bash
 docker compose up -d --build radiosabbelnich   # bauen + neustarten (Standard-Zyklus)

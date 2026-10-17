@@ -698,7 +698,7 @@ cmd_update() {
     cmd_start
 
     # Der Container braucht einen Moment, bis das Web-Interface antwortet.
-    local scheme="http" port i
+    local scheme="http" port
     port=$(docker compose config --format json 2>/dev/null | python3 -c "
 import json, sys
 try:
@@ -711,7 +711,7 @@ except Exception:
         scheme="https"
     fi
     echo
-    for i in $(seq 1 15); do
+    for _ in $(seq 1 15); do
         if curl -sk --max-time 2 "$scheme://localhost:$port/api/status" -o /dev/null 2>/dev/null; then
             echo -e "${GREEN}✅ Web-Interface antwortet -- Update abgeschlossen.${NC}"
             return

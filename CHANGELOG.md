@@ -18,6 +18,7 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 ## Aktueller Stand
 
 **Zuletzt umgesetzt** (siehe Datumsabschnitte unten für Details):
+- Automatische Prüfung per GitHub Actions (Python, Shellcheck, Docker-Build, Android-Build)
 - Manuelle Song-Kennzeichnung ("✏️ Manuell benennen"-Button, gewinnt dauerhaft gegen AcoustID)
 - Deutschsprachige Musik ausblenden (kuratierte Liste + "Deutsch!"-Button + Skip-Filter,
   jetzt mit eigener Checkbox auf der Config-Seite)
@@ -35,6 +36,15 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
   Logging/-Skript (`check_song_calibration.py`)
 - Werbeblock-Vorbuffering + Sprache-Gate für die Nachrichten-Pause
 - GPLv3-Lizenzierung, Inhaltsverzeichnisse für README.md/ARCHITECTURE.md
+
+## 2026-10-17
+
+- Automatische Prüfung (CI) per GitHub Actions (`.github/workflows/checks.yml`)
+  bei jedem Push auf `main` und jedem PR: Python-Syntax + Ruff (nur echte
+  Fehler), Shellcheck, Docker-Build, Android-Debug-Build (APK als Artefakt).
+  Statisches "build"-Badge im README durch das echte Workflow-Badge ersetzt.
+  Zwei Shellcheck-Warnungen (unbenutzte Variable `i`) in
+  `radiosabbelnich.sh` behoben.
 
 ## 2026-10-12
 

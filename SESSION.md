@@ -10608,3 +10608,52 @@ betroffene Build-Schritt.
 vollständig durch alle 43 Schritte durch, inklusive dem zuvor
 fehlschlagenden aubio-Compile-Schritt — Image wurde erfolgreich
 gebaut und getaggt (`radiosabbelnich-radiosabbelnich`).
+
+## 2026-10-17 — Automatische Prüfung (CI) per GitHub Actions
+
+**Auslöser**: Nutzerwunsch nach einer automatischen Prüfung. Bisher gab es
+keinerlei CI — Build-Brüche wie der aubio/setuptools-Fehler vom 2026-09-02
+fielen erst beim nächsten lokalen `docker compose up --build` auf.
+
+**Umsetzung**: Neuer Workflow `.github/workflows/checks.yml`, läuft bei
+Push auf `main`, bei jedem PR und manuell (`workflow_dispatch`); ältere
+Läufe derselben Ref werden abgebrochen (`concurrency`). Vier unabhängige
+Jobs:
+- **Python**: `python -m compileall` + `ruff check --select
+  E9,F63,F7,F82` (Syntaxfehler, undefinierte Namen, kaputte Vergleiche).
+  Bewusst KEINE Stil-Regeln: das Projekt nutzt keinen Formatter, ein
+  Stil-Lint hätte hunderte Treffer ohne Nutzen erzeugt.
+- **Shellcheck** ab Schweregrad "warning" auf `radiosabbelnich.sh` und
+  `scripts/*.sh`. Die zwei einzigen Warnungen (SC2034, unbenutzte
+  Schleifenvariable `i` in `cmd_update()`, einmal in der `local`-Deklaration,
+  einmal in der Warte-Schleife) direkt behoben (`for _ in ...`) statt die
+  Schwelle auf "error" zu senken.
+- **Docker-Build** über `docker/build-push-action` (gleiches `Dockerfile`
+  wie `docker compose build`, aber mit GitHub-Actions-Layer-Cache, damit
+  der aubio-Compile nicht jedes Mal neu läuft), ohne Push.
+- **Android-Build**: JDK 17 (Temurin, passend zu `jvmTarget = "17"`),
+  `gradle/actions/setup-gradle` für den Gradle-Cache, `./gradlew
+  assembleDebug`; die Debug-APK wird 14 Tage als Artefakt aufbewahrt.
+  Ersetzt NICHT den manuellen Upload nach `blarks.de/radio/update/` (siehe
+  CLAUDE.md) — der bleibt wie bisher.
+
+Statisches "build: docker compose"-Badge im README (beide Sprachteile)
+durch das echte Workflow-Status-Badge ersetzt; neue README-Unterabschnitte
+"Automatische Prüfung (CI)"/"Automatic checks (CI)" plus Zeile in der
+Datei-Tabelle; CLAUDE.md "keine CI" korrigiert und die lokalen
+Check-Befehle ergänzt.
+
+**Verifiziert** (lokal, vor dem Push):
+- `compileall` + Ruff-Regelsatz: alle Dateien sauber ("All checks passed!").
+- `shellcheck -S warning`: nach dem Fix keine Meldungen mehr (vorher 2× SC2034).
+- `docker compose build radiosabbelnich`: läuft vollständig durch.
+- Workflow-YAML parst sauber.
+- Android-`assembleDebug` ließ sich lokal NICHT verifizieren: Maven Central
+  antwortete aus der Testumgebung durchgehend mit HTTP 429 (Too Many
+  Requests) beim Abhängigkeits-Download — Umgebungsproblem, kein
+  Projektfehler. Verifikation dieses Jobs erfolgt über den ersten echten
+  GitHub-Actions-Lauf.
+
+**Bewusst NICHT gemacht**: keine Verhaltens-Tests/pytest eingeführt (wäre
+ein eigenes, größeres Vorhaben), kein automatischer APK-Upload/Release,
+kein Push eines Docker-Images in eine Registry.

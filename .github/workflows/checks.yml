@@ -1,0 +1,75 @@
+# Automatische Prüfung bei jedem Push/PR: fängt Syntaxfehler, undefinierte
+# Namen, Build-Brüche (z.B. der aubio/setuptools-Fehler vom 2026-09-02)
+# und Fehler im Wrapper-Skript ab, bevor sie jemand per `radiosabbelnich.sh
+# update` auf seinen Server zieht. Ersetzt NICHT die manuelle Verifikation
+# (siehe CLAUDE.md) -- es gibt weiterhin keine Verhaltens-Tests.
+name: Checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Python (Syntax + Ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m compileall -q python check_song_calibration.py
+      # Bewusst nur die Regeln für echte Fehler (Syntax, undefinierte Namen,
+      # kaputte Vergleiche), keine Stil-Regeln -- der Code folgt keinem
+      # Formatter, ein Stil-Lint würde nur Rauschen erzeugen.
+      - run: pip install ruff
+      - run: ruff check --select E9,F63,F7,F82 --target-version py312 python check_song_calibration.py
+
+  shell:
+    name: Shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck -S warning radiosabbelnich.sh scripts/*.sh
+
+  docker:
+    name: Docker-Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      # Gleiches Dockerfile wie `docker compose build`, aber über
+      # build-push-action wegen des GitHub-Actions-Layer-Caches (der
+      # aubio-Compile-Schritt dauert sonst bei jedem Lauf).
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  android:
+    name: Android-Build (Debug-APK)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android-app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - run: ./gradlew --no-daemon assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: radiosabbelnich-debug-apk
+          path: android-app/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 14
