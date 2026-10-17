@@ -31,6 +31,7 @@
   - [HTTPS/TLS (optional)](#httpstls-optional)
 - [Deploy-Befehle](#deploy-befehle)
   - [Logging](#logging)
+  - [Automatische Prüfung (CI)](#automatische-prüfung-ci)
 - [Automatische Update-Prüfung](#automatische-update-prüfung)
 - [Bekannte Einschränkungen](#bekannte-einschränkungen)
 - [Zukünftige Features](#zukünftige-features)
@@ -64,6 +65,7 @@
   - [HTTPS/TLS (optional)](#httpstls-optional-1)
 - [Deploy commands](#deploy-commands)
   - [Logging](#logging-1)
+  - [Automatic checks (CI)](#automatic-checks-ci)
 - [Automatic update check](#automatic-update-check)
 - [Known limitations](#known-limitations)
 - [Future features](#future-features)
@@ -74,9 +76,9 @@
 - [License](#license)
 
 <p align="center">
-  <a href="VERSION"><img src="https://img.shields.io/static/v1?label=release&message=v1.2.55%20%C2%B7%202026-10-12%2008:10%20Uhr&color=blue" alt="Release"></a>
+  <a href="VERSION"><img src="https://img.shields.io/static/v1?label=release&message=v1.2.56%20%C2%B7%202026-10-17%2013:30%20Uhr&color=blue" alt="Release"></a>
   <img src="https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white" alt="Docker">
-  <img src="https://img.shields.io/badge/build-docker%20compose-2496ED?logo=docker&logoColor=white" alt="Build">
+  <a href="https://github.com/Blarks-de/radiosabbelnich/actions/workflows/checks.yml"><img src="https://github.com/Blarks-de/radiosabbelnich/actions/workflows/checks.yml/badge.svg" alt="Checks"></a>
   <a href="https://github.com/Blarks-de/radiosabbelnich/releases"><img src="https://img.shields.io/github/downloads/Blarks-de/radiosabbelnich/total?label=downloads" alt="Downloads"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPLv3-blue.svg" alt="License"></a>
   <img src="https://img.shields.io/badge/Windows-Docker%20Desktop-0078D6?logo=windows&logoColor=white" alt="Windows">
@@ -1104,6 +1106,7 @@ Grafische Gesamtübersicht mit Diagrammen pro Subsystem: `ARCHITECTURE.md`.
 | `data/music_library/` | Standard-Mountziel für `MUSIC_LIBRARY_FOLDER` (überschreibbar in `.env`) |
 | `docker-compose.yml` | Icecast + RadioSabbelNich als zwei Services |
 | `radiosabbelnich.sh` | Alles-in-einem-Wrapper: `check`/`start`/`stop`/`restart`/`update`/`status` (Default) |
+| `.github/workflows/checks.yml` | Automatische Prüfung (GitHub Actions) bei jedem Push/PR, siehe "Automatische Prüfung (CI)" |
 | `CHANGELOG.md` | Verdichtete Versionshistorie, neueste zuerst (Details in `SESSION.md`) |
 
 Wie Prozess-Modell, Audio-Pfad und die einzelnen Module zusammenspielen
@@ -1254,6 +1257,22 @@ Der Sinn der Trennung: wenn nachts etwas schiefgeht, will man die Details
 hinterher lesen können, ohne den Container vorher zufällig im richtigen
 Modus gestartet zu haben. `--verbose` schiebt die DEBUG-Zeilen zusätzlich
 auf die Konsole, `--log-file ""` schaltet die Datei ab.
+
+### Automatische Prüfung (CI)
+
+Bei jedem Push auf `main` und bei jedem Pull Request läuft per GitHub
+Actions (`.github/workflows/checks.yml`) eine automatische Prüfung, Status
+siehe Badge oben. Vier unabhängige Jobs:
+
+| Job | Prüft |
+|---|---|
+| Python | `compileall` + Ruff, nur Regeln für echte Fehler (Syntax, undefinierte Namen), keine Stil-Regeln |
+| Shellcheck | `radiosabbelnich.sh` und `scripts/*.sh` (ab Schweregrad "warning") |
+| Docker-Build | Image aus dem `Dockerfile` baut vollständig durch (mit Layer-Cache) |
+| Android-Build | `./gradlew assembleDebug` in `android-app/`, die Debug-APK hängt 14 Tage als Artefakt am Lauf |
+
+Das sind reine Build-/Lint-Checks — Verhaltens-Tests gibt es weiterhin
+nicht, die Verifikation neuer Funktionen bleibt manuell.
 
 ## Automatische Update-Prüfung
 
@@ -1501,9 +1520,9 @@ Lizenziert unter der GNU General Public License v3.0 (GPLv3), siehe
 # RadioSabbelNich (English version)
 
 <p align="center">
-  <a href="VERSION"><img src="https://img.shields.io/static/v1?label=release&message=v1.2.55%20%C2%B7%202026-10-12%2008:10%20Uhr&color=blue" alt="Release"></a>
+  <a href="VERSION"><img src="https://img.shields.io/static/v1?label=release&message=v1.2.56%20%C2%B7%202026-10-17%2013:30%20Uhr&color=blue" alt="Release"></a>
   <img src="https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white" alt="Docker">
-  <img src="https://img.shields.io/badge/build-docker%20compose-2496ED?logo=docker&logoColor=white" alt="Build">
+  <a href="https://github.com/Blarks-de/radiosabbelnich/actions/workflows/checks.yml"><img src="https://github.com/Blarks-de/radiosabbelnich/actions/workflows/checks.yml/badge.svg" alt="Checks"></a>
   <a href="https://github.com/Blarks-de/radiosabbelnich/releases"><img src="https://img.shields.io/github/downloads/Blarks-de/radiosabbelnich/total?label=downloads" alt="Downloads"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPLv3-blue.svg" alt="License"></a>
   <img src="https://img.shields.io/badge/Windows-Docker%20Desktop-0078D6?logo=windows&logoColor=white" alt="Windows">
@@ -2489,6 +2508,7 @@ beyond the debug signing (see above).
 | `data/music_library/` | Default mount target for `MUSIC_LIBRARY_FOLDER` (overridable in `.env`) |
 | `docker-compose.yml` | Icecast + RadioSabbelNich as two services |
 | `radiosabbelnich.sh` | All-in-one wrapper: `check`/`start`/`stop`/`restart`/`update`/`status` (default) |
+| `.github/workflows/checks.yml` | Automatic checks (GitHub Actions) on every push/PR, see "Automatic checks (CI)" |
 | `CHANGELOG.md` | Condensed version history, newest first (details in `SESSION.md`) |
 
 RadioSabbelNich and the web interface run in the same process (web server
@@ -2628,6 +2648,22 @@ be able to read the details afterwards, without having had to
 accidentally start the container in the right mode beforehand.
 `--verbose` additionally pushes the DEBUG lines to the console,
 `--log-file ""` turns the file off.
+
+### Automatic checks (CI)
+
+Every push to `main` and every pull request triggers an automatic check via
+GitHub Actions (`.github/workflows/checks.yml`), status see the badge at the
+top. Four independent jobs:
+
+| Job | Checks |
+|---|---|
+| Python | `compileall` + Ruff, only rules for real errors (syntax, undefined names), no style rules |
+| Shellcheck | `radiosabbelnich.sh` and `scripts/*.sh` (severity "warning" and up) |
+| Docker build | the image from the `Dockerfile` builds completely (with layer cache) |
+| Android build | `./gradlew assembleDebug` in `android-app/`, the debug APK is attached to the run as an artifact for 14 days |
+
+These are pure build/lint checks — there are still no behavioral tests,
+verifying new features remains manual.
 
 ## Automatic update check
 
