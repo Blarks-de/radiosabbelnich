@@ -562,6 +562,87 @@ def guess_is_german(artist: Optional[str]) -> Optional[bool]:
     return True if any(hint in lowered for hint in _GERMAN_ARTIST_HINTS) else None
 
 
+# Automatische Erkennung deutschen GESANGS (siehe README.md/ARCHITECTURE.md,
+# "Deutschsprachige Musik ausblenden"): faster-whisper erwartet 16 kHz.
+WHISPER_SAMPLE_RATE = 16000
+
+
+def _resample_to_float(pcm_int16: np.ndarray, source_sr: int,
+                        target_sr: int = WHISPER_SAMPLE_RATE) -> np.ndarray:
+    """Lineare Interpolation auf target_sr, float32 in [-1, 1] -- gleiches
+    Verfahren wie stt_filter._resample(), hier dupliziert statt importiert,
+    weil stt_filter beim Import zusätzlich Vosk zu laden versucht."""
+    samples = pcm_int16.astype(np.float32) / 32768.0
+    if source_sr == target_sr or samples.size == 0:
+        return samples
+    duration = len(samples) / source_sr
+    n_target = max(1, int(round(duration * target_sr)))
+    x_old = np.linspace(0, duration, num=len(samples), endpoint=False)
+    x_new = np.linspace(0, duration, num=n_target, endpoint=False)
+    return np.interp(x_new, x_old, samples).astype(np.float32)
+
+
+class SongLanguageDetector:
+    """Schätzt per faster-whisper `detect_language()` die gesungene Sprache
+    eines Song-Snippets. Eigenes, lazy geladenes WhisperModel (über
+    night_scan.load_whisper_engine(), gleicher Cache-Ordner -> kein zweiter
+    Download derselben Modellgröße), unabhängig vom Live-STT-Filter und vom
+    nächtlichen Scan. Läuft ausschließlich im Hintergrund-Thread von
+    SongRecognizer (dessen `_busy`-Guard verhindert parallele Aufrufe),
+    braucht deshalb selbst keinen Lock.
+
+    Ein fehlgeschlagener Ladeversuch wird pro Modellgröße gemerkt und nicht
+    bei jedem Song wiederholt (fehlendes Paket/kein Netz für den
+    HuggingFace-Download würde sonst bei jedem Song erneut minutenlang
+    hängen bzw. das Log fluten) -- eine andere Modellgröße über /config
+    probiert es erneut, ebenso ein Container-Neustart."""
+
+    def __init__(self):
+        self._engine = None
+        self._model_size: Optional[str] = None
+        self._failed_model_size: Optional[str] = None
+
+    def _get_engine(self, model_size: str):
+        if self._engine is not None and self._model_size == model_size:
+            return self._engine
+        if self._failed_model_size == model_size:
+            return None
+        try:
+            import night_scan  # lazy: zieht faster-whisper nur bei aktiviertem Feature
+            started = time.monotonic()
+            self._engine = night_scan.load_whisper_engine(model_size)
+            self._model_size = model_size
+            self._failed_model_size = None
+            log.info("🇩🇪 Whisper-Modell '%s' für die Gesangs-Spracherkennung geladen (%.1fs).",
+                     model_size, time.monotonic() - started)
+            return self._engine
+        except Exception as e:
+            self._engine = None
+            self._model_size = None
+            self._failed_model_size = model_size
+            log.warning("⚠ Whisper-Modell '%s' für die Gesangs-Spracherkennung nicht ladbar: %s",
+                        model_size, e)
+            return None
+
+    def detect(self, pcm_int16: np.ndarray, sample_rate: int,
+               model_size: str) -> Optional[tuple[str, float]]:
+        """Gibt (Sprachcode, Konfidenz) zurück oder None, wenn kein Modell
+        verfügbar ist bzw. der Whisper-Aufruf selbst scheitert.
+        vad_filter=False: Whispers VAD würde Gesang über Instrumenten
+        teilweise als Nicht-Sprache verwerfen und übrig bliebe zu wenig
+        Audio für eine Schätzung."""
+        engine = self._get_engine(model_size)
+        if engine is None:
+            return None
+        try:
+            audio = _resample_to_float(pcm_int16, sample_rate)
+            language, confidence, _all_probs = engine.detect_language(audio, vad_filter=False)
+            return language, float(confidence)
+        except Exception as e:
+            log.warning("⚠ Gesangs-Spracherkennung fehlgeschlagen: %s", e)
+            return None
+
+
 class SongFingerprintDB:
     """SQLite-gestützter Cache bekannter Songs. ANDERS als FingerprintDB
     (deren Connection exklusiv dem Hauptloop-Thread gehört, weil
@@ -839,6 +920,29 @@ class SongFingerprintDB:
             cur = conn.execute(
                 "UPDATE song_fingerprints SET is_german_language = ? WHERE id = ?",
                 (1 if is_german else 0, song_id),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+        finally:
+            conn.close()
+
+    def set_german_auto(self, song_id: int) -> bool:
+        """Automatische Klassifizierung per SongLanguageDetector: setzt
+        is_german_language=1 NUR, wenn die Zeile noch unklassifiziert (NULL)
+        ist -- ein manueller "Deutsch!"-/"nicht deutsch"-Klick
+        (set_language()) gewinnt dadurch immer, auch wenn er zeitlich
+        zwischen Snippet-Aufnahme und Whisper-Ergebnis lag. Schreibt bewusst
+        NIE 0 (gleiche Logik wie guess_is_german()): eine falsche "nicht
+        deutsch"-Schätzung würde den Song sonst dauerhaft vom Skip
+        ausnehmen, während ein unklassifizierter Song beim nächsten
+        Abspielen einfach erneut geprüft wird. Gibt zurück, ob tatsächlich
+        geschrieben wurde."""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cur = conn.execute(
+                "UPDATE song_fingerprints SET is_german_language = 1 "
+                "WHERE id = ? AND is_german_language IS NULL",
+                (song_id,),
             )
             conn.commit()
             return cur.rowcount > 0
@@ -1159,6 +1263,7 @@ class SongRecognizer:
         # vorher nur bei bekanntem Titel, siehe SESSION.md: der Button
         # muss aber schon VOR einer AcoustID-Identifikation bedienbar sein).
         self._current_song: Optional[dict] = None
+        self._language_detector = SongLanguageDetector()
 
     def feed(self, pcm_int16: np.ndarray):
         self._ring.append(pcm_int16)
@@ -1192,14 +1297,48 @@ class SongRecognizer:
             self._last_station_id = None
             self._current_song = None
 
+    def _classify_language(self, snapshot: np.ndarray, song_id: int, station_id: str,
+                            language_cfg: dict):
+        """Automatische Gesangs-Spracherkennung für einen noch
+        unklassifizierten Song (siehe SongLanguageDetector und
+        SongFingerprintDB.set_german_auto()). Nur ein "de"-Ergebnis ab
+        `min_confidence` wird geschrieben -- alles andere bleibt
+        unklassifiziert und wird beim nächsten Abspielen erneut geprüft."""
+        model_size = language_cfg.get("model_size") or "small"
+        min_confidence = float(language_cfg.get("min_confidence", 0.8))
+        started = time.monotonic()
+        result = self._language_detector.detect(snapshot, self.sample_rate, model_size)
+        if result is None:
+            return
+        language, confidence = result
+        elapsed = time.monotonic() - started
+        if language != "de" or confidence < min_confidence:
+            log.info("🇩🇪 Gesangs-Sprache auf Sender '%s' (Song-ID %s): '%s' %.2f (Schwelle %.2f für 'de', "
+                     "%.1fs) -- bleibt unklassifiziert.",
+                     station_id, song_id, language, confidence, min_confidence, elapsed)
+            return
+        if not self.db.set_german_auto(song_id):
+            return  # inzwischen manuell klassifiziert -- manuell gewinnt
+        log.info("🇩🇪 Deutscher Gesang erkannt auf Sender '%s' (Song-ID %s, Konfidenz %.2f, %.1fs) "
+                 "-- als deutsch markiert.", station_id, song_id, confidence, elapsed)
+        with self._lock:
+            # Nur den laufenden Song anfassen, wenn er noch derselbe ist --
+            # zwischen Snippet-Aufnahme und Whisper-Ergebnis kann der
+            # Hauptloop per reset() längst umgeschaltet haben.
+            if self._current_song and self._current_song.get("song_id") == song_id:
+                self._current_song["is_german"] = True
+
     def maybe_recognize_async(self, now: float, station_id: str,
                                interval_seconds: float, similarity_threshold: float,
-                               cloud_lookup_enabled: bool = False):
-        """`interval_seconds`/`similarity_threshold`/`cloud_lookup_enabled`
-        werden bei jedem Tick frisch aus state.song_recognition_cfg
-        übergeben (siehe Hauptloop-Muster für
+                               cloud_lookup_enabled: bool = False,
+                               language_cfg: Optional[dict] = None):
+        """`interval_seconds`/`similarity_threshold`/`cloud_lookup_enabled`/
+        `language_cfg` werden bei jedem Tick frisch aus
+        state.song_recognition_cfg übergeben (siehe Hauptloop-Muster für
         stt_filter_cfg["sample_interval_seconds"]) -- eine Änderung über
-        /config wirkt dadurch ohne Neustart."""
+        /config wirkt dadurch ohne Neustart. `language_cfg`
+        ({"enabled", "model_size", "min_confidence"}) steuert die
+        automatische Gesangs-Spracherkennung, siehe _classify_language()."""
         if len(self._ring) < self._ring.maxlen:
             return  # Ringpuffer noch nicht voll seit dem letzten reset()/Musikbeginn
         if now - self._last_run_at < interval_seconds:
@@ -1259,6 +1398,14 @@ class SongRecognizer:
                         guess_is_german(result.get("artist")) if result else None,
                         "acoustid" if result else None,
                     )
+                # Läuft NACH Fingerprint/AcoustID (nicht davor): ein schon
+                # klassifizierter Song (manuell, kuratierte Liste oder
+                # früherer Whisper-Lauf) braucht keinen teuren Whisper-Aufruf.
+                if language_cfg and language_cfg.get("enabled"):
+                    current = self.get_current_song()
+                    if (current and current.get("song_id") == match["song_id"]
+                            and current.get("is_german") is None):
+                        self._classify_language(snapshot, match["song_id"], station_id, language_cfg)
             except Exception as e:
                 log.warning("⚠ Song-Erkennungs-Sample übersprungen (Fehler: %s)", e)
             finally:

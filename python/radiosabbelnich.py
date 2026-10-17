@@ -754,6 +754,14 @@ def main():
         log.info("🇩🇪 Deutsch-Skip: %s",
                  "aktiv" if state.song_recognition_cfg.get("skip_german_enabled")
                  else "inaktiv (settings.json: song_recognition.skip_german_enabled=false)")
+        # Eigene Zeile für die automatische Gesangs-Spracherkennung -- gleiche
+        # Begründung wie bei der Deutsch-Skip-Zeile direkt darüber.
+        log.info("🇩🇪 Automatische Gesangs-Spracherkennung: %s",
+                 "aktiv (Whisper '%s', Schwelle %.2f)" % (
+                     state.song_recognition_cfg.get("auto_language_whisper_model_size", "small"),
+                     state.song_recognition_cfg.get("auto_language_min_confidence", 0.8))
+                 if state.song_recognition_cfg.get("auto_language_detect_enabled")
+                 else "inaktiv (settings.json: song_recognition.auto_language_detect_enabled=false)")
 
     httpd = None
     if args.webui_port:
@@ -1937,6 +1945,9 @@ def main():
                         now, current["id"],
                         song_cfg["interval_seconds"], song_cfg["similarity_threshold"],
                         song_cfg["acoustid_lookup_enabled"],
+                        {"enabled": song_cfg.get("auto_language_detect_enabled", False),
+                         "model_size": song_cfg.get("auto_language_whisper_model_size", "small"),
+                         "min_confidence": song_cfg.get("auto_language_min_confidence", 0.8)},
                     )
                     # "Deutsch!"-Skip-Filter (siehe README.md/ARCHITECTURE.md,
                     # "Deutschsprachige Musik ausblenden"): manuell per Button

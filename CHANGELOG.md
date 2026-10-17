@@ -18,6 +18,7 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 ## Aktueller Stand
 
 **Zuletzt umgesetzt** (siehe Datumsabschnitte unten für Details):
+- Deutschen Gesang automatisch per Whisper erkennen (füttert den Deutsch-Skip)
 - Automatische Prüfung per GitHub Actions (Python, Shellcheck, Docker-Build, Android-Build)
 - Manuelle Song-Kennzeichnung ("✏️ Manuell benennen"-Button, gewinnt dauerhaft gegen AcoustID)
 - Deutschsprachige Musik ausblenden (kuratierte Liste + "Deutsch!"-Button + Skip-Filter,
@@ -39,6 +40,12 @@ nicht der Umbenennungsvorgang selbst der Inhalt eines Eintrags ist.
 
 ## 2026-10-17
 
+- Deutscher Gesang wird optional automatisch erkannt: Whisper prüft jeden
+  noch unklassifizierten Song auf dem vorhandenen Song-Snippet und markiert
+  ihn ab `auto_language_min_confidence` (Default 0.8, Modell `small`) als
+  deutsch, damit greift der Deutsch-Skip auch ohne vorheriges manuelles
+  Markieren. Neue Checkbox + Modell/Schwelle auf der Config-Seite, Default
+  aus.
 - Automatische Prüfung (CI) per GitHub Actions (`.github/workflows/checks.yml`)
   bei jedem Push auf `main` und jedem PR: Python-Syntax + Ruff (nur echte
   Fehler), Shellcheck, Docker-Build, Android-Debug-Build (APK als Artefakt).

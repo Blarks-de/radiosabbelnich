@@ -10657,3 +10657,79 @@ Check-Befehle ergänzt.
 **Bewusst NICHT gemacht**: keine Verhaltens-Tests/pytest eingeführt (wäre
 ein eigenes, größeres Vorhaben), kein automatischer APK-Upload/Release,
 kein Push eines Docker-Images in eine Registry.
+
+## 2026-10-17 — Deutschen Gesang automatisch per Whisper erkennen
+
+**Auslöser**: Nutzerfrage, ob das Überspringen deutscher Musik vorbereitet
+sei. Antwort: der Skip (`skip_german_enabled`) ist fertig, aber die
+Klassifizierung kam bisher nur aus dem "Deutsch!"-Button, der
+Korrektur-Liste oder der kuratierten Interpreten-Liste (letztere nur nach
+einem AcoustID-Treffer, und AcoustID trifft kurze Snippets selten, siehe
+2026-09-12). Ein neuer deutscher Song lief also immer durch. Nutzer wollte
+die automatische Erkennung.
+
+**Umsetzung**:
+- `song_fingerprint.SongLanguageDetector`: lazy geladenes WhisperModel über
+  `night_scan.load_whisper_engine()` (gleicher Cache), `detect_language()`
+  auf dem ohnehin vorhandenen Song-Snapshot (auf 16 kHz resampelt,
+  `vad_filter=False`). Fehlgeschlagenes Laden wird pro Modellgröße gemerkt.
+- `SongRecognizer._classify_language()`: läuft im bestehenden
+  Hintergrund-Thread nach Fingerprint/AcoustID, NUR wenn der aktuelle Song
+  noch `is_german is None` ist.
+- `SongFingerprintDB.set_german_auto()`: `UPDATE ... SET
+  is_german_language = 1 WHERE id = ? AND is_german_language IS NULL` --
+  manuell gewinnt immer, und es wird nie `0` geschrieben.
+- Settings `song_recognition.auto_language_detect_enabled` (Default aus),
+  `auto_language_whisper_model_size` (`tiny`/`base`/`small`, Default
+  `small`), `auto_language_min_confidence` (Default 0.8), validiert in
+  `settings_store.update()`. Config-Seite: Checkbox + Modell + Schwelle im
+  bestehenden Deutsch-Skip-Formular. Eigene Startup-Logzeile.
+
+**Kalibrierung (Messwerte)**: 4 Runden à 10 Sender, je 11s live aus dem
+Stream (exakt die `snippet_seconds`-Länge), im echten Image mit
+tiny/base/small. Wahrheit per Whisper-small-Transkript geprüft, wo der
+Sendername nicht reichte (z.B. lief auf "RADIO BOB! 90er Rock" zweimal Die
+Ärzte, das zweite Snippet davon nur "Zeit!" -- als deutsch gewertet). "Radio Köln Deutschpop" lieferte in allen Runden denselben
+gesangsfreien Clip und wurde nicht gewertet. Ergebnis, 18 deutsche und
+18 nicht-deutsche Snippets:
+
+| Modell / Schwelle | deutsche Snippets erkannt | Fehlalarme | Zeit pro Snippet |
+|---|---|---|---|
+| tiny / 0.8 | 6 von 18 | 0 | ~0,2-0,3s |
+| base / 0.8 | 10 von 18 | 0 | ~0,4-0,6s |
+| small / 0.8 | 12 von 18 | 0 | ~1,1-1,9s |
+| small / 0.7 | 15 von 18 | 0 | ~1,1-1,9s |
+
+Höchster "de"-Wert bei einem nicht-deutschen Snippet: 0.07 (small), bei
+"base" einmal ein Ausreißer "he" 0.91 auf einem deutschen Song (kein
+Fehlalarm, nur verpasst). Instrumentals/Klassik landen bei 0.3-0.5 auf
+"en"/"la". Default `small`/0.8: Fehlalarme sind teurer (Song dauerhaft
+übersprungen bis zur manuellen Korrektur) als Verpasser (beim nächsten
+Abspielen neue Chance) -- deshalb nicht 0.7 trotz besserer Trefferquote
+in dieser kleinen Stichprobe.
+
+**Verifiziert**:
+- Funktionstest im Image mit echten Snippets: deutscher Song wird
+  markiert (Konfidenz 0.96, `is_german` sofort im laufenden Song),
+  Wiedererkennung desselben Songs löst keinen zweiten Whisper-Lauf aus,
+  englischer Song bleibt unklassifiziert ("en" 0.92), manuell "nicht
+  deutsch" bleibt unangetastet, ungültige Modellgröße -> eine Warnung,
+  kein Crash.
+- `settings_store.update()`: gültige Werte werden gespeichert; ungültiges
+  Modell, Schwelle 1.5 und "abc" werfen ValueError.
+- `webui`/`i18n` importieren sauber (`i18n.validate()`), Ruff/compileall
+  sauber, Docker-Build läuft durch.
+- Live-End-to-End mit dem kompletten Compose-Stack (Kopie des Repos, ein
+  Icecast-Hörer per curl, nur die beiden Radio-TEDDY-Sender Schlager/
+  Deutsch-Pop aktiv): Startup-Logzeile "🇩🇪 Automatische
+  Gesangs-Spracherkennung: inaktiv (...)" erscheint; POST
+  `/api/config/settings` speichert die drei neuen Werte, ungültiges Modell
+  -> HTTP 400; die Config-Seite enthält die neuen Felder. Mit `small`/0.8:
+  "Deutscher Gesang erkannt ... Konfidenz 0.91/0.95" und direkt danach
+  "Deutschsprachiger Song übersprungen" -- 1,1s pro Song nach dem ersten
+  Modell-Laden (3,3s + 4,4s erster Lauf). Vorher auf Spreeradio Rock drei
+  englische Songs korrekt unklassifiziert ("en" 0.82/0.81/0.49).
+
+**Bewusst NICHT gemacht**: kein "nicht deutsch"-Cache (siehe oben), keine
+Wiederholung mit längerem Snippet bei unsicherem Ergebnis, Android-App
+unverändert.

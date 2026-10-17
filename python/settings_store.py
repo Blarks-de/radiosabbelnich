@@ -153,6 +153,27 @@ DEFAULTS = {
         # auf der Config-Seite (gleiches Muster wie /api/library/scan --
         # bewusst noch ohne UI-Anschluss in dieser Phase, siehe SESSION.md).
         "skip_german_enabled": False,
+        # Automatische Erkennung deutschen GESANGS per faster-whisper
+        # (detect_language() auf dem ohnehin vorhandenen Song-Snippet, siehe
+        # song_fingerprint.SongLanguageDetector): markiert noch
+        # unklassifizierte Songs als deutsch, damit skip_german_enabled oben
+        # auch Songs greift, die noch nie per Button markiert wurden. Eigener
+        # Schalter, Default AUS wie jedes neue Feature -- kostet pro neuem
+        # Song einen Whisper-Lauf (CPU) und lädt beim ersten Gebrauch das
+        # Modell aus dem Netz nach.
+        "auto_language_detect_enabled": False,
+        # "small" statt "tiny" (anders als stt_filter/night_scan): Gesang über
+        # Instrumenten ist für Whisper deutlich schwerer als reine Sprache --
+        # an 36 echten Radio-Snippets traf "small" bei Schwelle 0.8 12 von 18
+        # deutschen Songs, "base" nur 10, beide ohne Fehlalarm (siehe
+        # SESSION.md 2026-10-17). Kostet ~1-2s CPU pro neuem Song.
+        "auto_language_whisper_model_size": "small",
+        # Ab dieser Whisper-Konfidenz für "de" gilt ein Song als deutsch --
+        # darunter bleibt er unklassifiziert und wird beim nächsten
+        # Abspielen erneut geprüft. Bewusst eher streng: ein Fehlalarm
+        # überspringt einen Song dauerhaft (bis zur manuellen Korrektur),
+        # ein verpasster Treffer nur dieses eine Mal (siehe SESSION.md).
+        "auto_language_min_confidence": 0.8,
     },
     # Automatische Update-Prüfung für die Docker-Installation (siehe
     # ARCHITECTURE.md, Abschnitt "Automatische Update-Prüfung", und
@@ -222,6 +243,13 @@ DEFAULT_STT_LANGUAGE = "de"
 
 # (min, max) — grobe Leitplanken gegen Tippfehler/Unsinn, nicht als
 # strenge Produktentscheidung gedacht.
+# Bewusst auf die drei kleinen Modelle begrenzt (anders als stt_filter/
+# night_scan, die die Größe frei als String nehmen): die Song-Sprach-
+# Erkennung läuft TAGSÜBER bei jedem neuen Song, nicht nachts -- "medium"
+# und größer würden auf typischer Heimserver-CPU mehrere Sekunden pro Song
+# kosten und parallel zum Hauptloop CPU ziehen.
+AUTO_LANGUAGE_WHISPER_MODEL_SIZES = ("tiny", "base", "small")
+
 LIMITS = {
     "prebuffer_seconds": (0.0, 60.0),
     "prebuffer_count": (0, 20),
@@ -234,6 +262,7 @@ LIMITS = {
     "song_recognition_interval_seconds": (5.0, 300.0),
     "song_recognition_snippet_seconds": (3.0, 30.0),
     "song_recognition_similarity_threshold": (0.0, 1.0),
+    "song_recognition_auto_language_min_confidence": (0.0, 1.0),
     "night_scan_capture_timeout_seconds": (10.0, 600.0),
     "night_scan_min_speech_seconds": (5.0, 120.0),
     "night_scan_concurrency": (1, 8),
@@ -388,6 +417,9 @@ def update(prebuffer_seconds=None, prebuffer_count=None, import_url=None,
            song_recognition_similarity_threshold=None,
            song_recognition_acoustid_lookup_enabled=None,
            song_recognition_skip_german_enabled=None,
+           song_recognition_auto_language_detect_enabled=None,
+           song_recognition_auto_language_whisper_model_size=None,
+           song_recognition_auto_language_min_confidence=None,
            update_check_enabled=None,
            night_scan_enabled=None, night_scan_enabled_hours=UNSET,
            night_scan_whisper_model_size=None,
@@ -601,6 +633,23 @@ def update(prebuffer_seconds=None, prebuffer_count=None, import_url=None,
             sr["acoustid_lookup_enabled"] = bool(song_recognition_acoustid_lookup_enabled)
         if song_recognition_skip_german_enabled is not None:
             sr["skip_german_enabled"] = bool(song_recognition_skip_german_enabled)
+        if song_recognition_auto_language_detect_enabled is not None:
+            sr["auto_language_detect_enabled"] = bool(song_recognition_auto_language_detect_enabled)
+        if song_recognition_auto_language_whisper_model_size is not None:
+            size = str(song_recognition_auto_language_whisper_model_size).strip()
+            if size not in AUTO_LANGUAGE_WHISPER_MODEL_SIZES:
+                raise ValueError("song_recognition_auto_language_whisper_model_size muss einer von "
+                                 f"{', '.join(AUTO_LANGUAGE_WHISPER_MODEL_SIZES)} sein.")
+            sr["auto_language_whisper_model_size"] = size
+        if song_recognition_auto_language_min_confidence is not None:
+            lo, hi = LIMITS["song_recognition_auto_language_min_confidence"]
+            try:
+                song_recognition_auto_language_min_confidence = float(song_recognition_auto_language_min_confidence)
+            except (TypeError, ValueError):
+                raise ValueError("song_recognition_auto_language_min_confidence muss eine Zahl sein.")
+            if not (lo <= song_recognition_auto_language_min_confidence <= hi):
+                raise ValueError(f"song_recognition_auto_language_min_confidence muss zwischen {lo} und {hi} liegen.")
+            sr["auto_language_min_confidence"] = song_recognition_auto_language_min_confidence
 
         if update_check_enabled is not None:
             data["update_check"]["enabled"] = bool(update_check_enabled)
