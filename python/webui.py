@@ -3801,6 +3801,23 @@ _CONFIG_PAGE_HTML = """<!doctype html>
       <input type="checkbox" id="song-skip-german-enabled">
       <span data-i18n="cfg_song_skip_german_label">Als Deutsch markierte Songs überspringen</span>
     </label>
+    <label class="checkbox">
+      <input type="checkbox" id="song-auto-language-enabled">
+      <span data-i18n="cfg_song_auto_language_label">Deutschen Gesang automatisch erkennen (Whisper)</span>
+    </label>
+    <p class="hint" data-i18n="cfg_song_auto_language_hint">Prüft jeden noch nicht klassifizierten Song per
+      Whisper und markiert ihn ab der Konfidenz-Schwelle als deutsch. Kostet pro neuem Song etwas CPU, das Modell
+      wird beim ersten Gebrauch heruntergeladen. Manuelle Markierungen gewinnen immer.</p>
+    <label><span data-i18n="cfg_song_auto_language_model">Whisper-Modell</span>
+      <select id="song-auto-language-model">
+        <option value="tiny">tiny</option>
+        <option value="base">base</option>
+        <option value="small">small</option>
+      </select>
+    </label>
+    <label><span data-i18n="cfg_song_auto_language_confidence">Konfidenz-Schwelle (0–1)</span>
+      <input type="number" id="song-auto-language-confidence" min="0" max="1" step="0.05">
+    </label>
     <button type="submit" data-i18n="common_save">Speichern</button>
   </form>
 
@@ -4648,6 +4665,10 @@ async function loadSettings() {
 
     const songRecognition = settings.song_recognition || {};
     document.getElementById('song-skip-german-enabled').checked = !!songRecognition.skip_german_enabled;
+    document.getElementById('song-auto-language-enabled').checked = !!songRecognition.auto_language_detect_enabled;
+    document.getElementById('song-auto-language-model').value = songRecognition.auto_language_whisper_model_size || 'small';
+    document.getElementById('song-auto-language-confidence').value =
+      songRecognition.auto_language_min_confidence ?? 0.8;
 
     const nightScan = settings.night_scan || {};
     document.getElementById('night-scan-enabled').checked = !!nightScan.enabled;
@@ -4748,11 +4769,20 @@ document.getElementById('update-check-form').addEventListener('submit', async (e
 document.getElementById('song-skip-german-form').addEventListener('submit', async (ev) => {
   ev.preventDefault();
   const song_recognition_skip_german_enabled = document.getElementById('song-skip-german-enabled').checked;
+  const song_recognition_auto_language_detect_enabled = document.getElementById('song-auto-language-enabled').checked;
+  const song_recognition_auto_language_whisper_model_size = document.getElementById('song-auto-language-model').value;
+  const song_recognition_auto_language_min_confidence =
+    parseFloat(document.getElementById('song-auto-language-confidence').value);
   try {
     await api('/api/config/settings', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({song_recognition_skip_german_enabled}),
+      body: JSON.stringify({
+        song_recognition_skip_german_enabled,
+        song_recognition_auto_language_detect_enabled,
+        song_recognition_auto_language_whisper_model_size,
+        song_recognition_auto_language_min_confidence,
+      }),
     });
     showMsg(t('cfg_song_skip_german_saved'), false);
   } catch (e) {
@@ -5763,6 +5793,12 @@ def make_handler(state: SwitcherState, icecast_cfg: dict, fingerprint_db_path: s
                     stt_filter_sample_interval_seconds=payload.get("stt_filter_sample_interval_seconds"),
                     stt_filter_combine_mode=payload.get("stt_filter_combine_mode"),
                     song_recognition_skip_german_enabled=payload.get("song_recognition_skip_german_enabled"),
+                    song_recognition_auto_language_detect_enabled=payload.get(
+                        "song_recognition_auto_language_detect_enabled"),
+                    song_recognition_auto_language_whisper_model_size=payload.get(
+                        "song_recognition_auto_language_whisper_model_size"),
+                    song_recognition_auto_language_min_confidence=payload.get(
+                        "song_recognition_auto_language_min_confidence"),
                     update_check_enabled=payload.get("update_check_enabled"),
                     night_scan_enabled=payload.get("night_scan_enabled"),
                     night_scan_enabled_hours=(

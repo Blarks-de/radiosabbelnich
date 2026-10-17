@@ -76,7 +76,7 @@
 - [License](#license)
 
 <p align="center">
-  <a href="VERSION"><img src="https://img.shields.io/static/v1?label=release&message=v1.2.56%20%C2%B7%202026-10-17%2013:30%20Uhr&color=blue" alt="Release"></a>
+  <a href="VERSION"><img src="https://img.shields.io/static/v1?label=release&message=v1.2.57%20%C2%B7%202026-10-17%2014:30%20Uhr&color=blue" alt="Release"></a>
   <img src="https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white" alt="Docker">
   <a href="https://github.com/Blarks-de/radiosabbelnich/actions/workflows/checks.yml"><img src="https://github.com/Blarks-de/radiosabbelnich/actions/workflows/checks.yml/badge.svg" alt="Checks"></a>
   <a href="https://github.com/Blarks-de/radiosabbelnich/releases"><img src="https://img.shields.io/github/downloads/Blarks-de/radiosabbelnich/total?label=downloads" alt="Downloads"></a>
@@ -691,7 +691,8 @@ und identifiziert unbekannte Songs optional per AcoustID-Cloud-Lookup
 ersetzt seit 2026-09 das frühere AudD, dessen Kontingent verbraucht war und
 für das es kein Abo mehr gab). Default AUS wie jedes neue Feature, nur über
 `settings.json`/die `/api/config`-API aktivierbar (kein Schalter auf der
-Config-Seite) — Ausnahme ist `skip_german_enabled`, siehe unten.
+Config-Seite) — Ausnahmen sind `skip_german_enabled` und die
+`auto_language_*`-Werte, siehe unten.
 
 Läuft nur im Radio-Modus, während gerade Musik erkannt wird: alle
 `interval_seconds` wird ein `snippet_seconds` langes Sample per `fpcalc`
@@ -716,7 +717,10 @@ Anzeige zeigt dann nur, was vorhanden ist.
   "snippet_seconds": 11.0,
   "similarity_threshold": 0.65,
   "acoustid_lookup_enabled": false,
-  "skip_german_enabled": false
+  "skip_german_enabled": false,
+  "auto_language_detect_enabled": false,
+  "auto_language_whisper_model_size": "small",
+  "auto_language_min_confidence": 0.8
 }
 ```
 
@@ -753,6 +757,14 @@ Anzeige zeigt dann nur, was vorhanden ist.
   informativen Kennzahlen — der einzige echte Einstellungs-Schalter dort).
   Aktueller Status steht außerdem als eigene Zeile im Startup-Log
   ("🇩🇪 Deutsch-Skip: aktiv/inaktiv").
+- **`auto_language_detect_enabled`** — erkennt deutschen Gesang automatisch
+  per Whisper (siehe "Deutschsprachige Musik ausblenden" unten). Eigener
+  Schalter, Default aus; Checkbox direkt unter `skip_german_enabled` auf der
+  Config-Seite, ebenso Modell und Schwelle.
+- **`auto_language_whisper_model_size`** — `tiny`, `base` oder `small`
+  (Default). Größer = treffsicherer, aber mehr CPU pro Song.
+- **`auto_language_min_confidence`** — ab welcher Whisper-Konfidenz für
+  Deutsch (0.0–1.0, Default 0.8) ein Song als deutsch markiert wird.
 
 Jeder Vergleich landet zusätzlich in `song_match_log`
 (`data/song_fingerprints.db`) — `python3 check_song_calibration.py`
@@ -829,6 +841,20 @@ eines Songs — dafür ist dieses Feature gedacht. Jede Zeile in
 - **Korrektur-Liste auf der Config-Seite**: in der Song-Statistik
   ("Meistgespielte erkannte Songs") lässt sich jeder der Top-10-Songs
   nachträglich als deutsch/nicht deutsch markieren bzw. korrigieren.
+- **Automatisch per Whisper** (`auto_language_detect_enabled`, Default aus):
+  jeder noch unklassifizierte Song bekommt auf dem ohnehin aufgenommenen
+  Song-Snippet eine Whisper-Spracherkennung. Ist das Ergebnis Deutsch mit
+  mindestens `auto_language_min_confidence`, wird der Song als deutsch
+  markiert — damit greift der Skip auch bei Songs, die noch nie jemand
+  markiert hat und die AcoustID nicht kennt. Andere Ergebnisse werden NICHT
+  als "nicht deutsch" gespeichert, der Song wird beim nächsten Abspielen
+  einfach erneut geprüft. Manuelle Markierungen gewinnen immer. Das Modell
+  (Default `small`, ~460 MB) wird beim ersten Gebrauch nach
+  `data/whisper_cache/` heruntergeladen. Treffsicherheit an echten
+  Radio-Snippets: etwa zwei Drittel der deutschen Songs werden beim ersten
+  Abspielen erkannt, Fehlalarme gab es im Test keine (Details in
+  `SESSION.md`) — Instrumentalpassagen oder sehr leiser Gesang im
+  Snippet bleiben unklassifiziert.
 
 Der eigentliche Skip-Filter ist über `song_recognition.skip_german_enabled`
 (siehe oben) an-/abschaltbar — steht die DB noch leer/unklassifiziert da,
@@ -1520,7 +1546,7 @@ Lizenziert unter der GNU General Public License v3.0 (GPLv3), siehe
 # RadioSabbelNich (English version)
 
 <p align="center">
-  <a href="VERSION"><img src="https://img.shields.io/static/v1?label=release&message=v1.2.56%20%C2%B7%202026-10-17%2013:30%20Uhr&color=blue" alt="Release"></a>
+  <a href="VERSION"><img src="https://img.shields.io/static/v1?label=release&message=v1.2.57%20%C2%B7%202026-10-17%2014:30%20Uhr&color=blue" alt="Release"></a>
   <img src="https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white" alt="Docker">
   <a href="https://github.com/Blarks-de/radiosabbelnich/actions/workflows/checks.yml"><img src="https://github.com/Blarks-de/radiosabbelnich/actions/workflows/checks.yml/badge.svg" alt="Checks"></a>
   <a href="https://github.com/Blarks-de/radiosabbelnich/releases"><img src="https://img.shields.io/github/downloads/Blarks-de/radiosabbelnich/total?label=downloads" alt="Downloads"></a>
@@ -2107,7 +2133,8 @@ and optionally identifies unknown songs via an AcoustID cloud lookup
 the previous AudD as of 2026-09, whose quota was exhausted and which had no
 subscription option anymore). Off by default like every new feature, only
 enable it via `settings.json`/the `/api/config` API (no toggle on the
-config page) — the exception is `skip_german_enabled`, see below.
+config page) — the exceptions are `skip_german_enabled` and the
+`auto_language_*` values, see below.
 
 Only runs in radio mode while music is currently detected: every
 `interval_seconds`, a `snippet_seconds`-long sample is fingerprinted via
@@ -2131,7 +2158,10 @@ all three, the display then just shows whatever is available.
   "snippet_seconds": 11.0,
   "similarity_threshold": 0.65,
   "acoustid_lookup_enabled": false,
-  "skip_german_enabled": false
+  "skip_german_enabled": false,
+  "auto_language_detect_enabled": false,
+  "auto_language_whisper_model_size": "small",
+  "auto_language_min_confidence": 0.8
 }
 ```
 
@@ -2165,6 +2195,14 @@ all three, the display then just shows whatever is available.
   recognition – statistics", right above the informational metrics — the
   only actual settings toggle there). Current status is also shown as its
   own line in the startup log ("🇩🇪 Deutsch-Skip: aktiv/inaktiv").
+- **`auto_language_detect_enabled`** — detects German vocals automatically
+  via Whisper (see "Hiding German-language music" below). Own switch, off
+  by default; checkbox right below `skip_german_enabled` on the config
+  page, along with model and threshold.
+- **`auto_language_whisper_model_size`** — `tiny`, `base` or `small`
+  (default). Bigger = more accurate, but more CPU per song.
+- **`auto_language_min_confidence`** — Whisper confidence for German
+  (0.0–1.0, default 0.8) from which a song is marked as German.
 
 Every comparison is also logged to `song_match_log`
 (`data/song_fingerprints.db`) — `python3 check_song_calibration.py`
@@ -2239,6 +2277,20 @@ three ways:
 - **Correction list on the config page**: in the song statistics
   ("Most-played recognized songs"), each of the top-10 songs can be
   marked/corrected as German/not German afterwards.
+
+- **Automatically via Whisper** (`auto_language_detect_enabled`, off by
+  default): every still-unclassified song gets a Whisper language
+  detection on the song snippet that is recorded anyway. If the result is
+  German with at least `auto_language_min_confidence`, the song is marked
+  as German — so the skip also works for songs nobody has ever marked and
+  AcoustID doesn't know. Other results are NOT stored as "not German", the
+  song is simply checked again the next time it plays. Manual markings
+  always win. The model (default `small`, ~460 MB) is downloaded to
+  `data/whisper_cache/` on first use. Accuracy on real radio snippets:
+  roughly two thirds of German songs are detected the first time they
+  play, with no false alarms in the test (details in `SESSION.md`) —
+  instrumental passages or very quiet vocals in the snippet stay
+  unclassified.
 
 The actual skip filter is toggled via `song_recognition.skip_german_enabled`
 (see above) — while the DB is still empty/unclassified, the filter does

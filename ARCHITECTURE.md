@@ -720,6 +720,28 @@ klassifiziert. Drei Wege, wie eine Zeile klassifiziert wird:
    generischen `renderStatsTable()`-Helpers (der kann nur Text-Zellen,
    keine Event-Handler).
 
+4. **Automatisch per Whisper (`SongLanguageDetector`, seit 2026-10-17)**:
+   `SongRecognizer._run()` ruft nach Fingerprint-Match/AcoustID
+   `_classify_language()` auf, aber NUR, wenn der aktuelle Song noch
+   `is_german is None` ist (manuell, per Liste oder früher schon
+   klassifiziert → kein teurer Whisper-Lauf). `detect_language()` läuft auf
+   demselben `snippet_seconds`-Snapshot wie der Fingerprint (auf 16 kHz
+   resampelt, `vad_filter=False`, weil Whispers VAD Gesang über
+   Instrumenten teilweise verwirft). Eigenes, lazy geladenes WhisperModel
+   über `night_scan.load_whisper_engine()` (gleicher Cache-Ordner); ein
+   fehlgeschlagener Ladeversuch wird pro Modellgröße gemerkt statt bei
+   jedem Song wiederholt. Geschrieben wird nur ein "de"-Ergebnis ab
+   `auto_language_min_confidence`, und zwar per
+   `SongFingerprintDB.set_german_auto()` mit `WHERE is_german_language IS
+   NULL` — ein manueller Klick, der zwischen Snippet und Whisper-Ergebnis
+   kam, gewinnt dadurch. Bewusst NIE `0` (gleiche Logik wie
+   `guess_is_german()`): eine falsche "nicht deutsch"-Schätzung würde den
+   Song dauerhaft vom Skip ausnehmen, ein unklassifizierter Song wird beim
+   nächsten Abspielen einfach erneut geprüft. Läuft im selben
+   Hintergrund-Thread wie fpcalc/AcoustID (der `_busy`-Guard verhindert
+   Stapeln), der Hauptloop sieht das Ergebnis wie bei Punkt 1 über
+   `get_current_song()`.
+
 **Skip-Filter (`song_recognition.skip_german_enabled`, Hauptloop)**: rein
 additiv zur bestehenden Song-Erkennung — direkt nach dem bestehenden
 `maybe_recognize_async()`-Aufruf prüft der Hauptloop
@@ -1821,6 +1843,12 @@ hat vollen Zugriff.
   überhaupt wieder anspringt, PLUS danach `snippet_seconds`, bis der beim
   Stop geleerte Ringpuffer wieder voll ist (siehe "Stop statt Pause" oben)
   — kein Instant-Trigger auf den ersten Client-Connect.
+- Automatische Gesangs-Spracherkennung (Whisper): nur an 36 Snippets von
+  10 Sendern kalibriert (Default `small`/0.8: 12 von 18 deutschen Snippets
+  erkannt, 0 Fehlalarme). Keine Messung auf schwacher Hardware (z.B. Raspberry
+  Pi) — dort könnte `small` pro Song deutlich länger als die gemessenen
+  1-2s brauchen. Nicht-deutsche Songs werden bei jedem Abspielen erneut
+  geprüft (kein "nicht deutsch"-Cache, siehe oben).
 - Die Config-Seite skaliert nicht auf mehrere hundert Sender (keine
   Suche, kein Bulk-Delete).
 - STT-Sprachfilter: `confidence_threshold=0.75` ist an einem kleinen
